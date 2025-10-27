@@ -1,0 +1,53 @@
+name: chat_mvp
+description: Simple Firebase chat (rooms + messages)
+publish_to: "none"
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- FlutterFire (جيل واحد متوافق) ---
+  firebase_core: ^4.2.0
+  firebase_auth: ^6.1.1
+  cloud_firestore: ^6.0.3
+  firebase_storage: ^13.0.3
+  firebase_messaging: ^16.0.3
+  firebase_database: ^12.0.0
+
+  # --- مزوّد الحالة + التخزين + الشبكة ---
+  provider: ^6.1.2
+  shared_preferences: ^2.3.2
+  http: ^1.2.2
+
+  # --- وسائط/كاميرا/صوت (كما كانت) ---
+  image_picker: ^1.2.0
+  record: ^6.1.2          # رجعناه كما كان
+  audioplayers: ^6.5.1
+  video_player: ^2.9.2
+  camera: ^0.11.0+2
+  path_provider: ^2.1.4
+
+  # --- إضافات UI مفيدة (غير متعارضة) ---
+  url_launcher: ^6.3.0
+  flutter_linkify: ^6.0.0
+  cached_network_image: ^3.3.1
+  intl: ^0.20.2
+  timeago: ^3.6.0
+  uuid: ^4.4.0
+  qr_flutter: ^4.1.0
+
+  # --- ML Kit (اختياري) ---
+  google_mlkit_translation: ^0.10.0
+  google_mlkit_language_id: ^0.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  # fonts/assets حسب حاجتك

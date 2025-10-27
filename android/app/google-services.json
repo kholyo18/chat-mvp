@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1094490827601",
+    "project_id": "chat-mvp-20750",
+    "storage_bucket": "chat-mvp-20750.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1094490827601:android:96db3f4c3b27b2f2e74170",
+        "android_client_info": {
+          "package_name": "com.example.chat_mvp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA2uSJMYMJ-ix-EIR8qet8Rsd5Iz0JTYFU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
