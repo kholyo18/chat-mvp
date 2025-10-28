@@ -1059,7 +1059,7 @@ class _RoomPageState extends State<RoomPage> {
   }
   String? _currentRoomId;
   final _picker = ImagePicker();
-  final Record _recorder = Record();
+  final AudioRecorder _recorder = AudioRecorder();
   bool _recording = false;
   String? _replyToId;
 
@@ -1131,6 +1131,14 @@ class _RoomPageState extends State<RoomPage> {
   void dispose() {
     _typingTimer?.cancel();
     _liveSub?.cancel();
+    unawaited(() async {
+      try {
+        await _recorder.dispose();
+      } catch (err, stack) {
+        debugPrint('RoomPage recorder dispose error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      }
+    }());
     super.dispose();
   }
 
@@ -1259,19 +1267,54 @@ class _RoomPageState extends State<RoomPage> {
 
   Future<void> _toggleRecord() async {
     if (!_recording) {
-      if (!await _recorder.hasPermission()) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا يوجد إذن الميكروفون')));
-        return;
+      try {
+        final hasPermission = await _recorder.hasPermission();
+        if (!hasPermission) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('لا يوجد إذن الميكروفون')));
+          return;
+        }
+        final dir = await getTemporaryDirectory();
+        final path = '${dir.path}/${DateTime.now().millisecondsSinceEpoch}.m4a';
+        await _recorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 128000,
+            sampleRate: 44100,
+          ),
+          path: path,
+        );
+        if (!mounted) return;
+        setState(()=> _recording = true);
+      } catch (err, stack) {
+        debugPrint('RoomPage._toggleRecord start error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذّر بدء التسجيل الصوتي')),
+        );
       }
-      await _recorder.start(
-        config: RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000, sampleRate: 44100),
-        path: '${(await getTemporaryDirectory()).path}/${DateTime.now().millisecondsSinceEpoch}.m4a',
-      );
-      setState(()=> _recording = true);
     } else {
-      final path = await _recorder.stop();
-      setState(()=> _recording = false);
-      if (path == null) return;
+      String? path;
+      try {
+        path = await _recorder.stop();
+      } catch (err, stack) {
+        debugPrint('RoomPage._toggleRecord stop error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('تعذّر إيقاف التسجيل الصوتي')),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(()=> _recording = false);
+        } else {
+          _recording = false;
+        }
+      }
+      if (!mounted || path == null) return;
       final f = File(path);
       final up = _RoomUploader(roomId);
       final durMs = await _probeAudioDurationMs(f.path);
