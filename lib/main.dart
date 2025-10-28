@@ -2016,6 +2016,88 @@ Future<void> showEditMessageDialog(
 // - حذف فعلي يفضَّل عبر Cloud Functions (جدولة) لاحقًا.
 
 // ---------------------- Model ----------------------
+
+int? _parseStoryBgColor(String? value) {
+  if (value == null) return null;
+  final normalized = value.trim();
+  if (normalized.isEmpty) return null;
+  if (normalized.startsWith('#')) {
+    return int.tryParse(normalized.substring(1), radix: 16);
+  }
+  if (normalized.startsWith('0x')) {
+    return int.tryParse(normalized.substring(2), radix: 16);
+  }
+  final decimal = int.tryParse(normalized);
+  if (decimal != null) return decimal;
+  return int.tryParse(normalized, radix: 16);
+}
+
+String _detectStoryLang(String? existing) {
+  if (existing != null && existing.isNotEmpty) return existing;
+  try {
+    final dispatcher = WidgetsBinding.instance.platformDispatcher;
+    if (dispatcher.locales.isNotEmpty) {
+      return dispatcher.locales.first.languageCode;
+    }
+    final locale = dispatcher.locale;
+    if (locale != null) return locale.languageCode;
+  } catch (_) {
+    // ignore
+  }
+  return 'en';
+}
+
+Future<void> saveStoryDoc({
+  required String ownerId,
+  required String storyId,
+  required String type,
+  String? text,
+  String? mediaUrl,
+  String? mediaPath,
+  String? bgColor,
+  String audience = 'all',
+}) async {
+  final fs = cf.FirebaseFirestore.instance;
+  final docRef = fs.collection('stories').doc(ownerId).collection('items').doc(storyId);
+  final existing = await docRef.get();
+  final data = existing.data();
+  final existingCreatedAt = data?['createdAt'];
+  final existingExpiresAt = data?['expiresAt'];
+  final existingBgColor = data?['bgColor'] as String?;
+  final lang = _detectStoryLang(data?['lang'] as String?);
+  final resolvedBgColor = bgColor ?? existingBgColor;
+  final legacyVisibility = audience == 'all' ? 'everyone' : audience;
+
+  final payload = <String, dynamic>{
+    'storyId': storyId,
+    'ownerId': ownerId,
+    'type': type,
+    'text': text,
+    'mediaUrl': mediaUrl,
+    'mediaPath': mediaPath,
+    'bgColor': resolvedBgColor,
+    'audience': audience,
+    'visibility': legacyVisibility,
+    'lang': lang,
+    'createdAt': existingCreatedAt is cf.Timestamp ? existingCreatedAt : cf.FieldValue.serverTimestamp(),
+    'expiresAt': existingExpiresAt is cf.Timestamp
+        ? existingExpiresAt
+        : cf.Timestamp.fromDate(DateTime.now().add(const Duration(hours: 24))),
+  };
+
+  if (!existing.exists) {
+    payload['viewsCount'] = 0;
+  }
+
+  final parsedBg = _parseStoryBgColor(resolvedBgColor);
+  if (parsedBg != null) {
+    payload['bg'] = parsedBg;
+  }
+
+  await docRef.set(payload, cf.SetOptions(merge: true));
+  debugPrint('saveStoryDoc => uid=$ownerId storyId=$storyId storagePath=$mediaPath docPath=${docRef.path}');
+}
+
 enum StoryType { image, video, text }
 
 class StoryItem {
@@ -2023,10 +2105,13 @@ class StoryItem {
   final String ownerUid;
   final StoryType type;
   final String? mediaUrl;
+  final String? mediaPath;
   final String? text;
   final int? bg; // Color value for text stories
   final cf.Timestamp createdAt;
   final String visibility; // everyone | contacts | custom
+  final String audience;
+  final cf.Timestamp? expiresAt;
   final int viewsCount;
 
   StoryItem({
@@ -2035,9 +2120,12 @@ class StoryItem {
     required this.type,
     required this.createdAt,
     this.mediaUrl,
+    this.mediaPath,
     this.text,
     this.bg,
     this.visibility = 'everyone',
+    this.audience = 'all',
+    this.expiresAt,
     this.viewsCount = 0,
   });
 
@@ -2051,15 +2139,21 @@ class StoryItem {
       ownerUid: ownerUid,
       type: _t(d['type'] as String?),
       mediaUrl: d['mediaUrl'] as String?,
+      mediaPath: d['mediaPath'] as String?,
       text: d['text'] as String?,
-      bg: d['bg'] as int?,
+      bg: (d['bg'] as int?) ?? _parseStoryBgColor(d['bgColor'] as String?),
       createdAt: d['createdAt'] ?? cf.Timestamp.now(),
       visibility: (d['visibility'] as String?) ?? 'everyone',
+      audience: (d['audience'] as String?) ?? 'all',
+      expiresAt: d['expiresAt'] as cf.Timestamp?,
       viewsCount: (d['viewsCount'] as num?)?.toInt() ?? 0,
     );
   }
 
   bool get expired {
+    if (expiresAt != null) {
+      return DateTime.now().isAfter(expiresAt!.toDate());
+    }
     final dt = createdAt.toDate();
     return DateTime.now().isAfter(dt.add(const Duration(hours: 24)));
   }
@@ -2075,11 +2169,16 @@ class StoriesHubPage extends StatelessWidget {
     // نجلب آخر 20 مستخدم لديهم ستوري اليوم
     return fs.collection('users').limit(50).snapshots().asyncMap((usersSnap) async {
       final List<(String, StoryItem)> all = [];
+      final nowTs = cf.Timestamp.fromDate(DateTime.now());
       for (final u in usersSnap.docs) {
         final uid = u.id;
         final stories = await fs.collection('stories').doc(uid)
             .collection('items')
-            .orderBy('createdAt', descending: true).limit(5).get();
+            .where('expiresAt', isGreaterThan: nowTs)
+            .orderBy('expiresAt')
+            .orderBy('createdAt', descending: true)
+            .limit(5)
+            .get();
         for (final s in stories.docs) {
           final it = StoryItem.fromDoc(uid, s);
           if (!it.expired && (it.visibility == 'everyone')) {
@@ -2232,9 +2331,13 @@ class _StoriesViewerState extends State<_StoriesViewer> {
 
   Future<void> _loadStories() async {
     final fs = cf.FirebaseFirestore.instance;
+    final nowTs = cf.Timestamp.fromDate(DateTime.now());
     final q = await fs.collection('stories').doc(widget.ownerUid)
       .collection('items')
-      .orderBy('createdAt', descending: false).get();
+      .where('expiresAt', isGreaterThan: nowTs)
+      .orderBy('expiresAt')
+      .orderBy('createdAt', descending: false)
+      .get();
     final list = q.docs.map((d) => StoryItem.fromDoc(widget.ownerUid, d))
         .where((e) => !e.expired && e.visibility == 'everyone')
         .toList();
@@ -2436,29 +2539,55 @@ class _StoryCreatePageState extends State<StoryCreatePage> {
   Future<void> _publish() async {
     final me = FirebaseAuth.instance.currentUser?.uid;
     if (me == null) return;
-    final fs = cf.FirebaseFirestore.instance;
-    final ref = fs.collection('stories').doc(me).collection('items').doc();
+    final storiesRef = cf.FirebaseFirestore.instance.collection('stories').doc(me).collection('items');
+    late final cf.DocumentReference<Map<String, dynamic>> docRef;
+    if (_type == StoryType.text) {
+      final storyId = DateTime.now().millisecondsSinceEpoch.toString();
+      docRef = storiesRef.doc(storyId);
+    } else {
+      docRef = storiesRef.doc();
+    }
+    final storyId = docRef.id;
 
     String? mediaUrl;
+    String? mediaPath;
     if (_type == StoryType.image && _image != null) {
-      final sref = FirebaseStorage.instance.ref('stories/$me/${ref.id}_${_image!.name}');
-      await sref.putFile(File(_image!.path), SettableMetadata(contentType: 'image/${_image!.path.split('.').last}'));
+      final storagePath = 'stories/$me/$storyId/${_image!.name}';
+      final sref = FirebaseStorage.instance.ref(storagePath);
+      await sref.putFile(
+        File(_image!.path),
+        SettableMetadata(contentType: 'image/${_image!.path.split('.').last}'),
+      );
       mediaUrl = await sref.getDownloadURL();
+      mediaPath = sref.fullPath;
     } else if (_type == StoryType.video && _video != null) {
-      final sref = FirebaseStorage.instance.ref('stories/$me/${ref.id}_${_video!.name}');
-      await sref.putFile(File(_video!.path), SettableMetadata(contentType: 'video/${_video!.path.split('.').last}'));
+      final storagePath = 'stories/$me/$storyId/${_video!.name}';
+      final sref = FirebaseStorage.instance.ref(storagePath);
+      await sref.putFile(
+        File(_video!.path),
+        SettableMetadata(contentType: 'video/${_video!.path.split('.').last}'),
+      );
       mediaUrl = await sref.getDownloadURL();
+      mediaPath = sref.fullPath;
     }
 
-    await ref.set({
-      'type': switch (_type) { StoryType.image=>'image', StoryType.video=>'video', StoryType.text=>'text' },
-      'mediaUrl': mediaUrl,
-      'text': _type == StoryType.text ? _text.text.trim() : null,
-      'bg': _type == StoryType.text ? _bg.value : null,
-      'visibility': _visibility,
-      'createdAt': cf.FieldValue.serverTimestamp(),
-      'viewsCount': 0,
-    });
+    final rawText = _text.text.trim();
+    final storyAudience = _visibility == 'everyone' ? 'all' : _visibility;
+
+    await saveStoryDoc(
+      ownerId: me,
+      storyId: storyId,
+      type: switch (_type) {
+        StoryType.image => 'image',
+        StoryType.video => 'video',
+        StoryType.text => 'text',
+      },
+      text: _type == StoryType.text ? (rawText.isEmpty ? null : rawText) : null,
+      mediaUrl: mediaUrl,
+      mediaPath: mediaPath,
+      bgColor: _type == StoryType.text ? _bg.value.toString() : null,
+      audience: storyAudience,
+    );
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نشر الستوري ✅')));
