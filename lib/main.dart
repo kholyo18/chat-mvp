@@ -325,6 +325,30 @@ class NotificationsService {
   }
 }
 
+extension NotificationsDeepLinks on NotificationsService {
+  void handleDeepLink(Map<String, dynamic> data) {
+    final type = data['type'] as String?;
+    final roomId = data['roomId'] as String?;
+    final postId = data['postId'] as String?;
+
+    switch (type) {
+      case 'room':
+        if (roomId != null) {
+          navigatorKey.currentState?.pushNamed('/room', arguments: {'roomId': roomId});
+        }
+        break;
+      case 'post':
+        if (roomId != null && postId != null) {
+          navigatorKey.currentState
+              ?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
+        }
+        break;
+      default:
+        navigatorKey.currentState?.pushNamed('/notifications');
+    }
+  }
+}
+
 // ---------- Translator (MVP HTTP) ----------
 class TranslatorService extends ChangeNotifier {
   String targetLang = 'ar';
@@ -5104,6 +5128,36 @@ class _SearchFiltersBar extends StatelessWidget {
   }
 }
 
+class _RecentSearches extends StatelessWidget {
+  const _RecentSearches({
+    super.key,
+    required this.history,
+    required this.onPick,
+  });
+
+  final List<String> history;
+  final void Function(String) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    if (history.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final t in history)
+            ActionChip(
+              label: Text(t),
+              onPressed: () => onPick(t),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _FilterChipX extends StatelessWidget {
   final String label; final bool selected; final VoidCallback onTap; final IconData? icon;
   const _FilterChipX({required this.label, required this.selected, required this.onTap, this.icon, super.key});
@@ -5443,64 +5497,6 @@ Future<List<String>> _myRoomIds(String uid) async {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   // بإمكانك تسجيل Log أو تحديث badge مخزن محليًا إن رغبت
-}
-
-// عدّل init في NotificationsService لإضافة الـ background & onMessageOpenedApp:
-class NotificationsService {
-  Future<void> init(String uid) async {
-    final fm = FirebaseMessaging.instance;
-    await fm.requestPermission(alert: true, badge: true, sound: true);
-
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-    final token = await fm.getToken();
-    if (token != null) {
-      await cf.FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'fcmToken': token, 'fcmUpdatedAt': cf.FieldValue.serverTimestamp()}, cf.SetOptions(merge: true));
-    }
-    fm.onTokenRefresh.listen((t) {
-      cf.FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'fcmToken': t, 'fcmUpdatedAt': cf.FieldValue.serverTimestamp()}, cf.SetOptions(merge: true));
-    });
-
-    FirebaseMessaging.onMessage.listen((m) {
-      // إشعار داخل التطبيق (بانر بسيط)
-      final title = m.notification?.title ?? 'إشعار';
-      final body  = m.notification?.body  ?? '';
-      final ctx = navigatorKey.currentContext;
-      if (ctx != null) {
-        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('$title — $body')));
-      }
-    });
-
-    FirebaseMessaging.onMessageOpenedApp.listen((m) {
-      handleDeepLink(m.data);
-    });
-  }
-}
-
-// ---------------------- Extend NotificationsService ----------------------
-extension NotificationsDeepLinks on NotificationsService {
-  void handleDeepLink(Map data) {
-    final dest = data['open'] ?? data['action'];
-    if (dest == 'room' || data['roomId'] != null) {
-      final roomId = data['roomId'] ?? data['id'];
-      if (roomId != null) navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
-    } else if (dest == 'post' || data['postId'] != null) {
-      final roomId = data['roomId'];
-      final postId = data['postId'];
-      if (roomId != null && postId != null) {
-        navigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
-      }
-    } else if (dest == 'invite' && data['code'] != null) {
-      joinRoomWithCode(data['code']).then((ok) {
-        ScaffoldMessenger.of(navigatorKey.currentContext!)
-            .showSnackBar(SnackBar(content: Text(ok ? 'انضممت عبر الدعوة ✅' : 'كود غير صالح')));
-      });
-    } else {
-      navigatorKey.currentState?.pushNamed('/inbox');
-    }
-  }
 }
 
 // ---------------------- Notification Badge Provider ----------------------
