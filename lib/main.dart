@@ -334,7 +334,7 @@ extension NotificationsDeepLinks on NotificationsService {
     switch (type) {
       case 'room':
         if (roomId != null) {
-          navigatorKey.currentState?.pushNamed('/room', arguments: {'roomId': roomId});
+          navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
         }
         break;
       case 'post':
@@ -521,6 +521,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 // غرف ومجتمعات + دردشة
                 '/rooms': (_) => const RoomsTab(),
                 '/room': (_) => const RoomPage(),
+                '/rooms/create': (_) => const CreateRoomPage(),
 
                 // DMs
                 '/dm': (_) => const DMPage(),
@@ -546,9 +547,17 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 // خصوصية/إعدادات
                 '/privacy': (_) => const PrivacySettingsPage(),
                 '/settings': (_) => const SettingsHubPage(),
+                '/notifications': (_) => const NotificationCenterPage(),
+                '/notify/prefs': (_) => const NotificationPrefsPage(),
 
                 // إدارة
-                '/admin': (_) => const AdminPanelPage(),
+                '/admin': (_) => const AdminPortalPage(),
+                '/admin/room': (_) => const AdminRoomPanelPage(),
+
+                // منشورات وغرف
+                '/post': (_) => const PostDetailPage(),
+                '/room/settings': (_) => const RoomSettingsPage(),
+                '/room/board': (_) => const RoomBoardPage(),
               },
             ),
           );
@@ -764,58 +773,69 @@ class Room {
   }
 }
 
+Future<void> showRoomCreationDialog(BuildContext context) async {
+  final name = TextEditingController();
+  final about = TextEditingController();
+  bool isPublic = true;
+  final rootContext = context;
+  await showDialog(
+    context: context,
+    builder: (_) => StatefulBuilder(
+      builder: (ctx, setS) => AlertDialog(
+        title: const Text('إنشاء غرفة'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: name, decoration: const InputDecoration(labelText: 'اسم الغرفة')),
+            const SizedBox(height: 8),
+            TextField(controller: about, decoration: const InputDecoration(labelText: 'نبذة'), maxLines: 2),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: isPublic,
+              onChanged: (v) => setS(() => isPublic = v),
+              title: const Text('عامّة (يمكن لأي شخص الانضمام)'),
+            )
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(
+            onPressed: () async {
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) {
+                ScaffoldMessenger.of(rootContext).showSnackBar(
+                  const SnackBar(content: Text('سجّل الدخول أولاً')),
+                );
+                return;
+              }
+              final r = cf.FirebaseFirestore.instance.collection('rooms').doc();
+              await r.set({
+                'name': name.text.trim().isEmpty ? 'Untitled Room' : name.text.trim(),
+                'about': about.text.trim(),
+                'public': isPublic,
+                'photo': null,
+                'members': [user.uid],
+                'createdBy': user.uid,
+                'createdAt': cf.FieldValue.serverTimestamp(),
+                'meta': {'members': 1, 'messages': 0, 'lastMsgAt': cf.FieldValue.serverTimestamp()},
+                'moderation': {'announcements': []},
+              }, cf.SetOptions(merge: true));
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('إنشاء'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class RoomsTab extends StatelessWidget {
   const RoomsTab({super.key});
 
   Future<void> _createRoomDialog(BuildContext context) async {
-    final name = TextEditingController();
-    final about = TextEditingController();
-    bool isPublic = true;
-    await showDialog(
-      context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('إنشاء غرفة'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: name, decoration: const InputDecoration(labelText: 'اسم الغرفة')),
-              const SizedBox(height: 8),
-              TextField(controller: about, decoration: const InputDecoration(labelText: 'نبذة'), maxLines: 2),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: isPublic,
-                onChanged: (v)=> setS(()=> isPublic=v),
-                title: const Text('عامّة (يمكن لأي شخص الانضمام)'),
-              )
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: ()=> Navigator.pop(ctx), child: const Text('إلغاء')),
-            FilledButton(
-              onPressed: () async {
-                final uid = FirebaseAuth.instance.currentUser!.uid;
-                final r = cf.FirebaseFirestore.instance.collection('rooms').doc();
-                await r.set({
-                  'name': name.text.trim().isEmpty ? 'Untitled Room' : name.text.trim(),
-                  'about': about.text.trim(),
-                  'public': isPublic,
-                  'photo': null,
-                  'members': [uid],
-                  'createdBy': uid,
-                  'createdAt': cf.FieldValue.serverTimestamp(),
-                  'meta': {'members': 1, 'messages': 0, 'lastMsgAt': cf.FieldValue.serverTimestamp()},
-                  'moderation': {'announcements': []},
-                }, cf.SetOptions(merge: true));
-                if (context.mounted) Navigator.pop(ctx);
-              },
-              child: const Text('إنشاء'),
-            ),
-          ],
-        ),
-      ),
-    );
+    await showRoomCreationDialog(context);
   }
 
   Future<void> _toggleMembership(String roomId, bool joined) async {
@@ -1031,10 +1051,15 @@ class RoomPage extends StatefulWidget {
 }
 
 class _RoomPageState extends State<RoomPage> {
-  String get roomId => (ModalRoute.of(context)?.settings.arguments ?? 'room_demo') as String;
+  String get roomId {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is String && args.isNotEmpty) return args;
+    if (args is Map && args['roomId'] is String) return args['roomId'] as String;
+    return 'room_demo';
+  }
   String? _currentRoomId;
   final _picker = ImagePicker();
-  final _recorder = AudioRecorder();
+  final Record _recorder = Record();
   bool _recording = false;
   String? _replyToId;
 
@@ -1238,8 +1263,10 @@ class _RoomPageState extends State<RoomPage> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا يوجد إذن الميكروفون')));
         return;
       }
-      await _recorder.start(RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000, sampleRate: 44100),
-          path: '${(await getTemporaryDirectory()).path}/${DateTime.now().millisecondsSinceEpoch}.m4a');
+      await _recorder.start(
+        config: RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000, sampleRate: 44100),
+        path: '${(await getTemporaryDirectory()).path}/${DateTime.now().millisecondsSinceEpoch}.m4a',
+      );
       setState(()=> _recording = true);
     } else {
       final path = await _recorder.stop();
@@ -1461,7 +1488,15 @@ class _MessageBubble extends StatelessWidget {
     }
 
     // نحتاج roomId لعرض الاقتباس بدقّة
-    final roomId = (ModalRoute.of(context)?.settings.arguments ?? 'room_demo') as String;
+    final args = ModalRoute.of(context)?.settings.arguments;
+    String roomId;
+    if (args is String && args.isNotEmpty) {
+      roomId = args;
+    } else if (args is Map && args['roomId'] is String) {
+      roomId = args['roomId'] as String;
+    } else {
+      roomId = 'room_demo';
+    }
 
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
@@ -3377,12 +3412,23 @@ class AdminRoomPanelPage extends StatefulWidget {
 class _AdminRoomPanelPageState extends State<AdminRoomPanelPage> with SingleTickerProviderStateMixin {
   late String roomId;
   late TabController tc;
+  bool _initialized = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    roomId = (ModalRoute.of(context)!.settings.arguments ?? 'room_demo') as String;
-    tc = TabController(length: 3, vsync: this);
+    if (!_initialized) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is String && args.isNotEmpty) {
+        roomId = args;
+      } else if (args is Map && args['roomId'] is String) {
+        roomId = args['roomId'] as String;
+      } else {
+        roomId = 'room_demo';
+      }
+      tc = TabController(length: 3, vsync: this);
+      _initialized = true;
+    }
   }
 
   @override
@@ -4138,12 +4184,23 @@ class RoomSettingsPage extends StatefulWidget {
 class _RoomSettingsPageState extends State<RoomSettingsPage> with SingleTickerProviderStateMixin {
   late String roomId;
   late TabController tc;
+  bool _initialized = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    roomId = (ModalRoute.of(context)!.settings.arguments ?? 'room_demo') as String;
-    tc = TabController(length: 4, vsync: this);
+    if (!_initialized) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is String && args.isNotEmpty) {
+        roomId = args;
+      } else if (args is Map && args['roomId'] is String) {
+        roomId = args['roomId'] as String;
+      } else {
+        roomId = 'room_demo';
+      }
+      tc = TabController(length: 4, vsync: this);
+      _initialized = true;
+    }
   }
 
   @override
