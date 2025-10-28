@@ -528,7 +528,27 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/inbox': (_) => const InboxPage(),
 
                 // ستوري
-                '/stories': (_) => const StoriesHubPage(),
+                '/stories': (context) {
+                  final args = ModalRoute.of(context)?.settings.arguments;
+                  String? uidArg;
+                  int initialIndex = 0;
+                  if (args is String) {
+                    uidArg = args;
+                  } else if (args is Map) {
+                    final dynamicUid = args['uid'];
+                    final dynamicIndex = args['index'] ?? args['initialIndex'];
+                    if (dynamicUid is String) {
+                      uidArg = dynamicUid;
+                    }
+                    if (dynamicIndex is int) {
+                      initialIndex = dynamicIndex;
+                    }
+                  }
+                  if (uidArg != null && uidArg.isNotEmpty) {
+                    return StoryViewerPage(uid: uidArg!, initialIndex: initialIndex);
+                  }
+                  return const StoriesHubPage();
+                },
                 '/story_create': (_) => const StoryCreatePage(),
 
                 // متجر/محفظة/VIP
@@ -2054,7 +2074,7 @@ Future<void> saveStoryDoc({
   String? text,
   String? mediaUrl,
   String? mediaPath,
-  String? bgColor,
+  int? bgColor,
   String audience = 'all',
 }) async {
   final fs = cf.FirebaseFirestore.instance;
@@ -2063,9 +2083,13 @@ Future<void> saveStoryDoc({
   final data = existing.data();
   final existingCreatedAt = data?['createdAt'];
   final existingExpiresAt = data?['expiresAt'];
-  final existingBgColor = data?['bgColor'] as String?;
+  final existingBgColorRaw = data?['bgColor'];
   final lang = _detectStoryLang(data?['lang'] as String?);
-  final resolvedBgColor = bgColor ?? existingBgColor;
+  final resolvedBgColor = bgColor ?? switch (existingBgColorRaw) {
+    int value => value,
+    String value => _parseStoryBgColor(value),
+    _ => null,
+  };
   final legacyVisibility = audience == 'all' ? 'everyone' : audience;
 
   final payload = <String, dynamic>{
@@ -2074,8 +2098,8 @@ Future<void> saveStoryDoc({
     'type': type,
     'text': text,
     'mediaUrl': mediaUrl,
+    'url': mediaUrl,
     'mediaPath': mediaPath,
-    'bgColor': resolvedBgColor,
     'audience': audience,
     'visibility': legacyVisibility,
     'lang': lang,
@@ -2089,9 +2113,9 @@ Future<void> saveStoryDoc({
     payload['viewsCount'] = 0;
   }
 
-  final parsedBg = _parseStoryBgColor(resolvedBgColor);
-  if (parsedBg != null) {
-    payload['bg'] = parsedBg;
+  if (resolvedBgColor != null) {
+    payload['bgColor'] = resolvedBgColor;
+    payload['bg'] = resolvedBgColor;
   }
 
   await docRef.set(payload, cf.SetOptions(merge: true));
@@ -2134,18 +2158,29 @@ class StoryItem {
     StoryType _t(String? s) {
       switch (s) { case 'video': return StoryType.video; case 'text': return StoryType.text; default: return StoryType.image; }
     }
+    int? _resolveBg(dynamic raw) {
+      return switch (raw) {
+        int value => value,
+        String value => _parseStoryBgColor(value),
+        _ => null,
+      };
+    }
+
+    final createdRaw = d['createdAt'];
+    final expiresRaw = d['expiresAt'];
+
     return StoryItem(
       id: doc.id,
       ownerUid: ownerUid,
       type: _t(d['type'] as String?),
-      mediaUrl: d['mediaUrl'] as String?,
+      mediaUrl: (d['url'] as String?) ?? (d['mediaUrl'] as String?),
       mediaPath: d['mediaPath'] as String?,
       text: d['text'] as String?,
-      bg: (d['bg'] as int?) ?? _parseStoryBgColor(d['bgColor'] as String?),
-      createdAt: d['createdAt'] ?? cf.Timestamp.now(),
+      bg: _resolveBg(d['bg']) ?? _resolveBg(d['bgColor']),
+      createdAt: createdRaw is cf.Timestamp ? createdRaw : cf.Timestamp.now(),
       visibility: (d['visibility'] as String?) ?? 'everyone',
       audience: (d['audience'] as String?) ?? 'all',
-      expiresAt: d['expiresAt'] as cf.Timestamp?,
+      expiresAt: expiresRaw is cf.Timestamp ? expiresRaw : null,
       viewsCount: (d['viewsCount'] as num?)?.toInt() ?? 0,
     );
   }
@@ -2156,6 +2191,216 @@ class StoryItem {
     }
     final dt = createdAt.toDate();
     return DateTime.now().isAfter(dt.add(const Duration(hours: 24)));
+  }
+}
+
+Future<List<StoryItem>> fetchUserStories(String uid) async {
+  if (uid.isEmpty) return [];
+  final now = DateTime.now();
+  final nowTs = cf.Timestamp.fromDate(now);
+  final fs = cf.FirebaseFirestore.instance;
+  List<StoryItem> firestoreStories = [];
+
+  try {
+    final query = await fs
+        .collection('stories')
+        .doc(uid)
+        .collection('items')
+        .where('expiresAt', isGreaterThan: nowTs)
+        .orderBy('createdAt')
+        .get();
+    firestoreStories = query.docs
+        .map((d) => StoryItem.fromDoc(uid, d))
+        .where((item) => !item.expired)
+        .toList();
+    if (firestoreStories.isNotEmpty) {
+      return firestoreStories;
+    }
+  } on cf.FirebaseException catch (err, stack) {
+    debugPrint('fetchUserStories Firestore error: ${err.message}');
+    FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+  }
+
+  final storage = FirebaseStorage.instance.ref('stories/$uid');
+  final List<StoryItem> storageStories = [];
+
+  Future<void> traverse(Reference ref) async {
+    try {
+      final result = await ref.listAll();
+      for (final item in result.items) {
+        try {
+          final meta = await item.getMetadata();
+          final updated = meta.updated ?? meta.timeCreated ?? now;
+          final expires = updated.add(const Duration(hours: 24));
+          final url = await item.getDownloadURL();
+          final lower = item.name.toLowerCase();
+          StoryType type;
+          if (lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.mkv') || lower.endsWith('.webm')) {
+            type = StoryType.video;
+          } else {
+            type = StoryType.image;
+          }
+          storageStories.add(StoryItem(
+            id: item.fullPath,
+            ownerUid: uid,
+            type: type,
+            mediaUrl: url,
+            mediaPath: item.fullPath,
+            text: null,
+            bg: null,
+            createdAt: cf.Timestamp.fromDate(updated),
+            audience: 'all',
+            visibility: 'everyone',
+            expiresAt: cf.Timestamp.fromDate(expires),
+            viewsCount: 0,
+          ));
+        } catch (err, stack) {
+          debugPrint('fetchUserStories storage item error: $err');
+          FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+        }
+      }
+      for (final prefix in result.prefixes) {
+        await traverse(prefix);
+      }
+    } on FirebaseException catch (err, stack) {
+      debugPrint('fetchUserStories storage error: ${err.message}');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
+  }
+
+  await traverse(storage);
+  storageStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  return storageStories.where((item) => !item.expired).toList();
+}
+
+class StoryStrip extends StatefulWidget {
+  final String uid;
+  final String? displayName;
+  final String? avatarUrl;
+  const StoryStrip({super.key, required this.uid, this.displayName, this.avatarUrl});
+
+  @override
+  State<StoryStrip> createState() => _StoryStripState();
+}
+
+class _StoryStripState extends State<StoryStrip> {
+  late Future<List<StoryItem>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = fetchUserStories(widget.uid);
+  }
+
+  @override
+  void didUpdateWidget(covariant StoryStrip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uid != widget.uid) {
+      _future = fetchUserStories(widget.uid);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.uid.isEmpty) return const SizedBox.shrink();
+    return FutureBuilder<List<StoryItem>>(
+      future: _future,
+      builder: (context, snapshot) {
+        final stories = snapshot.data ?? const <StoryItem>[];
+        final hasStories = stories.isNotEmpty;
+        final count = stories.length;
+        final theme = Theme.of(context);
+        final borderColor = hasStories
+            ? theme.colorScheme.primary
+            : theme.colorScheme.outlineVariant.withOpacity(0.4);
+        final avatarUrl = widget.avatarUrl;
+        final trimmed = widget.displayName?.trim() ?? '';
+        final initials = trimmed.isNotEmpty ? trimmed[0].toUpperCase() : 'Y';
+
+        Widget avatarContent;
+        if (avatarUrl != null && avatarUrl.isNotEmpty) {
+          avatarContent = CircleAvatar(
+            radius: 30,
+            backgroundImage: NetworkImage(avatarUrl),
+          );
+        } else {
+          avatarContent = CircleAvatar(
+            radius: 30,
+            backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
+            child: Text(
+              initials,
+              style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.primary),
+            ),
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          avatarContent = Stack(
+            alignment: Alignment.center,
+            children: [
+              avatarContent,
+              const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          );
+        }
+
+        final tile = GestureDetector(
+          onTap: () {
+            Navigator.of(context).pushNamed('/stories', arguments: {'uid': widget.uid});
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: borderColor, width: 3),
+                    ),
+                    padding: const EdgeInsets.all(4),
+                    child: ClipOval(child: avatarContent),
+                  ),
+                  if (hasStories)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '$count',
+                          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onPrimary),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Your Story',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        );
+
+        return SizedBox(
+          height: 104,
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            children: [tile],
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -2305,6 +2550,338 @@ class StoriesHubPage extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class StoryViewerPage extends StatefulWidget {
+  final String uid;
+  final int initialIndex;
+  const StoryViewerPage({super.key, required this.uid, this.initialIndex = 0});
+
+  @override
+  State<StoryViewerPage> createState() => _StoryViewerPageState();
+}
+
+class _StoryViewerPageState extends State<StoryViewerPage> {
+  List<StoryItem> _stories = [];
+  int _index = 0;
+  bool _loading = true;
+  Timer? _timer;
+  VideoPlayerController? _videoController;
+  bool _videoInitializing = false;
+  bool _videoPaused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.uid.isEmpty) {
+      setState(() {
+        _stories = [];
+        _loading = false;
+      });
+      return;
+    }
+    try {
+      final list = await fetchUserStories(widget.uid);
+      if (!mounted) return;
+      final safeIndex = list.isEmpty
+          ? 0
+          : math.min(math.max(widget.initialIndex, 0), list.length - 1);
+      setState(() {
+        _stories = list;
+        _index = safeIndex;
+        _loading = false;
+      });
+      if (list.isNotEmpty) {
+        await _prepareCurrent();
+      }
+    } catch (err, stack) {
+      debugPrint('StoryViewerPage load error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (mounted) {
+        setState(() {
+          _stories = [];
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _prepareCurrent() async {
+    _timer?.cancel();
+    await _disposeVideo();
+    if (!mounted || _stories.isEmpty) return;
+    final current = _stories[_index];
+    if (current.type == StoryType.video && current.mediaUrl != null) {
+      setState(() {
+        _videoInitializing = true;
+        _videoPaused = false;
+      });
+      final controller = VideoPlayerController.networkUrl(Uri.parse(current.mediaUrl!));
+      _videoController = controller;
+      try {
+        await controller.initialize();
+        if (!mounted) return;
+        controller.addListener(_onVideoTick);
+        await controller.play();
+        if (mounted) {
+          setState(() {
+            _videoInitializing = false;
+            _videoPaused = false;
+          });
+        }
+      } catch (err, stack) {
+        debugPrint('StoryViewerPage video init error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+        if (mounted) {
+          setState(() {
+            _videoInitializing = false;
+            _videoPaused = false;
+          });
+        }
+      }
+    } else {
+      _timer = Timer(const Duration(seconds: 5), () {
+        if (mounted) {
+          _next();
+        }
+      });
+    }
+  }
+
+  Future<void> _disposeVideo() async {
+    final controller = _videoController;
+    _videoController = null;
+    if (controller != null) {
+      controller.removeListener(_onVideoTick);
+      try {
+        await controller.pause();
+      } catch (_) {}
+      await controller.dispose();
+    }
+  }
+
+  void _onVideoTick() {
+    final controller = _videoController;
+    if (controller == null || !mounted) return;
+    final value = controller.value;
+    if (!value.isInitialized) return;
+    if (value.duration > Duration.zero && value.position >= value.duration) {
+      controller.removeListener(_onVideoTick);
+      if (mounted) {
+        _next();
+      }
+    }
+  }
+
+  void _next() {
+    if (_stories.isEmpty) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    if (_index < _stories.length - 1) {
+      setState(() {
+        _index++;
+      });
+      unawaited(_prepareCurrent());
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  void _prev() {
+    if (_stories.isEmpty) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    if (_index > 0) {
+      setState(() {
+        _index--;
+      });
+      unawaited(_prepareCurrent());
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  void _toggleVideo() {
+    final controller = _videoController;
+    if (controller == null) return;
+    if (controller.value.isPlaying) {
+      controller.pause();
+      setState(() {
+        _videoPaused = true;
+      });
+    } else {
+      controller.play();
+      setState(() {
+        _videoPaused = false;
+      });
+    }
+  }
+
+  void _handleTap(TapUpDetails details) {
+    final width = MediaQuery.of(context).size.width;
+    if (details.localPosition.dx < width / 2) {
+      _prev();
+    } else {
+      _next();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    unawaited(_disposeVideo());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_stories.isEmpty) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('No active stories', style: TextStyle(color: Colors.white)),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                child: const Text('Close'),
+              )
+            ],
+          ),
+        ),
+      );
+    }
+
+    final story = _stories[_index];
+    Widget content;
+    switch (story.type) {
+      case StoryType.text:
+        content = Container(
+          color: Color(story.bg ?? Colors.black.value),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Text(
+            story.text ?? '',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
+          ),
+        );
+        break;
+      case StoryType.image:
+        content = story.mediaUrl != null
+            ? Image.network(story.mediaUrl!, fit: BoxFit.cover)
+            : const SizedBox.shrink();
+        break;
+      case StoryType.video:
+        if (_videoInitializing) {
+          content = const Center(child: CircularProgressIndicator());
+        } else if (_videoController?.value.isInitialized == true) {
+          content = FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _videoController!.value.size.width,
+              height: _videoController!.value.size.height,
+              child: VideoPlayer(_videoController!),
+            ),
+          );
+        } else {
+          content = const SizedBox.shrink();
+        }
+        break;
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: GestureDetector(
+          onTapUp: _handleTap,
+          onVerticalDragEnd: (_) => Navigator.of(context).maybePop(),
+          child: Stack(
+            children: [
+              Positioned.fill(child: content),
+              Positioned(
+                top: 16,
+                left: 16,
+                right: 16,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: List.generate(_stories.length, (i) {
+                        final active = i == _index;
+                        return Expanded(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: active ? Colors.white : Colors.white24,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const CircleAvatar(
+                          backgroundColor: Colors.white24,
+                          child: Icon(Icons.person, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            story.ownerUid,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.of(context).maybePop(),
+                          icon: const Icon(Icons.close, color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (story.type == StoryType.video && _videoController != null)
+                Positioned(
+                  bottom: 32,
+                  left: 0,
+                  right: 0,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: _toggleVideo,
+                        icon: Icon(_videoPaused ? Icons.play_arrow : Icons.pause),
+                        label: Text(_videoPaused ? 'Play' : 'Pause'),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2585,7 +3162,7 @@ class _StoryCreatePageState extends State<StoryCreatePage> {
       text: _type == StoryType.text ? (rawText.isEmpty ? null : rawText) : null,
       mediaUrl: mediaUrl,
       mediaPath: mediaPath,
-      bgColor: _type == StoryType.text ? _bg.value.toString() : null,
+      bgColor: _type == StoryType.text ? _bg.value : null,
       audience: storyAudience,
     );
 
@@ -3265,6 +3842,8 @@ class ProfilePage extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(height: 16),
+              StoryStrip(uid: uid, displayName: name, avatarUrl: avatar),
               const SizedBox(height: 16),
               const Divider(),
               // Quick actions
