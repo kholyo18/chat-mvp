@@ -84,25 +84,37 @@ class AppTheme extends ChangeNotifier {
   double textScale = 1.0;
   bool highContrast = false;
 
+  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
+
   Future<void> load() async {
-    final sp = await SharedPreferences.getInstance();
-    dark = sp.getBool('theme.dark') ?? false;
-    seed = Color(sp.getInt('theme.seed') ?? kTeal.value);
-    textScale = sp.getDouble('theme.textScale') ?? 1.0;
-    highContrast = sp.getBool('theme.contrast') ?? false;
-    notifyListeners();
+    try {
+      final sp = await _prefs;
+      dark = sp.getBool('theme.dark') ?? false;
+      seed = Color(sp.getInt('theme.seed') ?? kTeal.value);
+      textScale = sp.getDouble('theme.textScale') ?? 1.0;
+      highContrast = sp.getBool('theme.contrast') ?? false;
+      notifyListeners();
+    } catch (err, stack) {
+      debugPrint('AppTheme.load error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
   }
   Future<void> save() async {
-    final sp = await SharedPreferences.getInstance();
-    await sp.setBool('theme.dark', dark);
-    await sp.setInt('theme.seed', seed.value);
-    await sp.setDouble('theme.textScale', textScale);
-    await sp.setBool('theme.contrast', highContrast);
+    try {
+      final sp = await _prefs;
+      await sp.setBool('theme.dark', dark);
+      await sp.setInt('theme.seed', seed.value);
+      await sp.setDouble('theme.textScale', textScale);
+      await sp.setBool('theme.contrast', highContrast);
+    } catch (err, stack) {
+      debugPrint('AppTheme.save error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
   }
-  void toggleDark(bool v){ dark=v; save(); notifyListeners(); }
-  void setSeed(Color c){ seed=c; save(); notifyListeners(); }
-  void setTextScale(double v){ textScale=v; save(); notifyListeners(); }
-  void setContrast(bool v){ highContrast=v; save(); notifyListeners(); }
+  void toggleDark(bool v){ dark=v; unawaited(save()); notifyListeners(); }
+  void setSeed(Color c){ seed=c; unawaited(save()); notifyListeners(); }
+  void setTextScale(double v){ textScale=v; unawaited(save()); notifyListeners(); }
+  void setContrast(bool v){ highContrast=v; unawaited(save()); notifyListeners(); }
 }
 
 // ---------- Auth/User State ----------
@@ -110,65 +122,121 @@ class AppUser extends ChangeNotifier {
   User? firebaseUser;
   Map<String, dynamic> profile = {};
   StreamSubscription? _sub;
+  StreamSubscription<User?>? _authStream;
 
   Future<void> init() async {
-    FirebaseAuth.instance.userChanges().listen((u) async {
-      firebaseUser = u;
-      _sub?.cancel();
-      if (u != null) {
-        _sub = FirebaseFirestore.instance.collection('users').doc(u.uid)
-          .snapshots().listen((doc) { profile = doc.data() ?? {}; notifyListeners(); });
-        await _ensureDoc(u.uid);
+    _authStream?.cancel();
+    _authStream = FirebaseAuth.instance.userChanges().listen((u) async {
+      try {
+        firebaseUser = u;
+        await _sub?.cancel();
+        if (u != null) {
+          _sub = FirebaseFirestore.instance.collection('users').doc(u.uid)
+              .snapshots().listen((doc) {
+            profile = doc.data() ?? {};
+            notifyListeners();
+          });
+          await _ensureDoc(u.uid);
+        } else {
+          profile = {};
+        }
+        notifyListeners();
+      } catch (err, stack) {
+        debugPrint('AppUser.init stream error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
       }
-      notifyListeners();
+    }, onError: (Object err, StackTrace stack) {
+      debugPrint('AppUser.init listen error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
     });
   }
 
   Future<User> autoLogin() async {
-    final cur = FirebaseAuth.instance.currentUser;
-    if (cur != null) return cur;
-    final cred = await FirebaseAuth.instance.signInAnonymously();
-    await _ensureDoc(cred.user!.uid);
-    return cred.user!;
+    try {
+      final cur = FirebaseAuth.instance.currentUser;
+      if (cur != null) return cur;
+      final cred = await FirebaseAuth.instance.signInAnonymously();
+      final user = cred.user;
+      if (user == null) {
+        throw StateError('Anonymous sign-in returned null user');
+      }
+      await _ensureDoc(user.uid);
+      return user;
+    } catch (err, stack) {
+      debugPrint('AppUser.autoLogin error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      rethrow;
+    }
   }
 
-  Future<void> signOut() async => FirebaseAuth.instance.signOut();
+  Future<void> signOut() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (err, stack) {
+      debugPrint('AppUser.signOut error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      rethrow;
+    }
+  }
 
   Future<void> _ensureDoc(String uid) async {
-    final ref = FirebaseFirestore.instance.collection('users').doc(uid);
-    final snap = await ref.get();
-    if (!snap.exists) {
-      final deviceLang = WidgetsBinding.instance.platformDispatcher.locales.first.languageCode;
-      await ref.set({
-        'createdAt': FieldValue.serverTimestamp(),
-        'displayName': 'Guest',
-        'bio': '',
-        'link': '',
-        'avatar': null,
-        'cover': null,
-        'vipLevel': 'Bronze',
-        'coins': 0,
-        'spentLifetime': 0,
-        'followers': 0,
-        'following': 0,
-        'i18n': {'target': deviceLang, 'auto': true},
-        'privacy': {
-          'whoCanMessage': 'everyone',
-          'whoCanInvite': 'everyone',
-          'whoCanMention': 'everyone',
-          'showLastSeen': true,
-          'showOnline': true,
-          'showProfilePic': true,
-          'storyVisibility': 'everyone', // everyone/contacts/custom
-        },
-        'notify': {'dnd': false, 'mentionsOnly': true},
-      }, SetOptions(merge: true));
+    try {
+      final ref = FirebaseFirestore.instance.collection('users').doc(uid);
+      final snap = await ref.get();
+      if (!snap.exists) {
+        final locales = WidgetsBinding.instance.platformDispatcher.locales;
+        final deviceLang = locales.isNotEmpty ? locales.first.languageCode : 'en';
+        await ref.set({
+          'createdAt': FieldValue.serverTimestamp(),
+          'displayName': 'Guest',
+          'bio': '',
+          'link': '',
+          'avatar': null,
+          'cover': null,
+          'vipLevel': 'Bronze',
+          'coins': 0,
+          'spentLifetime': 0,
+          'followers': 0,
+          'following': 0,
+          'i18n': {'target': deviceLang, 'auto': true},
+          'privacy': {
+            'whoCanMessage': 'everyone',
+            'whoCanInvite': 'everyone',
+            'whoCanMention': 'everyone',
+            'showLastSeen': true,
+            'showOnline': true,
+            'showProfilePic': true,
+            'storyVisibility': 'everyone', // everyone/contacts/custom
+          },
+          'notify': {'dnd': false, 'mentionsOnly': true},
+        }, SetOptions(merge: true));
+      }
+    } catch (err, stack) {
+      debugPrint('AppUser._ensureDoc error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      rethrow;
     }
   }
 
   Future<void> updateProfile(Map<String, dynamic> patch) async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    await FirebaseFirestore.instance.collection('users').doc(uid).set(patch, SetOptions(merge: true));
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('Cannot update profile without authenticated user');
+    }
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set(patch, SetOptions(merge: true));
+    } catch (err, stack) {
+      debugPrint('AppUser.updateProfile error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      rethrow;
+    }
+  }
+
+  @override
+  void dispose() {
+    _authStream?.cancel();
+    _sub?.cancel();
+    super.dispose();
   }
 }
 
@@ -177,50 +245,82 @@ class PresenceService {
   final _rtdb = FirebaseDatabase.instance.ref();
   StreamSubscription? _lc;
   Future<void> start(String uid) async {
-    final pres = _rtdb.child('presence/$uid');
-    final now = DateTime.now().millisecondsSinceEpoch;
-    await pres.update({'online': true, 'lastActive': now});
-    pres.onDisconnect().update({'online': false, 'lastActive': ServerValue.timestamp});
-    _lc = Stream.periodic(const Duration(minutes: 2)).listen((_) {
-      FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'lastSeen': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-    });
+    try {
+      final pres = _rtdb.child('presence/$uid');
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await pres.update({'online': true, 'lastActive': now});
+      pres.onDisconnect().update({'online': false, 'lastActive': ServerValue.timestamp});
+      await _lc?.cancel();
+      _lc = Stream.periodic(const Duration(minutes: 2)).listen((_) {
+        FirebaseFirestore.instance.collection('users').doc(uid)
+            .set({'lastSeen': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      });
+    } catch (err, stack) {
+      debugPrint('PresenceService.start error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
   }
   Future<void> stop(String uid) async {
     try {
       await _rtdb.child('presence/$uid').update({'online': false, 'lastActive': ServerValue.timestamp});
-    } catch (_) {}
-    await FirebaseFirestore.instance.collection('users').doc(uid)
-      .set({'lastSeen': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-    await _lc?.cancel();
+      await FirebaseFirestore.instance.collection('users').doc(uid)
+          .set({'lastSeen': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+    } catch (err, stack) {
+      debugPrint('PresenceService.stop error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    } finally {
+      await _lc?.cancel();
+      _lc = null;
+    }
   }
 }
 
 // ---------- FCM (client) ----------
 class NotificationsService {
   Future<void> init(String uid) async {
-    final fm = FirebaseMessaging.instance;
-    await fm.requestPermission(alert: true, badge: true, sound: true);
-    final token = await fm.getToken();
-    if (token != null) {
-      await FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'fcmToken': token, 'fcmUpdatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+    try {
+      final fm = FirebaseMessaging.instance;
+      final settings = await fm.requestPermission(alert: true, badge: true, sound: true);
+      if (settings.authorizationStatus == AuthorizationStatus.denied) {
+        debugPrint('Notifications permission denied');
+      }
+      final token = await fm.getToken();
+      if (token != null && token.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('users').doc(uid).set(
+          {'fcmToken': token, 'fcmUpdatedAt': FieldValue.serverTimestamp()},
+          SetOptions(merge: true),
+        );
+      }
+      fm.onTokenRefresh.listen((t) {
+        FirebaseFirestore.instance.collection('users').doc(uid).set(
+          {'fcmToken': t, 'fcmUpdatedAt': FieldValue.serverTimestamp()},
+          SetOptions(merge: true),
+        );
+      }, onError: (Object err, StackTrace stack) {
+        debugPrint('NotificationsService.onTokenRefresh error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      });
+      FirebaseMessaging.onMessage.listen((m) {
+        debugPrint('FCM: ${m.notification?.title} - ${m.notification?.body}');
+      }, onError: (Object err, StackTrace stack) {
+        debugPrint('NotificationsService.onMessage error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      });
+      FirebaseMessaging.onMessageOpenedApp.listen((m) {
+        final roomId = m.data['roomId'];
+        final dmId = m.data['dmId'];
+        final storyUid = m.data['storyUid'];
+        if (roomId != null) navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
+        if (dmId != null) navigatorKey.currentState?.pushNamed('/dm', arguments: dmId);
+        if (storyUid != null) navigatorKey.currentState?.pushNamed('/stories', arguments: storyUid);
+      }, onError: (Object err, StackTrace stack) {
+        debugPrint('NotificationsService.onMessageOpenedApp error: $err');
+        FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      });
+    } catch (err, stack) {
+      debugPrint('NotificationsService.init error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
     }
-    fm.onTokenRefresh.listen((t) {
-      FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'fcmToken': t, 'fcmUpdatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-    });
-    FirebaseMessaging.onMessage.listen((m) {
-      debugPrint('FCM: ${m.notification?.title} - ${m.notification?.body}');
-    });
-    FirebaseMessaging.onMessageOpenedApp.listen((m) {
-      final roomId = m.data['roomId'];
-      final dmId = m.data['dmId'];
-      final storyUid = m.data['storyUid'];
-      if (roomId != null) navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
-      if (dmId != null) navigatorKey.currentState?.pushNamed('/dm', arguments: dmId);
-      if (storyUid != null) navigatorKey.currentState?.pushNamed('/stories', arguments: storyUid);
-    });
   }
 }
 
@@ -229,23 +329,44 @@ class TranslatorService extends ChangeNotifier {
   String targetLang = 'ar';
   bool autoTranslateEnabled = true;
 
+  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
+
   Future<void> load() async {
-    final sp = await SharedPreferences.getInstance();
-    targetLang = sp.getString('i18n.lang') ?? 'ar';
-    autoTranslateEnabled = sp.getBool('i18n.auto') ?? true;
-    notifyListeners();
+    try {
+      final sp = await _prefs;
+      targetLang = sp.getString('i18n.lang') ?? 'ar';
+      autoTranslateEnabled = sp.getBool('i18n.auto') ?? true;
+      notifyListeners();
+    } catch (err, stack) {
+      debugPrint('TranslatorService.load error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
   }
+
   Future<void> setLang(String code) async {
+    if (code == targetLang) return;
     targetLang = code;
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString('i18n.lang', code);
-    notifyListeners();
+    try {
+      final sp = await _prefs;
+      await sp.setString('i18n.lang', code);
+      notifyListeners();
+    } catch (err, stack) {
+      debugPrint('TranslatorService.setLang error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
   }
+
   Future<void> setAuto(bool v) async {
+    if (v == autoTranslateEnabled) return;
     autoTranslateEnabled = v;
-    final sp = await SharedPreferences.getInstance();
-    await sp.setBool('i18n.auto', v);
-    notifyListeners();
+    try {
+      final sp = await _prefs;
+      await sp.setBool('i18n.auto', v);
+      notifyListeners();
+    } catch (err, stack) {
+      debugPrint('TranslatorService.setAuto error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
   }
 
   Future<String> translate(String text, {String? to}) async {
@@ -255,13 +376,29 @@ class TranslatorService extends ChangeNotifier {
       'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=$tl&dt=t&q=${Uri.encodeComponent(text)}'
     );
     try {
-      final res = await http.get(uri);
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
-        return (data[0][0][0] as String?) ?? text;
+        if (data is List && data.isNotEmpty && data.first is List) {
+          final firstRow = data.first as List;
+          if (firstRow.isNotEmpty && firstRow.first is List) {
+            final firstCell = firstRow.first as List;
+            if (firstCell.isNotEmpty && firstCell.first is String) {
+              return firstCell.first as String;
+            }
+          }
+        }
+      } else {
+        debugPrint('TranslatorService.translate unexpected status ${res.statusCode}');
       }
-      return text;
-    } catch (_) { return text; }
+    } on TimeoutException catch (err, stack) {
+      debugPrint('TranslatorService.translate timeout: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    } catch (err, stack) {
+      debugPrint('TranslatorService.translate error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
+    return text;
   }
 }
 
@@ -271,10 +408,19 @@ final navigatorKey = GlobalKey<NavigatorState>();
 // ---------- Entry ----------
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
-  FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: true);
-  runApp(const ChatUltraApp());
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exceptionAsString()}');
+  };
+  await runZonedGuarded(() async {
+    await Firebase.initializeApp();
+    // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
+    FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: true);
+    runApp(const ChatUltraApp());
+  }, (error, stack) {
+    debugPrint('Uncaught zone error: $error');
+    FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
+  });
 }
 
 class ChatUltraApp extends StatefulWidget {
@@ -293,13 +439,13 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
   void dispose() { WidgetsBinding.instance.removeObserver(this); super.dispose(); }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) async {
+  void didChangeAppLifecycleState(AppLifecycleState state) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     if (state == AppLifecycleState.resumed) {
-      await presence.start(uid);
+      unawaited(presence.start(uid));
     } else if (state == AppLifecycleState.paused) {
-      await presence.stop(uid);
+      unawaited(presence.stop(uid));
     }
   }
 
