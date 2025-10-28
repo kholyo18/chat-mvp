@@ -13,8 +13,10 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow create: if request.auth != null && request.auth.uid == userId;
       allow update: if request.auth != null && request.auth.uid == userId
-        && (!request.resource.data.keys().hasAny(['coins'])
-            || (request.resource.data.coins is int && request.resource.data.coins >= 0));
+        && (
+          !request.resource.data.keys().hasAny(['coins'])
+          || request.resource.data.coins == resource.data.coins
+        );
       allow delete: if request.auth != null && request.auth.uid == userId;
     }
 
@@ -23,8 +25,19 @@ service cloud.firestore {
 
       match /tx/{txId} {
         allow read: if request.auth != null && request.auth.uid == userId;
-        allow create: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
       }
+    }
+
+    match /payments/{paymentId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.uid;
+      allow update, delete: if false;
+    }
+
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if false;
     }
   }
 }

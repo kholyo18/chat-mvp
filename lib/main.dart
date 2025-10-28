@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
@@ -31,8 +32,11 @@ import 'package:intl/intl.dart';
 
 import 'package:flutter/services.dart'; // للروابط العميقة/الحافظة/الاذونات
 // (للمعاينة لاحقًا قد نستخدم url_launcher/file_picker/cached_network_image إن أضفتها في pubspec)
+import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'services/coins_service.dart';
+import 'services/payments_service.dart';
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -760,64 +764,279 @@ class StorePage extends StatefulWidget {
 }
 
 class _StorePageState extends State<StorePage> {
-  static const List<({String id, int amount})> _packages = [
-    (id: 'pkg_100', amount: 100),
-    (id: 'pkg_250', amount: 250),
-    (id: 'pkg_600', amount: 600),
-    (id: 'pkg_1500', amount: 1500),
-  ];
+  _StorePageState();
 
   final CoinsService _coinsService = CoinsService();
-  bool _processing = false;
+  final PaymentsService _paymentsService = PaymentsService();
+  final InAppPurchase _inAppPurchase = InAppPurchase.instance;
 
-  Future<void> _confirmAndPurchase(({String id, int amount}) pkg) async {
+  static const List<int> _fallbackPackages = [100, 250, 600, 1500];
+
+  late final TextEditingController _manualController;
+  StreamSubscription<List<PurchaseDetails>>? _purchaseSub;
+  Stream<int>? _completedTodayStream;
+
+  CoinsConfig? _config;
+  PaymentProvider? _provider;
+  Map<String, ProductDetails> _productDetails = {};
+  bool _initializing = true;
+  bool _processing = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _manualController = TextEditingController();
+    _manualController.addListener(() => setState(() {}));
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Login required to buy coins.')),
+    if (uid != null) {
+      _completedTodayStream = _paymentsService.completedCoinsTodayStream(uid);
+    }
+    try {
+      final config = await _paymentsService.fetchConfig();
+      bool playAvailable = false;
+      if (!kIsWeb && Platform.isAndroid) {
+        playAvailable = await _inAppPurchase.isAvailable();
+      }
+      final provider =
+          await PaymentsService.resolveProvider(playAvailable: playAvailable);
+      final products = <String, ProductDetails>{};
+      StreamSubscription<List<PurchaseDetails>>? sub;
+      if (provider == PaymentProvider.play && playAvailable) {
+        final response =
+            await _inAppPurchase.queryProductDetails(config.playSkus.toSet());
+        if (response.error != null) {
+          debugPrint('Play Billing query error: ${response.error}');
+        }
+        for (final detail in response.productDetails) {
+          products[detail.id] = detail;
+        }
+        sub = _inAppPurchase.purchaseStream.listen(
+          _onPurchasesUpdated,
+          onError: (Object error, StackTrace stack) {
+            debugPrint('Purchase stream error: $error');
+            FlutterError.reportError(
+              FlutterErrorDetails(exception: error, stack: stack),
+            );
+          },
         );
       }
+
+      if (!mounted) {
+        await sub?.cancel();
+        return;
+      }
+
+      await _purchaseSub?.cancel();
+      _purchaseSub = sub;
+      setState(() {
+        _config = config;
+        _provider = provider;
+        _productDetails = products;
+        _initializing = false;
+        _error = null;
+      });
+    } catch (err, stack) {
+      debugPrint('Store init failed: $err');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: err, stack: stack),
+      );
+      if (!mounted) return;
+      setState(() {
+        _initializing = false;
+        _error = 'Failed to load the store. Please try again later.';
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _purchaseSub?.cancel();
+    _manualController.dispose();
+    super.dispose();
+  }
+
+  int get _manualCoins => int.tryParse(_manualController.text.trim()) ?? 0;
+
+  List<_CoinPackage> _packages(CoinsConfig config) {
+    final items = <_CoinPackage>[];
+    for (final sku in config.playSkus) {
+      final coins = config.coinsForSku(sku);
+      if (coins > 0) {
+        items.add(_CoinPackage(id: sku, coins: coins));
+      }
+    }
+    if (items.isEmpty) {
+      for (final amount in _fallbackPackages) {
+        items.add(_CoinPackage(id: 'coins_$amount', coins: amount));
+      }
+    }
+    return items;
+  }
+
+  String _estimatedPrice(CoinsConfig config, int coins) {
+    final estimate = config.estimateFiat(coins);
+    if (estimate <= 0) return '--';
+    return '≈ ${estimate.toStringAsFixed(2)} ${config.currency}';
+  }
+
+  String _providerLabel(PaymentProvider provider) {
+    switch (provider) {
+      case PaymentProvider.play:
+        return 'Google Play Billing';
+      case PaymentProvider.stripe:
+        return 'Stripe Checkout';
+    }
+  }
+
+  Uri _successUrl() {
+    final projectId = Firebase.app().options.projectId;
+    if (projectId == null || projectId.isEmpty) {
+      return Uri.parse('https://example.com/payments/success');
+    }
+    return Uri.parse('https://$projectId.web.app/payments/success');
+  }
+
+  Uri _cancelUrl() {
+    final projectId = Firebase.app().options.projectId;
+    if (projectId == null || projectId.isEmpty) {
+      return Uri.parse('https://example.com/payments/cancel');
+    }
+    return Uri.parse('https://$projectId.web.app/payments/cancel');
+  }
+
+  Future<void> _startPlayPurchase(_CoinPackage pkg) async {
+    final details = _productDetails[pkg.id];
+    if (details == null) {
+      _showSnack('Product unavailable. Please refresh.', error: true);
       return;
     }
+    if (!mounted) return;
+    setState(() => _processing = true);
+    final success = await _inAppPurchase.buyConsumable(
+      purchaseParam: PurchaseParam(productDetails: details),
+      autoConsume: false,
+    );
+    if (!success && mounted) {
+      setState(() => _processing = false);
+      _showSnack('Unable to start Google Play checkout.', error: true);
+    }
+  }
 
-    final confirm = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Dev purchase'),
-            content: const Text('Dev purchase – no real payment. Proceed?'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Proceed')),
-            ],
-          ),
-        ) ??
-        false;
-
-    if (!confirm || mounted == false) return;
-
+  Future<void> _startStripeCheckout(int coins, {String? packageId}) async {
+    if (coins <= 0) {
+      _showSnack('Enter a valid amount of coins.', error: true);
+      return;
+    }
+    if (!mounted) return;
     setState(() => _processing = true);
     try {
-      await _coinsService.addCoinsDev(
-        uid: uid,
-        amount: pkg.amount,
-        packageId: pkg.id,
-        note: 'dev_mode_purchase',
+      final url = await _paymentsService.createStripeCheckout(
+        coins: coins,
+        successUrl: _successUrl(),
+        cancelUrl: _cancelUrl(),
+        packageId: packageId,
       );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added ${pkg.amount} coins.')),
+      final launched =
+          await launchUrl(url, mode: LaunchMode.externalApplication);
+      if (!launched) {
+        _showSnack('Could not launch checkout URL.', error: true);
+      }
+    } on PaymentsLimitException {
+      _showSnack('Daily limit reached. Try again tomorrow.', error: true);
+    } catch (err, stack) {
+      debugPrint('Stripe checkout error: $err');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: err, stack: stack),
       );
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Purchase failed. Please try again.')),
-      );
+      _showSnack('Failed to start Stripe checkout.', error: true);
     } finally {
       if (mounted) {
         setState(() => _processing = false);
       }
     }
+  }
+
+  Future<void> _handlePlayPurchase(PurchaseDetails purchase) async {
+    if (!mounted) return;
+    setState(() => _processing = true);
+    try {
+      final token = purchase.verificationData.serverVerificationData;
+      final productId = purchase.productID;
+      final orderId = purchase.purchaseID;
+      if (token.isEmpty) {
+        throw StateError('Missing purchase token');
+      }
+      await _paymentsService.verifyPlayPurchase(
+        purchaseToken: token,
+        productId: productId,
+        orderId: orderId,
+      );
+      _showSnack('Purchase received. Coins will appear shortly.');
+    } on PaymentsLimitException {
+      _showSnack('Daily limit reached. Try again tomorrow.', error: true);
+    } catch (err, stack) {
+      debugPrint('Play verification failed: $err');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: err, stack: stack),
+      );
+      _showSnack('Unable to verify Google Play purchase.', error: true);
+    } finally {
+      if (mounted) {
+        setState(() => _processing = false);
+      }
+    }
+  }
+
+  Future<void> _onPurchasesUpdated(List<PurchaseDetails> purchases) async {
+    for (final purchase in purchases) {
+      switch (purchase.status) {
+        case PurchaseStatus.pending:
+          if (mounted) {
+            setState(() => _processing = true);
+          }
+          break;
+        case PurchaseStatus.error:
+          if (mounted) {
+            setState(() => _processing = false);
+          }
+          _showSnack(
+            purchase.error?.message ?? 'Purchase failed.',
+            error: true,
+          );
+          break;
+        case PurchaseStatus.canceled:
+          if (mounted) {
+            setState(() => _processing = false);
+          }
+          _showSnack('Purchase cancelled.');
+          break;
+        case PurchaseStatus.purchased:
+          await _handlePlayPurchase(purchase);
+          break;
+        case PurchaseStatus.restored:
+          break;
+      }
+      if (purchase.pendingCompletePurchase) {
+        await _inAppPurchase.completePurchase(purchase);
+      }
+    }
+  }
+
+  void _showSnack(String message, {bool error = false}) {
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor:
+            error ? theme.colorScheme.errorContainer : null,
+      ),
+    );
   }
 
   @override
@@ -829,63 +1048,238 @@ class _StorePageState extends State<StorePage> {
       );
     }
 
+    final config = _config;
+    final provider = _provider;
+
+    if (_initializing) {
+      return const Scaffold(
+        appBar: AppBar(title: Text('Store')),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (config == null || provider == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Store')),
+        body: Center(
+          child: Text(_error ?? 'Unable to load store.'),
+        ),
+      );
+    }
+
+    final packages = _packages(config);
     return Scaffold(
       appBar: AppBar(title: const Text('Store')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: StreamBuilder<int>(
-                stream: _coinsService.coinsStream(uid),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Row(
-                      children: [
-                        CircularProgressIndicator(),
-                        SizedBox(width: 16),
-                        Text('Loading balance...'),
-                      ],
-                    );
-                  }
-                  final coins = snapshot.data ?? 0;
-                  return Row(
-                    children: [
-                      const Icon(Icons.monetization_on_rounded, color: kTeal),
-                      const SizedBox(width: 12),
-                      Text('Current balance: $coins coins'),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text('Packages', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          ..._packages.map(
-            (pkg) => Card(
-              child: ListTile(
-                title: Text('${pkg.amount} Coins'),
-                subtitle: Text(pkg.id),
-                trailing: ElevatedButton(
-                  onPressed: _processing ? null : () => _confirmAndPurchase(pkg),
-                  child: _processing
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Buy'),
+      body: StreamBuilder<int>(
+        stream: _completedTodayStream,
+        builder: (context, snapshot) {
+          final purchasedToday = snapshot.data ?? 0;
+          final bool hasLimit = config.dailyLimitCoins > 0;
+          final int? remaining = hasLimit
+              ? math.max(0, config.dailyLimitCoins - purchasedToday)
+              : null;
+          final manualCoins = _manualCoins;
+          final manualValid =
+              manualCoins > 0 && (remaining == null || manualCoins <= remaining);
+          final manualEstimate = _estimatedPrice(config, manualCoins);
+
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: StreamBuilder<int>(
+                    stream: _coinsService.coinsStream(uid),
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) {
+                        return const Row(
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(width: 16),
+                            Text('Loading balance...'),
+                          ],
+                        );
+                      }
+                      final coins = snapshot.data ?? 0;
+                      return Row(
+                        children: [
+                          const Icon(Icons.monetization_on_rounded,
+                              color: kTeal),
+                          const SizedBox(width: 12),
+                          Text('Current balance: $coins coins'),
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
-            ),
-          ),
-        ],
+              const SizedBox(height: 16),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Text(
+                    _error!,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Conversion',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text('1 ${config.currency} = ${config.rate} coins'),
+                      const SizedBox(height: 4),
+                      Text(
+                        hasLimit
+                            ? 'Remaining today: ${remaining ?? 0} / ${config.dailyLimitCoins} coins'
+                            : 'Remaining today: Unlimited',
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Payment provider: ${_providerLabel(provider)}'),
+                      if (hasLimit && (remaining ?? 0) <= 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Daily purchase limit reached. Please come back tomorrow.',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .error,
+                                ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Add coins manually',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _manualController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'Coins',
+                          helperText: manualCoins > 0
+                              ? 'Estimated charge $manualEstimate'
+                              : remaining == null
+                                  ? 'Enter amount'
+                                  : 'Enter amount (max $remaining)',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: !_processing && manualValid
+                            ? () => _startStripeCheckout(
+                                  manualCoins,
+                                  packageId: 'manual',
+                                )
+                            : null,
+                        icon: _processing
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.open_in_new),
+                        label: const Text('Checkout with Stripe'),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Manual top-ups are processed via Stripe Checkout.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text('Packages', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              if (packages.isEmpty)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No packages available at the moment.'),
+                  ),
+                )
+              else
+                ...packages.map(
+                  (pkg) {
+                    final product = _productDetails[pkg.id];
+                    final subtitleLines = <String>[
+                      'Coins: ${pkg.coins}',
+                      if (provider == PaymentProvider.play) 'SKU: ${pkg.id}',
+                      if (provider == PaymentProvider.play && product != null)
+                        'Google Play price: ${product.price}',
+                      'Estimated: ${_estimatedPrice(config, pkg.coins)}',
+                    ];
+                    return Card(
+                      child: ListTile(
+                        title: Text('${pkg.coins} coins'),
+                        subtitle: Text(subtitleLines.join('\n')),
+                        trailing: ElevatedButton(
+                          onPressed: _processing || (remaining != null && remaining < pkg.coins)
+                              ? null
+                              : provider == PaymentProvider.play
+                                  ? () => _startPlayPurchase(pkg)
+                                  : () => _startStripeCheckout(
+                                        pkg.coins,
+                                        packageId: pkg.id,
+                                      ),
+                          child: _processing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Text(
+                                  provider == PaymentProvider.play
+                                      ? 'Buy'
+                                      : 'Checkout',
+                                ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          );
+        },
       ),
     );
   }
+}
+
+class _CoinPackage {
+  const _CoinPackage({required this.id, required this.coins});
+
+  final String id;
+  final int coins;
 }
 
 class WalletPage extends StatelessWidget {
