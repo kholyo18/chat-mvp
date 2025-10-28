@@ -517,7 +517,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/people': (_) => const PeopleDiscoverPage(),
 
                 // بحث شامل
-                '/search': (_) => const GlobalSearchPage(),
+                '/search': (_) => GlobalSearchPage(),
 
                 // خصوصية/إعدادات
                 '/privacy': (_) => const PrivacySettingsPage(),
@@ -1007,8 +1007,8 @@ class RoomPage extends StatefulWidget {
 }
 
 class _RoomPageState extends State<RoomPage> {
-  late String roomId;
-  final _scroll = ScrollController();
+  String get roomId => (ModalRoute.of(context)?.settings.arguments ?? 'room_demo') as String;
+  String? _currentRoomId;
   final _picker = ImagePicker();
   final _recorder = AudioRecorder();
   bool _recording = false;
@@ -1038,8 +1038,11 @@ class _RoomPageState extends State<RoomPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    roomId = (ModalRoute.of(context)!.settings.arguments ?? 'room_demo') as String;
-    _subscribeLive();
+    final rid = roomId;
+    if (_currentRoomId != rid) {
+      _currentRoomId = rid;
+      _subscribeLive();
+    }
   }
 
   void _subscribeLive() {
@@ -1083,33 +1086,68 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   // ---------------------- Message Actions ----------------------
-  Future<void> _sendText(String text) async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final tr = context.read<TranslatorService>();
-    final ref = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('messages');
+  Future<void> _sendMessage(String text) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    final fs = cf.FirebaseFirestore.instance;
+    final user = FirebaseAuth.instance.currentUser!;
+    final now = cf.Timestamp.now();
 
-    Map<String, dynamic>? translated;
-    if (tr.autoTranslateEnabled) {
-      final t = await tr.translate(text);
-      if (t != text) translated = { tr.targetLang: t };
+    final ref = fs.collection('rooms').doc(roomId).collection('messages');
+
+    final memberDoc = await fs
+        .collection('rooms')
+        .doc(roomId)
+        .collection('members')
+        .doc(user.uid)
+        .get();
+    final rawMuted = memberDoc.data()?['mutedUntil'];
+    int mutedUntil = 0;
+    if (rawMuted is num) {
+      mutedUntil = rawMuted.toInt();
+    } else if (rawMuted is cf.Timestamp) {
+      mutedUntil = rawMuted.millisecondsSinceEpoch;
+    }
+    if (mutedUntil > DateTime.now().millisecondsSinceEpoch) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أنت مكتوم مؤقتًا ولا يمكنك الإرسال حالياً.')),
+      );
+      return;
     }
 
-    await ref.add({
+    final tr = context.read<TranslatorService>();
+    Map<String, dynamic>? translated;
+    if (tr.autoTranslateEnabled) {
+      final translatedText = await tr.translate(trimmed);
+      if (translatedText != trimmed) {
+        translated = {tr.targetLang: translatedText};
+      }
+    }
+
+    final doc = await ref.add({
+      'uid': user.uid,
+      'from': user.uid,
       'type': 'text',
-      'from': uid,
-      'text': text,
+      'text': trimmed,
       'replyTo': _replyToId,
       'translated': translated,
       'autoTranslated': translated != null,
-      'createdAt': cf.FieldValue.serverTimestamp(),
+      'createdAt': now,
       'reactions': {},
       'pinned': false,
     });
 
-    await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
-      .set({'meta': {'lastMsgAt': cf.FieldValue.serverTimestamp(), 'messages': cf.FieldValue.increment(1)}}, cf.SetOptions(merge: true));
+    await fs.collection('rooms').doc(roomId).set({
+      'lastMessageAt': now,
+      'lastMessageId': doc.id,
+      'meta': {
+        'lastMsgAt': cf.FieldValue.serverTimestamp(),
+        'messages': cf.FieldValue.increment(1),
+      },
+    }, cf.SetOptions(merge: true));
 
-    setState(()=> _replyToId = null);
+    setState(() => _replyToId = null);
   }
 
   Future<void> _sendMedia(MsgType type, {String? url, String? thumb, int? duration}) async {
@@ -1208,7 +1246,7 @@ class _RoomPageState extends State<RoomPage> {
     final typingRef = rtdb.FirebaseDatabase.instance.ref('typing/$roomId');
     return Scaffold(
       appBar: AppBar(
-        title: Text('Room: $roomId'),
+        title: const Text('Room'),
         actions: [
           IconButton(
             tooltip: 'تثبيت/إلغاء تثبيت آخر رسالة',
@@ -1292,7 +1330,7 @@ class _RoomPageState extends State<RoomPage> {
           _ChatInput(
             recording: _recording,
             onTyping: (t)=> _setTyping(t),
-            onSendText: _sendText,
+            onSendText: _sendMessage,
             onPickImage: _pickImage,
             onPickVideo: _pickVideo,
             onToggleRecord: _toggleRecord,
@@ -1325,7 +1363,7 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final bg = mine ? cs.primaryContainer : cs.surfaceVariant;
-    final border = mine ? Border.all(color: kTeal.withOpacity(0.35)) : BorderSide.none;
+    final BoxBorder? border = mine ? Border.all(color: kTeal.withOpacity(0.35)) : null;
     final tr = context.read<TranslatorService>();
     final translated = message.translated?[tr.targetLang]?.toString();
 
@@ -1461,6 +1499,281 @@ class _MessageBubble extends StatelessWidget {
     // مؤقتًا نجعله دائمًا false إلا إذا تم تعديل الحقل في الوثيقة ويُسترجع في واجهة أخرى.
     return false;
   }
+}
+
+class _ReplyPreview extends StatelessWidget {
+  final VoidCallback onCancel;
+  const _ReplyPreview({super.key, required this.onCancel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(Icons.reply, size: 16),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text(
+            'الرد على رسالة...',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        IconButton(onPressed: onCancel, icon: const Icon(Icons.close)),
+      ],
+    );
+  }
+}
+
+class _ChatInput extends StatefulWidget {
+  final bool recording;
+  final ValueChanged<bool> onTyping;
+  final ValueChanged<String> onSendText;
+  final VoidCallback onPickImage;
+  final VoidCallback onPickVideo;
+  final Future<void> Function() onToggleRecord;
+  const _ChatInput({
+    super.key,
+    required this.recording,
+    required this.onTyping,
+    required this.onSendText,
+    required this.onPickImage,
+    required this.onPickVideo,
+    required this.onToggleRecord,
+  });
+
+  @override
+  State<_ChatInput> createState() => _ChatInputState();
+}
+
+class _ChatInputState extends State<_ChatInput> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    widget.onTyping(false);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _handleSend() {
+    final text = _controller.text;
+    widget.onSendText(text);
+    _controller.clear();
+    widget.onTyping(false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'صورة',
+              onPressed: widget.onPickImage,
+              icon: const Icon(Icons.photo_rounded),
+            ),
+            IconButton(
+              tooltip: 'فيديو',
+              onPressed: widget.onPickVideo,
+              icon: const Icon(Icons.videocam_rounded),
+            ),
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                minLines: 1,
+                maxLines: 4,
+                onChanged: (value) => widget.onTyping(value.trim().isNotEmpty),
+                decoration: const InputDecoration.collapsed(hintText: 'اكتب رسالة...'),
+              ),
+            ),
+            IconButton(
+              tooltip: widget.recording ? 'إيقاف التسجيل' : 'تسجيل صوتي',
+              onPressed: () {
+                widget.onToggleRecord();
+              },
+              icon: Icon(widget.recording ? Icons.stop_circle_rounded : Icons.mic_rounded,
+                  color: widget.recording ? Colors.redAccent : null),
+            ),
+            IconButton(
+              tooltip: 'إرسال',
+              onPressed: _handleSend,
+              icon: const Icon(Icons.send_rounded),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LinkPreview extends StatelessWidget {
+  final String text;
+  const _LinkPreview({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(decoration: TextDecoration.underline),
+    );
+  }
+}
+
+class _VideoThumb extends StatelessWidget {
+  final String url;
+  const _VideoThumb({super.key, required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 160,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.black12,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Icon(Icons.play_circle_fill, size: 48),
+    );
+  }
+}
+
+class _AudioTile extends StatelessWidget {
+  final String url;
+  final int? durMs;
+  const _AudioTile({super.key, required this.url, this.durMs});
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = durMs != null ? Duration(milliseconds: durMs!) : null;
+    final durLabel = duration != null
+        ? '${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}:${(duration.inSeconds.remainder(60)).toString().padLeft(2, '0')}'
+        : null;
+    return Row(
+      children: [
+        const Icon(Icons.audiotrack),
+        const SizedBox(width: 8),
+        Expanded(child: Text(url, overflow: TextOverflow.ellipsis)),
+        if (durLabel != null) Text(durLabel, style: const TextStyle(fontSize: 12)),
+      ],
+    );
+  }
+}
+
+class _QuotedMessageRich extends StatelessWidget {
+  final String roomId;
+  final String msgId;
+  const _QuotedMessageRich({super.key, required this.roomId, required this.msgId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text('↩︎ رد على رسالة ($msgId)', style: const TextStyle(fontSize: 12, color: kGray));
+  }
+}
+
+class _MessageActions extends StatelessWidget {
+  final void Function(String emoji) onReact;
+  final VoidCallback onReply;
+  final VoidCallback onPin;
+  final VoidCallback onDelete;
+  final bool pinned;
+  const _MessageActions({
+    super.key,
+    required this.onReact,
+    required this.onReply,
+    required this.onPin,
+    required this.onDelete,
+    required this.pinned,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Wrap(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Wrap(
+              spacing: 12,
+              children: [
+                for (final emoji in const ['👍', '❤️', '😂', '🔥'])
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      onReact(emoji);
+                    },
+                    child: Text(emoji, style: const TextStyle(fontSize: 22)),
+                  ),
+              ],
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.reply_rounded),
+            title: const Text('رد'),
+            onTap: () {
+              Navigator.of(context).pop();
+              onReply();
+            },
+          ),
+          ListTile(
+            leading: Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
+            title: Text(pinned ? 'إلغاء التثبيت' : 'تثبيت'),
+            onTap: () {
+              Navigator.of(context).pop();
+              onPin();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('حذف'),
+            onTap: () {
+              Navigator.of(context).pop();
+              onDelete();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> showEditMessageDialog(
+  BuildContext context, {
+  required String roomId,
+  required String msgId,
+  required String initialText,
+}) async {
+  final controller = TextEditingController(text: initialText);
+  final result = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('تعديل الرسالة'),
+      content: TextField(
+        controller: controller,
+        maxLines: null,
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إلغاء')),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+          child: const Text('حفظ'),
+        ),
+      ],
+    ),
+  );
+  if (result == null || result.isEmpty || result == initialText.trim()) return;
+  await cf.FirebaseFirestore.instance
+      .collection('rooms')
+      .doc(roomId)
+      .collection('messages')
+      .doc(msgId)
+      .update({
+    'text': result,
+    'edited': true,
+    'editedAt': cf.FieldValue.serverTimestamp(),
+  });
 }
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 5/12] =====================
 // Stories 24h: create (image/video/text), list, viewer, views tracking, basic privacy
@@ -4015,81 +4328,6 @@ class _RoomInvitesTabState extends State<_RoomInvitesTab> {
     );
   }
 }
-// ===== REPLACE in _ChatRoomPageState =====
-Future<void> _sendMessage(String text) async {
-  final user = FirebaseAuth.instance.currentUser!;
-  final tr = context.read<TranslatorService>();
-  final fs = cf.FirebaseFirestore.instance;
-  final ref = fs.collection('rooms').doc(roomId).collection('messages');
-
-  // 1) جلب إعدادات الغرفة (القواعد/الكلمات الممنوعة)
-  final roomDoc = await fs.collection('rooms').doc(roomId).get();
-  final cfg = (roomDoc.data()?['config'] ?? {}) as Map;
-  final List<String> badWords = List<String>.from((cfg['badWords'] ?? const <String>[]).cast<String>());
-  final bool autoMute = cfg['autoMuteOnBadWord'] == true;
-  final int muteMinutes = (cfg['muteMinutes'] ?? 10) as int;
-
-  // 2) فلترة النص
-  String filtered = text;
-  bool hitBad = false;
-  for (final w in badWords) {
-    if (w.trim().isEmpty) continue;
-    final rx = RegExp(RegExp.escape(w), caseSensitive: false);
-    if (rx.hasMatch(filtered)) {
-      hitBad = true;
-      filtered = filtered.replaceAllMapped(rx, (m) => '*' * m.group(0)!.length);
-    }
-  }
-
-  // 3) ترجمة تلقائية للمستخدم الحالي (كما في النسخة السابقة)
-  Map<String, dynamic>? translated;
-  if (tr.autoTranslateEnabled) {
-    final t = await tr.translate(filtered);
-    if (t != filtered) translated = { tr.targetLang: t };
-  }
-
-  // 4) إنفاذ كتم تلقائي عند مخالفة الكلمات الممنوعة
-  if (hitBad && autoMute) {
-    final meMember = fs.collection('rooms').doc(roomId).collection('members').doc(user.uid);
-    await meMember.set({
-      'mutedUntil': cf.Timestamp.fromDate(DateTime.now().add(Duration(minutes: muteMinutes)))
-    }, cf.SetOptions(merge: true));
-    await postSystemMessage(
-      roomId: roomId,
-      text: '🚫 تم كتم ${user.uid.substring(0,6)} لمدة $muteMinutes دقيقة لاستخدام كلمات محظورة.'
-    );
-  }
-
-  // 5) تحقق إن كان العضو مكتومًا الآن
-  final meMember = await fs.collection('rooms').doc(roomId).collection('members').doc(user.uid).get();
-  final muted = meMember.data()?['mutedUntil'];
-  if (muted is cf.Timestamp && DateTime.now().isBefore(muted.toDate())) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('أنت مكتوم مؤقتًا ولا يمكنك الإرسال حالياً.')));
-    }
-    return;
-  }
-
-  // 6) إضافة الرسالة
-  final doc = await ref.add({
-    'type': 'text',
-    'from': user.uid,
-    'text': filtered,
-    'replyTo': _replyToId,
-    'translated': translated,
-    'autoTranslated': translated != null,
-    'createdAt': cf.FieldValue.serverTimestamp(),
-    'reactions': {},
-    'pinned': false,
-    'edited': false,
-  });
-
-  // تحديث آخر نشاط الغرفة
-  await fs.collection('rooms').doc(roomId)
-    .set({'meta': {'lastMsgAt': cf.FieldValue.serverTimestamp(), 'messages': cf.FieldValue.increment(1)}}, cf.SetOptions(merge: true));
-
-  setState(() => _replyToId = null);
-
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 10/12] =====================
 // Room Board: posts (text/image/poll) + likes + comments + pin-as-announcement
 
@@ -4895,15 +5133,15 @@ class _FilterChipX extends StatelessWidget {
 }
 
 // ---------------------- People Results ----------------------
-Future<void> showGiftDialog(BuildContext context, {required String toUserId}) {
-  return showDialog<void>(
+Future<void> showGiftDialog(BuildContext context, {required String toUserId}) async {
+  await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('إرسال هدية'),
-      content: Text('إرسال هدية إلى المستخدم: $toUserId؟'),
+      title: const Text('Send gift'),
+      content: Text('Send a gift to $toUserId ?'),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إلغاء')),
-        FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إرسال')),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
       ],
     ),
   );
@@ -5207,30 +5445,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // بإمكانك تسجيل Log أو تحديث badge مخزن محليًا إن رغبت
 }
 
-// ---------------------- Extend NotificationsService ----------------------
-extension NotificationsDeepLinks on NotificationsService {
-  void handleDeepLink(Map data) {
-    final dest = data['open'] ?? data['action'];
-    if (dest == 'room' || data['roomId'] != null) {
-      final roomId = data['roomId'] ?? data['id'];
-      if (roomId != null) navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
-    } else if (dest == 'post' || data['postId'] != null) {
-      final roomId = data['roomId'];
-      final postId = data['postId'];
-      if (roomId != null && postId != null) {
-        navigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
-      }
-    } else if (dest == 'invite' && data['code'] != null) {
-      joinRoomWithCode(data['code']).then((ok) {
-        ScaffoldMessenger.of(navigatorKey.currentContext!)
-            .showSnackBar(SnackBar(content: Text(ok ? 'انضممت عبر الدعوة ✅' : 'كود غير صالح')));
-      });
-    } else {
-      navigatorKey.currentState?.pushNamed('/inbox');
-    }
-  }
-}
-
 // عدّل init في NotificationsService لإضافة الـ background & onMessageOpenedApp:
 class NotificationsService {
   Future<void> init(String uid) async {
@@ -5262,6 +5476,30 @@ class NotificationsService {
     FirebaseMessaging.onMessageOpenedApp.listen((m) {
       handleDeepLink(m.data);
     });
+  }
+}
+
+// ---------------------- Extend NotificationsService ----------------------
+extension NotificationsDeepLinks on NotificationsService {
+  void handleDeepLink(Map data) {
+    final dest = data['open'] ?? data['action'];
+    if (dest == 'room' || data['roomId'] != null) {
+      final roomId = data['roomId'] ?? data['id'];
+      if (roomId != null) navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
+    } else if (dest == 'post' || data['postId'] != null) {
+      final roomId = data['roomId'];
+      final postId = data['postId'];
+      if (roomId != null && postId != null) {
+        navigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
+      }
+    } else if (dest == 'invite' && data['code'] != null) {
+      joinRoomWithCode(data['code']).then((ok) {
+        ScaffoldMessenger.of(navigatorKey.currentContext!)
+            .showSnackBar(SnackBar(content: Text(ok ? 'انضممت عبر الدعوة ✅' : 'كود غير صالح')));
+      });
+    } else {
+      navigatorKey.currentState?.pushNamed('/inbox');
+    }
   }
 }
 
