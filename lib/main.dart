@@ -1263,6 +1263,13 @@ class _RoomPageState extends State<RoomPage> {
     } catch (_) { return null; }
   }
 
+  Future<void> _startVoiceRecording() async {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تسجيل الصوت سيتم لاحقًا')),
+    );
+  }
+
   // ---------------------- UI ----------------------
   @override
   Widget build(BuildContext context) {
@@ -1353,7 +1360,13 @@ class _RoomPageState extends State<RoomPage> {
             _ReplyPreview(onCancel: ()=> setState(()=> _replyToId = null)),
         ],
       ),
-      bottomNavigationBar: _ChatInput(onSend: _sendMessage),
+      bottomNavigationBar: _ChatInput(
+        onSendText: (txt) => _sendMessage(txt),
+        onPickImage: _pickImage,
+        onPickVideo: _pickVideo,
+        onStartVoice: _startVoiceRecording,
+        recording: _recording,
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => navigatorKey.currentState?.pushNamed('/rooms/create'),
         child: const Icon(Icons.add_rounded),
@@ -1543,15 +1556,15 @@ class _ReplyPreview extends StatelessWidget {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Chat input with keyboard submit + send button
-class _ChatInput extends StatefulWidget {
-  const _ChatInput({super.key, required this.onSend});
+class _LegacyChatInput extends StatefulWidget {
+  const _LegacyChatInput({super.key, required this.onSend});
   final void Function(String text) onSend;
 
   @override
-  State<_ChatInput> createState() => _ChatInputState();
+  State<_LegacyChatInput> createState() => _LegacyChatInputState();
 }
 
-class _ChatInputState extends State<_ChatInput> {
+class _LegacyChatInputState extends State<_LegacyChatInput> {
   final TextEditingController _c = TextEditingController();
   final FocusNode _f = FocusNode();
   bool _sending = false;
@@ -1620,6 +1633,130 @@ class _ChatInputState extends State<_ChatInput> {
               },
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────────── Chat Input (drop-in) ─────────────────
+class _ChatInput extends StatefulWidget {
+  const _ChatInput({
+    required this.onSendText,
+    required this.onPickImage,
+    required this.onPickVideo,
+    required this.onStartVoice,
+    this.recording = false,
+  });
+
+  final void Function(String text) onSendText;
+  final Future<void> Function() onPickImage;
+  final Future<void> Function() onPickVideo;
+  final Future<void> Function() onStartVoice;
+  final bool recording;
+
+  @override
+  State<_ChatInput> createState() => _ChatInputState();
+}
+
+class _ChatInputState extends State<_ChatInput> {
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+  bool _canSend = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.removeListener(_onChanged);
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _onChanged() {
+    final enable = _ctrl.text.trim().isNotEmpty;
+    if (enable != _canSend) setState(() => _canSend = enable);
+  }
+
+  void _submit() {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty) return;
+    widget.onSendText(text);
+    _ctrl.clear();
+    _focus.requestFocus();
+  }
+
+  void _openPlusMenu() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Wrap(children: [
+          ListTile(
+            leading: const Icon(Icons.image_outlined),
+            title: const Text('صورة من المعرض'),
+            onTap: () async { Navigator.pop(ctx); await widget.onPickImage(); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.videocam_outlined),
+            title: const Text('فيديو'),
+            onTap: () async { Navigator.pop(ctx); await widget.onPickVideo(); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.mic_none_outlined),
+            title: const Text('تسجيل صوتي'),
+            onTap: () async { Navigator.pop(ctx); await widget.onStartVoice(); },
+          ),
+        ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+        child: Material(
+          elevation: 1,
+          color: theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(22),
+          child: Row(children: [
+            IconButton(icon: const Icon(Icons.add), onPressed: _openPlusMenu, tooltip: 'مرفقات'),
+            IconButton(icon: const Icon(Icons.image_outlined), onPressed: widget.onPickImage, tooltip: 'صورة'),
+            IconButton(icon: const Icon(Icons.videocam_outlined), onPressed: widget.onPickVideo, tooltip: 'فيديو'),
+            IconButton(icon: const Icon(Icons.mic_none_outlined), onPressed: widget.onStartVoice, tooltip: 'صوت'),
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                focusNode: _focus,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _submit(),
+                decoration: const InputDecoration(
+                  hintText: 'اكتب رسالة...',
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                ),
+                minLines: 1, maxLines: 5,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: IconButton.filled(
+                onPressed: _canSend ? _submit : null,
+                icon: const Icon(Icons.send),
+                tooltip: 'إرسال',
+              ),
+            ),
+          ]),
         ),
       ),
     );
