@@ -8,6 +8,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -15,8 +16,8 @@ import 'package:http/http.dart' as http;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as cf;
+import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
@@ -49,7 +50,7 @@ ThemeData buildDark(Color seed) => ThemeData(
 );
 
 // ---------- Utils ----------
-String shortTime(Timestamp? ts) {
+String shortTime(cf.Timestamp? ts) {
   if (ts == null) return '';
   final dt = ts.toDate();
   final now = DateTime.now();
@@ -131,7 +132,7 @@ class AppUser extends ChangeNotifier {
         firebaseUser = u;
         await _sub?.cancel();
         if (u != null) {
-          _sub = FirebaseFirestore.instance.collection('users').doc(u.uid)
+          _sub = cf.FirebaseFirestore.instance.collection('users').doc(u.uid)
               .snapshots().listen((doc) {
             profile = doc.data() ?? {};
             notifyListeners();
@@ -181,13 +182,13 @@ class AppUser extends ChangeNotifier {
 
   Future<void> _ensureDoc(String uid) async {
     try {
-      final ref = FirebaseFirestore.instance.collection('users').doc(uid);
+      final ref = cf.FirebaseFirestore.instance.collection('users').doc(uid);
       final snap = await ref.get();
       if (!snap.exists) {
         final locales = WidgetsBinding.instance.platformDispatcher.locales;
         final deviceLang = locales.isNotEmpty ? locales.first.languageCode : 'en';
         await ref.set({
-          'createdAt': FieldValue.serverTimestamp(),
+          'createdAt': cf.FieldValue.serverTimestamp(),
           'displayName': 'Guest',
           'bio': '',
           'link': '',
@@ -209,7 +210,7 @@ class AppUser extends ChangeNotifier {
             'storyVisibility': 'everyone', // everyone/contacts/custom
           },
           'notify': {'dnd': false, 'mentionsOnly': true},
-        }, SetOptions(merge: true));
+        }, cf.SetOptions(merge: true));
       }
     } catch (err, stack) {
       debugPrint('AppUser._ensureDoc error: $err');
@@ -224,7 +225,7 @@ class AppUser extends ChangeNotifier {
       throw StateError('Cannot update profile without authenticated user');
     }
     try {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set(patch, SetOptions(merge: true));
+      await cf.FirebaseFirestore.instance.collection('users').doc(user.uid).set(patch, cf.SetOptions(merge: true));
     } catch (err, stack) {
       debugPrint('AppUser.updateProfile error: $err');
       FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
@@ -242,18 +243,18 @@ class AppUser extends ChangeNotifier {
 
 // ---------- Presence ----------
 class PresenceService {
-  final _rtdb = FirebaseDatabase.instance.ref();
+  final _rtdb = rtdb.FirebaseDatabase.instance.ref();
   StreamSubscription? _lc;
   Future<void> start(String uid) async {
     try {
       final pres = _rtdb.child('presence/$uid');
       final now = DateTime.now().millisecondsSinceEpoch;
       await pres.update({'online': true, 'lastActive': now});
-      pres.onDisconnect().update({'online': false, 'lastActive': ServerValue.timestamp});
+      pres.onDisconnect().update({'online': false, 'lastActive': rtdb.ServerValue.timestamp});
       await _lc?.cancel();
       _lc = Stream.periodic(const Duration(minutes: 2)).listen((_) {
-        FirebaseFirestore.instance.collection('users').doc(uid)
-            .set({'lastSeen': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+        cf.FirebaseFirestore.instance.collection('users').doc(uid)
+            .set({'lastSeen': cf.FieldValue.serverTimestamp()}, cf.SetOptions(merge: true));
       });
     } catch (err, stack) {
       debugPrint('PresenceService.start error: $err');
@@ -262,9 +263,9 @@ class PresenceService {
   }
   Future<void> stop(String uid) async {
     try {
-      await _rtdb.child('presence/$uid').update({'online': false, 'lastActive': ServerValue.timestamp});
-      await FirebaseFirestore.instance.collection('users').doc(uid)
-          .set({'lastSeen': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      await _rtdb.child('presence/$uid').update({'online': false, 'lastActive': rtdb.ServerValue.timestamp});
+      await cf.FirebaseFirestore.instance.collection('users').doc(uid)
+          .set({'lastSeen': cf.FieldValue.serverTimestamp()}, cf.SetOptions(merge: true));
     } catch (err, stack) {
       debugPrint('PresenceService.stop error: $err');
       FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
@@ -286,15 +287,15 @@ class NotificationsService {
       }
       final token = await fm.getToken();
       if (token != null && token.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('users').doc(uid).set(
-          {'fcmToken': token, 'fcmUpdatedAt': FieldValue.serverTimestamp()},
-          SetOptions(merge: true),
+        await cf.FirebaseFirestore.instance.collection('users').doc(uid).set(
+          {'fcmToken': token, 'fcmUpdatedAt': cf.FieldValue.serverTimestamp()},
+          cf.SetOptions(merge: true),
         );
       }
       fm.onTokenRefresh.listen((t) {
-        FirebaseFirestore.instance.collection('users').doc(uid).set(
-          {'fcmToken': t, 'fcmUpdatedAt': FieldValue.serverTimestamp()},
-          SetOptions(merge: true),
+        cf.FirebaseFirestore.instance.collection('users').doc(uid).set(
+          {'fcmToken': t, 'fcmUpdatedAt': cf.FieldValue.serverTimestamp()},
+          cf.SetOptions(merge: true),
         );
       }, onError: (Object err, StackTrace stack) {
         debugPrint('NotificationsService.onTokenRefresh error: $err');
@@ -415,7 +416,7 @@ Future<void> main() async {
   await runZonedGuarded(() async {
     await Firebase.initializeApp();
     // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
-    FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: true);
+    cf.FirebaseFirestore.instance.settings = const cf.Settings(persistenceEnabled: true);
     runApp(const ChatUltraApp());
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error');
@@ -480,7 +481,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                       await fcm.init(user.uid);
                       // تطبيق إعدادات الترجمة من الوثيقة
                       final tr = _.read<TranslatorService>();
-                      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+                      final doc = await cf.FirebaseFirestore.instance.collection('users').doc(user.uid).get();
                       final i18n = (doc.data() ?? {})['i18n'] as Map<String, dynamic>?;
                       if (i18n != null) {
                         await tr.setLang((i18n['target'] as String?) ?? tr.targetLang);
@@ -688,55 +689,10 @@ class _LangChip extends StatelessWidget {
   }
 }
 
-// بروفايل مبسط (سنفصّله لاحقًا)
-class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    final user = context.watch<AppUser>();
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        ListTile(
-          leading: const CircleAvatar(radius: 26, child: Icon(Icons.person)),
-          title: Text(user.profile['displayName'] ?? 'Guest'),
-          subtitle: Text('VIP: ${user.profile['vipLevel'] ?? 'Bronze'} • Coins: ${user.profile['coins'] ?? 0}'),
-          trailing: const Icon(Icons.workspace_premium_rounded, color: kGold),
-        ),
-        const SizedBox(height: 8),
-        ListTile(leading: const Icon(Icons.edit), title: const Text('Edit Profile'), onTap: ()=> navigatorKey.currentState?.pushNamed('/profile_edit')),
-        ListTile(leading: const Icon(Icons.wallet_rounded), title: const Text('Wallet'), onTap: ()=> navigatorKey.currentState?.pushNamed('/wallet')),
-        ListTile(leading: const Icon(Icons.workspace_premium_rounded), title: const Text('VIP Hub'), onTap: ()=> navigatorKey.currentState?.pushNamed('/vip')),
-        ListTile(leading: const Icon(Icons.search_rounded), title: const Text('Discover People'), onTap: ()=> navigatorKey.currentState?.pushNamed('/people')),
-        const Divider(),
-        ListTile(leading: const Icon(Icons.privacy_tip_rounded), title: const Text('Privacy & Safety'), onTap: ()=> navigatorKey.currentState?.pushNamed('/privacy')),
-        ListTile(leading: const Icon(Icons.settings_rounded), title: const Text('Settings'), onTap: ()=> navigatorKey.currentState?.pushNamed('/settings')),
-        const Divider(),
-        ListTile(leading: const Icon(Icons.logout_rounded), title: const Text('Sign out'), onTap: ()=> context.read<AppUser>().signOut()),
-      ],
-    );
-  }
-}
-
-// Placeholder للتاب Rooms — سنضيفه بتفصيل لاحقًا (جزء 2)
-class RoomsTab extends StatelessWidget {
-  const RoomsTab({super.key});
-  @override
-  Widget build(BuildContext context) => const Center(child: Text('Rooms — سيتم استبدالها في الجزء 2/12'));
-}
-
-// Placeholders لصفحات سنملؤها في الأجزاء القادمة
-class RoomPage extends StatelessWidget { const RoomPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Room (part 3..4)'))); }
-class DMPage extends StatelessWidget { const DMPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Direct Message (part 6)'))); }
-class InboxPage extends StatelessWidget { const InboxPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Inbox (part 6)'))); }
-class StoriesHubPage extends StatelessWidget { const StoriesHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Stories Hub (part 5)'))); }
-class StoryCreatePage extends StatelessWidget { const StoryCreatePage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Create Story (part 5)'))); }
 class StorePage extends StatelessWidget { const StorePage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Store (part 8)'))); }
 class WalletPage extends StatelessWidget { const WalletPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Wallet (part 8)'))); }
 class VIPHubPage extends StatelessWidget { const VIPHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('VIP Hub (part 8)'))); }
 class ProfileEditPage extends StatelessWidget { const ProfileEditPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Profile Edit (part 7)'))); }
-class PeopleDiscoverPage extends StatelessWidget { const PeopleDiscoverPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Discover People (part 6)'))); }
-class GlobalSearchPage extends StatelessWidget { const GlobalSearchPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Global Search (part 6)'))); }
 class PrivacySettingsPage extends StatelessWidget { const PrivacySettingsPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Privacy (part 9)'))); }
 class SettingsHubPage extends StatelessWidget { const SettingsHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Settings (part 9)'))); }
 class AdminPanelPage extends StatelessWidget { const AdminPanelPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Admin (part 9)'))); }
@@ -751,7 +707,7 @@ class Room {
   final List<String> members;
   final int membersCount;
   final int messagesCount;
-  final Timestamp? lastMsgAt;
+  final cf.Timestamp? lastMsgAt;
   final String? photo;
 
   Room({
@@ -766,7 +722,7 @@ class Room {
     required this.photo,
   });
 
-  factory Room.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+  factory Room.fromDoc(cf.DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
     final members = List<String>.from((d['members'] ?? []).cast<String>());
     final meta = (d['meta'] as Map?) ?? {};
@@ -816,7 +772,7 @@ class RoomsTab extends StatelessWidget {
             FilledButton(
               onPressed: () async {
                 final uid = FirebaseAuth.instance.currentUser!.uid;
-                final r = FirebaseFirestore.instance.collection('rooms').doc();
+                final r = cf.FirebaseFirestore.instance.collection('rooms').doc();
                 await r.set({
                   'name': name.text.trim().isEmpty ? 'Untitled Room' : name.text.trim(),
                   'about': about.text.trim(),
@@ -824,10 +780,10 @@ class RoomsTab extends StatelessWidget {
                   'photo': null,
                   'members': [uid],
                   'createdBy': uid,
-                  'createdAt': FieldValue.serverTimestamp(),
-                  'meta': {'members': 1, 'messages': 0, 'lastMsgAt': FieldValue.serverTimestamp()},
+                  'createdAt': cf.FieldValue.serverTimestamp(),
+                  'meta': {'members': 1, 'messages': 0, 'lastMsgAt': cf.FieldValue.serverTimestamp()},
                   'moderation': {'announcements': []},
-                }, SetOptions(merge: true));
+                }, cf.SetOptions(merge: true));
                 if (context.mounted) Navigator.pop(ctx);
               },
               child: const Text('إنشاء'),
@@ -840,8 +796,8 @@ class RoomsTab extends StatelessWidget {
 
   Future<void> _toggleMembership(String roomId, bool joined) async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final ref = FirebaseFirestore.instance.collection('rooms').doc(roomId);
-    await FirebaseFirestore.instance.runTransaction((tx) async {
+    final ref = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId);
+    await cf.FirebaseFirestore.instance.runTransaction((tx) async {
       final snap = await tx.get(ref);
       final data = (snap.data() ?? {});
       final members = List<String>.from((data['members'] ?? []).cast<String>());
@@ -857,7 +813,7 @@ class RoomsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    final q = FirebaseFirestore.instance
+    final q = cf.FirebaseFirestore.instance
         .collection('rooms')
         .orderBy('meta.lastMsgAt', descending: true)
         .limit(100)
@@ -869,7 +825,7 @@ class RoomsTab extends StatelessWidget {
         icon: const Icon(Icons.add_circle_rounded),
         label: const Text('غرفة جديدة'),
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
         stream: q,
         builder: (context, snap) {
           if (!snap.hasData) {
@@ -964,7 +920,7 @@ class ChatMessage {
   final String? replyTo;
   final Map<String, dynamic>? translated;
   final bool autoTranslated;
-  final Timestamp createdAt;
+  final cf.Timestamp createdAt;
   final Map<String, int>? reactions;
   final bool pinned;
 
@@ -984,7 +940,7 @@ class ChatMessage {
     this.pinned = false,
   });
 
-  factory ChatMessage.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+  factory ChatMessage.fromDoc(cf.DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
     return ChatMessage(
       id: doc.id,
@@ -997,7 +953,7 @@ class ChatMessage {
       replyTo: d['replyTo'],
       translated: (d['translated'] as Map?)?.cast<String, dynamic>(),
       autoTranslated: d['autoTranslated'] == true,
-      createdAt: d['createdAt'] ?? Timestamp.now(),
+      createdAt: d['createdAt'] ?? cf.Timestamp.now(),
       reactions: (d['reactions'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v ?? 0) as int)),
       pinned: d['pinned'] == true,
     );
@@ -1059,16 +1015,16 @@ class _RoomPageState extends State<RoomPage> {
   String? _replyToId;
 
   // pagination
-  DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  cf.DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
   final List<ChatMessage> _buffer = [];
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _liveSub;
+  StreamSubscription<cf.QuerySnapshot<Map<String, dynamic>>>? _liveSub;
 
   // typing
   Timer? _typingTimer;
   void _setTyping(bool typing) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-    final ref = FirebaseDatabase.instance.ref('typing/$roomId/$uid');
+    final ref = rtdb.FirebaseDatabase.instance.ref('typing/$roomId/$uid');
     if (typing) {
       ref.set(true);
       _typingTimer?.cancel();
@@ -1088,7 +1044,7 @@ class _RoomPageState extends State<RoomPage> {
 
   void _subscribeLive() {
     _liveSub?.cancel();
-    final q = FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('messages').orderBy('createdAt', descending: true).limit(30);
     _liveSub = q.snapshots().listen((snap) {
       final docs = snap.docs.map(ChatMessage.fromDoc).toList();
@@ -1108,7 +1064,7 @@ class _RoomPageState extends State<RoomPage> {
 
   Future<void> _loadMore() async {
     if (_lastDoc == null) return;
-    final q = await FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    final q = await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('messages').orderBy('createdAt', descending: true).startAfterDocument(_lastDoc!).limit(30).get();
     if (q.docs.isEmpty) return;
     final more = q.docs.map(ChatMessage.fromDoc).toList();
@@ -1130,7 +1086,7 @@ class _RoomPageState extends State<RoomPage> {
   Future<void> _sendText(String text) async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
     final tr = context.read<TranslatorService>();
-    final ref = FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('messages');
+    final ref = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('messages');
 
     Map<String, dynamic>? translated;
     if (tr.autoTranslateEnabled) {
@@ -1145,20 +1101,20 @@ class _RoomPageState extends State<RoomPage> {
       'replyTo': _replyToId,
       'translated': translated,
       'autoTranslated': translated != null,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
       'reactions': {},
       'pinned': false,
     });
 
-    await FirebaseFirestore.instance.collection('rooms').doc(roomId)
-      .set({'meta': {'lastMsgAt': FieldValue.serverTimestamp(), 'messages': FieldValue.increment(1)}}, SetOptions(merge: true));
+    await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
+      .set({'meta': {'lastMsgAt': cf.FieldValue.serverTimestamp(), 'messages': cf.FieldValue.increment(1)}}, cf.SetOptions(merge: true));
 
     setState(()=> _replyToId = null);
   }
 
   Future<void> _sendMedia(MsgType type, {String? url, String? thumb, int? duration}) async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final ref = FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('messages');
+    final ref = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('messages');
     await ref.add({
       'type': switch (type) { MsgType.image=>'image', MsgType.video=>'video', MsgType.audio=>'audio', _=>'file' },
       'from': uid,
@@ -1166,19 +1122,19 @@ class _RoomPageState extends State<RoomPage> {
       'thumbUrl': thumb,
       'durationMs': duration,
       'replyTo': _replyToId,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
       'reactions': {},
       'pinned': false,
     });
-    await FirebaseFirestore.instance.collection('rooms').doc(roomId)
-      .set({'meta': {'lastMsgAt': FieldValue.serverTimestamp(), 'messages': FieldValue.increment(1)}}, SetOptions(merge: true));
+    await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
+      .set({'meta': {'lastMsgAt': cf.FieldValue.serverTimestamp(), 'messages': cf.FieldValue.increment(1)}}, cf.SetOptions(merge: true));
     setState(()=> _replyToId = null);
   }
 
   Future<void> _toggleReaction(String msgId, String emoji) async {
-    final msgRef = FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    final msgRef = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
         .collection('messages').doc(msgId);
-    await FirebaseFirestore.instance.runTransaction((tx) async {
+    await cf.FirebaseFirestore.instance.runTransaction((tx) async {
       final snap = await tx.get(msgRef);
       final data = snap.data() as Map<String, dynamic>? ?? {};
       final reactions = Map<String, dynamic>.from(data['reactions'] ?? {});
@@ -1188,12 +1144,12 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   Future<void> _pin(String msgId, bool pinned) async {
-    await FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('messages').doc(msgId).update({'pinned': pinned});
   }
 
   Future<void> _delete(String msgId) async {
-    await FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('messages').doc(msgId).delete();
   }
 
@@ -1249,7 +1205,7 @@ class _RoomPageState extends State<RoomPage> {
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    final typingRef = FirebaseDatabase.instance.ref('typing/$roomId');
+    final typingRef = rtdb.FirebaseDatabase.instance.ref('typing/$roomId');
     return Scaffold(
       appBar: AppBar(
         title: Text('Room: $roomId'),
@@ -1257,7 +1213,7 @@ class _RoomPageState extends State<RoomPage> {
           IconButton(
             tooltip: 'تثبيت/إلغاء تثبيت آخر رسالة',
             onPressed: () async {
-              final last = await FirebaseFirestore.instance.collection('rooms').doc(roomId)
+              final last = await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
                   .collection('messages').orderBy('createdAt', descending: true).limit(1).get();
               if (last.docs.isNotEmpty) {
                 final cur = last.docs.first.data()['pinned'] == true;
@@ -1266,12 +1222,28 @@ class _RoomPageState extends State<RoomPage> {
             },
             icon: const Icon(Icons.push_pin_outlined),
           ),
+          IconButton(
+            onPressed: () => navigatorKey.currentState?.pushNamed(
+              '/room/settings',
+              arguments: roomId,
+            ),
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'إعدادات الغرفة',
+          ),
+          IconButton(
+            onPressed: () => navigatorKey.currentState?.pushNamed(
+              '/room/board',
+              arguments: roomId,
+            ),
+            icon: const Icon(Icons.dashboard_rounded),
+            tooltip: 'لوحة المنشورات',
+          ),
         ],
       ),
       body: Column(
         children: [
           // typing indicator
-          StreamBuilder<DatabaseEvent>(
+          StreamBuilder<rtdb.DatabaseEvent>(
             stream: typingRef.onValue,
             builder: (context, snap) {
               if (snap.data?.snapshot.value is Map) {
@@ -1327,569 +1299,9 @@ class _RoomPageState extends State<RoomPage> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ---------------------- Message Bubble ----------------------
-class _MessageBubble extends StatelessWidget {
-  final ChatMessage message;
-  final bool mine;
-  final void Function(String emoji) onReact;
-  final VoidCallback onReply;
-  final VoidCallback onPin;
-  final VoidCallback onDelete;
-  const _MessageBubble({
-    required this.message, required this.mine,
-    required this.onReact, required this.onReply, required this.onPin, required this.onDelete, super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final bg = mine ? cs.primaryContainer : cs.surfaceVariant;
-    final border = mine ? Border.all(color: kTeal.withOpacity(0.35)) : BorderSide.none;
-    final translated = message.translated?[(context.read<TranslatorService>().targetLang)]?.toString();
-
-    Widget content;
-    switch (message.type) {
-      case MsgType.image:
-        content = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (message.mediaUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(message.mediaUrl!, fit: BoxFit.cover),
-              ),
-            if (message.text?.isNotEmpty == true) ...[
-              const SizedBox(height: 6),
-              Text(message.text!),
-            ]
-          ],
-        );
-        break;
-      case MsgType.video:
-        content = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (message.mediaUrl != null)
-              _VideoThumb(url: message.mediaUrl!),
-            if (message.text?.isNotEmpty == true) ...[
-              const SizedBox(height: 6),
-              Text(message.text!),
-            ]
-          ],
-        );
-        break;
-      case MsgType.audio:
-        content = _AudioTile(url: message.mediaUrl ?? '', durMs: message.durationMs);
-        break;
-      case MsgType.file:
-        content = Row(children: [
-          const Icon(Icons.insert_drive_file_rounded),
-          const SizedBox(width: 8),
-          Expanded(child: Text(message.text ?? 'File')),
-        ]);
-        break;
-      default:
-        content = (translated != null)
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(translated, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 2),
-                  Text(message.text ?? '', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                ],
-              )
-            : Text(message.text ?? '');
-    }
-
-    return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onLongPress: (){
-          showModalBottomSheet(context: context, builder: (_) => _MessageActions(
-            onReact: onReact, onReply: onReply, onPin: onPin, onDelete: onDelete, pinned: message.pinned));
-        },
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14), border: border),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (message.replyTo != null)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 4),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(10)),
-                  child: Text('↩️ رد على رسالة', style: TextStyle(color: Colors.grey[800], fontSize: 12)),
-                ),
-              content,
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(shortTime(message.createdAt), style: TextStyle(color: Colors.grey[600], fontSize: 10)),
-                  if (message.pinned) ...[
-                    const SizedBox(width: 6),
-                    const Icon(Icons.push_pin, size: 12, color: kGold),
-                  ],
-                ],
-              ),
-              if ((message.reactions ?? {}).isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Wrap(spacing: 6, children: [
-                    for (final e in message.reactions!.entries)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.black12, borderRadius: BorderRadius.circular(999)),
-                        child: Text('${e.key} ${e.value}'),
-                      )
-                  ]),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MessageActions extends StatelessWidget {
-  final void Function(String) onReact;
-  final VoidCallback onReply;
-  final VoidCallback onPin;
-  final VoidCallback onDelete;
-  final bool pinned;
-  const _MessageActions({super.key, required this.onReact, required this.onReply, required this.onPin, required this.onDelete, required this.pinned});
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Wrap(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: ['👍','❤️','😂','🔥','👏'].map((e) =>
-              IconButton(onPressed: () { Navigator.pop(context); onReact(e); }, icon: Text(e, style: const TextStyle(fontSize: 22)))).toList(),
-          ),
-          ListTile(leading: const Icon(Icons.reply_rounded), title: const Text('رد'), onTap: (){ Navigator.pop(context); onReply(); }),
-          ListTile(leading: Icon(pinned ? Icons.push_pin_outlined : Icons.push_pin),
-              title: Text(pinned ? 'إلغاء التثبيت' : 'تثبيت'), onTap: (){ Navigator.pop(context); onPin(); }),
-          ListTile(leading: const Icon(Icons.delete_outline), title: const Text('حذف'), onTap: (){ Navigator.pop(context); onDelete(); }),
-          const SizedBox(height: 6),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------- Reply Preview + Input ----------------------
-class _ReplyPreview extends StatelessWidget {
-  final VoidCallback onCancel;
-  const _ReplyPreview({super.key, required this.onCancel});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          const Icon(Icons.reply_rounded, size: 18),
-          const SizedBox(width: 8),
-          const Expanded(child: Text('الرد على رسالة…', maxLines: 1, overflow: TextOverflow.ellipsis)),
-          IconButton(onPressed: onCancel, icon: const Icon(Icons.close)),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChatInput extends StatefulWidget {
-  final bool recording;
-  final void Function(bool typing) onTyping;
-  final Future<void> Function(String text) onSendText;
-  final Future<void> Function() onPickImage;
-  final Future<void> Function() onPickVideo;
-  final Future<void> Function() onToggleRecord;
-  const _ChatInput({
-    super.key,
-    required this.recording,
-    required this.onTyping,
-    required this.onSendText,
-    required this.onPickImage,
-    required this.onPickVideo,
-    required this.onToggleRecord,
-  });
-  @override
-  State<_ChatInput> createState() => _ChatInputState();
-}
-
-class _ChatInputState extends State<_ChatInput> {
-  final c = TextEditingController();
-  bool _typing = false;
-
-  void _typingChanged(String v) {
-    final nowTyping = v.trim().isNotEmpty;
-    if (nowTyping != _typing) {
-      _typing = nowTyping;
-      widget.onTyping(_typing);
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.onTyping(false);
-    c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        child: Row(
-          children: [
-            IconButton(onPressed: widget.onPickImage, icon: const Icon(Icons.image_rounded)),
-            IconButton(onPressed: widget.onPickVideo, icon: const Icon(Icons.videocam_rounded)),
-            IconButton(
-              onPressed: widget.onToggleRecord,
-              icon: Icon(widget.recording ? Icons.stop_circle_rounded : Icons.mic_rounded,
-                color: widget.recording ? Colors.red : cs.primary),
-            ),
-            Expanded(
-              child: TextField(
-                controller: c,
-                onChanged: _typingChanged,
-                minLines: 1, maxLines: 4,
-                decoration: InputDecoration(
-                  hintText: 'اكتب رسالة…',
-                  filled: true,
-                  fillColor: Theme.of(context).colorScheme.surfaceVariant,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            FloatingActionButton.small(
-              heroTag: 'send',
-              onPressed: () async {
-                final text = c.text.trim();
-                if (text.isEmpty) return;
-                await widget.onSendText(text);
-                c.clear();
-                widget.onTyping(false);
-              },
-              child: const Icon(Icons.send_rounded),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------- Media Widgets ----------------------
-class _VideoThumb extends StatefulWidget {
-  final String url;
-  const _VideoThumb({required this.url});
-  @override
-  State<_VideoThumb> createState() => _VideoThumbState();
-}
-class _VideoThumbState extends State<_VideoThumb> {
-  VideoPlayerController? _vc;
-  @override
-  void initState() {
-    super.initState();
-    _vc = VideoPlayerController.networkUrl(Uri.parse(widget.url))..initialize().then((_) {
-      if (mounted) setState((){});
-    });
-  }
-  @override
-  void dispose() { _vc?.dispose(); super.dispose(); }
-  @override
-  Widget build(BuildContext context) {
-    if (_vc?.value.isInitialized != true) {
-      return AspectRatio(aspectRatio: 16/9, child: Container(color: Colors.black12, child: const Center(child: CircularProgressIndicator())));
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        AspectRatio(
-          aspectRatio: _vc!.value.aspectRatio,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              VideoPlayer(_vc!),
-              IconButton(
-                onPressed: (){
-                  setState(() {
-                    _vc!.value.isPlaying ? _vc!.pause() : _vc!.play();
-                  });
-                },
-                icon: Icon(_vc!.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill, size: 48, color: Colors.white),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _AudioTile extends StatefulWidget {
-  final String url;
-  final int? durMs;
-  const _AudioTile({required this.url, this.durMs});
-  @override
-  State<_AudioTile> createState() => _AudioTileState();
-}
-class _AudioTileState extends State<_AudioTile> {
-  final _player = AudioPlayer();
-  bool _playing = false;
-  Duration _pos = Duration.zero;
-  Duration _dur = Duration.zero;
-
-  @override
-  void initState() {
-    super.initState();
-    _player.onDurationChanged.listen((d)=> setState(()=> _dur = d));
-    _player.onPositionChanged.listen((p)=> setState(()=> _pos = p));
-    _player.onPlayerComplete.listen((_)=> setState(()=> _playing = false));
-  }
-
-  @override
-  void dispose() {
-    _player.dispose();
-    super.dispose();
-  }
-
-  String _fmt(Duration d) {
-    final m = d.inMinutes.remainder(60).toString().padLeft(2,'0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2,'0');
-    return '$m:$s';
-    }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: () async {
-            if (!_playing) {
-              await _player.setSourceUrl(widget.url);
-              await _player.resume();
-              setState(()=> _playing = true);
-            } else {
-              await _player.pause();
-              setState(()=> _playing = false);
-            }
-          },
-          icon: Icon(_playing ? Icons.pause_circle_rounded : Icons.play_circle_rounded, size: 32),
-        ),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Slider(
-                value: _pos.inMilliseconds.toDouble(),
-                max: (_dur.inMilliseconds == 0 ? (widget.durMs ?? 1).toDouble() : _dur.inMilliseconds.toDouble()),
-                onChanged: (v) async {
-                  final to = Duration(milliseconds: v.toInt());
-                  await _player.seek(to);
-                },
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(_fmt(_pos), style: const TextStyle(fontSize: 12, color: kGray)),
-                  Text(_fmt(_dur.inMilliseconds==0 ? Duration(milliseconds: widget.durMs ?? 0) : _dur), style: const TextStyle(fontSize: 12, color: kGray)),
-                ],
-              )
-            ],
-          ),
-        )
-      ],
-    );
-  }
-}
-// ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 4/12] =====================
-// Message editing (double-tap), Link Preview, True quoted message snippet
-
-// -------- Edit dialog ----------
-Future<void> showEditMessageDialog(BuildContext context, {
-  required String roomId,
-  required String msgId,
-  required String initialText,
-}) async {
-  final c = TextEditingController(text: initialText);
-  final formKey = GlobalKey<FormState>();
-  await showDialog(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('تعديل الرسالة'),
-      content: Form(
-        key: formKey,
-        child: TextFormField(
-          controller: c,
-          maxLines: 4,
-          validator: (v) => (v == null || v.trim().isEmpty) ? 'النص فارغ' : null,
-          decoration: const InputDecoration(hintText: 'اكتب النص الجديد...'),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: ()=> Navigator.pop(context), child: const Text('إلغاء')),
-        FilledButton(
-          onPressed: () async {
-            if (!formKey.currentState!.validate()) return;
-            await FirebaseFirestore.instance.collection('rooms').doc(roomId)
-              .collection('messages').doc(msgId).update({
-                'text': c.text.trim(),
-                'editedAt': FieldValue.serverTimestamp(),
-                'edited': true,
-              });
-            if (context.mounted) Navigator.pop(context);
-          },
-          child: const Text('حفظ'),
-        ),
-      ],
-    ),
-  );
-}
-
-// -------- Quoted message (rich) ----------
-class _QuotedMessageRich extends StatelessWidget {
-  final String roomId;
-  final String msgId;
-  const _QuotedMessageRich({super.key, required this.roomId, required this.msgId});
-  @override
-  Widget build(BuildContext context) {
-    final ref = FirebaseFirestore.instance.collection('rooms').doc(roomId)
-      .collection('messages').doc(msgId);
-    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future: ref.get(),
-      builder: (c, s) {
-        if (!s.hasData) {
-          return Container(
-            margin: const EdgeInsets.only(bottom: 4),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(10)),
-            child: Text('↩️ جاري التحميل...', style: TextStyle(color: Colors.grey[800], fontSize: 12)),
-          );
-        }
-        final d = s.data!.data();
-        final text = (d?['text'] as String?) ?? (d?['type'] ?? 'message');
-        return Container(
-          margin: const EdgeInsets.only(bottom: 4),
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(10)),
-          child: Text('↩️ $text', style: TextStyle(color: Colors.grey[800], fontSize: 12)),
-        );
-      },
-    );
-  }
-}
-
-// -------- Link preview ----------
-class _LinkPreview extends StatefulWidget {
-  final String text;
-  const _LinkPreview({super.key, required this.text});
-  @override
-  State<_LinkPreview> createState() => _LinkPreviewState();
-}
-
-class _LinkPreviewState extends State<_LinkPreview> {
-  Uri? _url;
-  String? _title, _desc, _image;
-  bool _loading = false;
-  static final _urlRegex = RegExp(r'(https?:\/\/[^\s]+)', caseSensitive: false);
-
-  @override
-  void initState() {
-    super.initState();
-    final m = _urlRegex.firstMatch(widget.text);
-    if (m != null) {
-      final u = m.group(0)!;
-      _url = Uri.tryParse(u);
-      if (_url != null) _fetch();
-    }
-  }
-
-  Future<void> _fetch() async {
-    setState(()=> _loading = true);
-    try {
-      final res = await http.get(_url!);
-      if (res.statusCode == 200) {
-        final html = res.body;
-        String? og(String p) {
-          final r = RegExp('<meta[^>]+property=["\']$p["\'][^>]+content=["\']([^"\']+)["\']', caseSensitive: false);
-          return r.firstMatch(html)?.group(1);
-        }
-        String? tg(String n) {
-          final r = RegExp('<meta[^>]+name=["\']$n["\'][^>]+content=["\']([^"\']+)["\']', caseSensitive: false);
-          return r.firstMatch(html)?.group(1);
-        }
-        String? title() {
-          final r = RegExp('<title[^>]*>([^<]+)</title>', caseSensitive: false);
-          return r.firstMatch(html)?.group(1);
-        }
-        _title = og('og:title') ?? tg('title') ?? title();
-        _desc  = og('og:description') ?? tg('description');
-        _image = og('og:image');
-      }
-    } catch (_) {}
-    if (mounted) setState(()=> _loading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_url == null) return const SizedBox.shrink();
-    return InkWell(
-      onTap: () => Clipboard.setData(ClipboardData(text: _url.toString()))
-          .then((_) => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم نسخ الرابط')))),
-      child: Container(
-        margin: const EdgeInsets.only(top: 6),
-        decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.black12),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: _loading
-          ? const SizedBox(height: 72, child: Center(child: LinearProgressIndicator(minHeight: 2)))
-          : Row(
-              children: [
-                if (_image != null) SizedBox(
-                  height: 72, width: 100,
-                  child: Image.network(_image!, fit: BoxFit.cover),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_title ?? _url!.host, maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700)),
-                        if (_desc != null) ...[
-                          const SizedBox(height: 2),
-                          Text(_desc!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kGray, fontSize: 12)),
-                        ],
-                        const SizedBox(height: 4),
-                        Text(_url!.host, style: const TextStyle(color: kGray, fontSize: 11)),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => navigatorKey.currentState?.pushNamed('/rooms/create'),
+        child: const Icon(Icons.add_rounded),
       ),
     );
   }
@@ -2068,7 +1480,7 @@ class StoryItem {
   final String? mediaUrl;
   final String? text;
   final int? bg; // Color value for text stories
-  final Timestamp createdAt;
+  final cf.Timestamp createdAt;
   final String visibility; // everyone | contacts | custom
   final int viewsCount;
 
@@ -2084,7 +1496,7 @@ class StoryItem {
     this.viewsCount = 0,
   });
 
-  factory StoryItem.fromDoc(String ownerUid, DocumentSnapshot<Map<String, dynamic>> doc) {
+  factory StoryItem.fromDoc(String ownerUid, cf.DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
     StoryType _t(String? s) {
       switch (s) { case 'video': return StoryType.video; case 'text': return StoryType.text; default: return StoryType.image; }
@@ -2096,7 +1508,7 @@ class StoryItem {
       mediaUrl: d['mediaUrl'] as String?,
       text: d['text'] as String?,
       bg: d['bg'] as int?,
-      createdAt: d['createdAt'] ?? Timestamp.now(),
+      createdAt: d['createdAt'] ?? cf.Timestamp.now(),
       visibility: (d['visibility'] as String?) ?? 'everyone',
       viewsCount: (d['viewsCount'] as num?)?.toInt() ?? 0,
     );
@@ -2114,7 +1526,7 @@ class StoriesHubPage extends StatelessWidget {
 
   Stream<List<(String owner, StoryItem item)>> _storiesStream() {
     // (MVP) نعرض كل الستوري العامة غير المنتهية. يمكن لاحقًا فلترتها بمن تتابعهم فقط.
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
     // نجلب آخر 20 مستخدم لديهم ستوري اليوم
     return fs.collection('users').limit(50).snapshots().asyncMap((usersSnap) async {
       final List<(String, StoryItem)> all = [];
@@ -2274,7 +1686,7 @@ class _StoriesViewerState extends State<_StoriesViewer> {
   }
 
   Future<void> _loadStories() async {
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
     final q = await fs.collection('stories').doc(widget.ownerUid)
       .collection('items')
       .orderBy('createdAt', descending: false).get();
@@ -2292,15 +1704,15 @@ class _StoriesViewerState extends State<_StoriesViewer> {
   Future<void> _markViewed(StoryItem s) async {
     final me = FirebaseAuth.instance.currentUser?.uid;
     if (me == null) return;
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
     final viewRef = fs.collection('stories').doc(s.ownerUid)
       .collection('items').doc(s.id).collection('views').doc(me);
     final exists = await viewRef.get();
     if (!exists.exists) {
-      await viewRef.set({'viewedAt': FieldValue.serverTimestamp()});
+      await viewRef.set({'viewedAt': cf.FieldValue.serverTimestamp()});
       await fs.collection('stories').doc(s.ownerUid)
         .collection('items').doc(s.id)
-        .update({'viewsCount': FieldValue.increment(1)});
+        .update({'viewsCount': cf.FieldValue.increment(1)});
     }
   }
 
@@ -2479,7 +1891,7 @@ class _StoryCreatePageState extends State<StoryCreatePage> {
   Future<void> _publish() async {
     final me = FirebaseAuth.instance.currentUser?.uid;
     if (me == null) return;
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
     final ref = fs.collection('stories').doc(me).collection('items').doc();
 
     String? mediaUrl;
@@ -2499,7 +1911,7 @@ class _StoryCreatePageState extends State<StoryCreatePage> {
       'text': _type == StoryType.text ? _text.text.trim() : null,
       'bg': _type == StoryType.text ? _bg.value : null,
       'visibility': _visibility,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
       'viewsCount': 0,
     });
 
@@ -2613,7 +2025,7 @@ class _StoryCreatePageState extends State<StoryCreatePage> {
 
 // ---------------------- Follow System ----------------------
 class FollowService {
-  final _fs = FirebaseFirestore.instance;
+  final _fs = cf.FirebaseFirestore.instance;
 
   Future<bool> isFollowing(String me, String other) async {
     final d = await _fs.collection('follows').doc(me).collection('following').doc(other).get();
@@ -2628,8 +2040,8 @@ class FollowService {
     final userHe = _fs.collection('users').doc(other);
 
     await _fs.runTransaction((tx) async {
-      tx.set(meRef, {'at': FieldValue.serverTimestamp()});
-      tx.set(heRef, {'at': FieldValue.serverTimestamp()});
+      tx.set(meRef, {'at': cf.FieldValue.serverTimestamp()});
+      tx.set(heRef, {'at': cf.FieldValue.serverTimestamp()});
       final meDoc = await tx.get(userMe);
       final heDoc = await tx.get(userHe);
       final meFollowing = (meDoc.data()?['following'] ?? 0) as int;
@@ -2666,13 +2078,13 @@ class PeopleDiscoverPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final me = FirebaseAuth.instance.currentUser!.uid;
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
     final q = fs.collection('users').orderBy('createdAt', descending: true).limit(50);
     final follow = FollowService();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Discover People')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
         stream: q.snapshots(),
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -2730,7 +2142,7 @@ class PeopleDiscoverPage extends StatelessWidget {
 
   Future<void> _openOrCreateDMWith(String otherUid) async {
     final me = FirebaseAuth.instance.currentUser!.uid;
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
 
     // حاول إيجاد ثريد موجود لنفس الثنائي
     final existing = await fs.collection('dmThreads')
@@ -2749,8 +2161,8 @@ class PeopleDiscoverPage extends StatelessWidget {
 
     threadId ??= (await fs.collection('dmThreads').add({
       'participants': [me, otherUid],
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastMsgAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
+      'lastMsgAt': cf.FieldValue.serverTimestamp(),
       'last': null,
       'unread': {otherUid: 0, me: 0},
     })).id;
@@ -2766,13 +2178,13 @@ class PublicProfilePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final doc = FirebaseFirestore.instance.collection('users').doc(userId).snapshots();
+    final doc = cf.FirebaseFirestore.instance.collection('users').doc(userId).snapshots();
     final me = FirebaseAuth.instance.currentUser!.uid;
     final follow = FollowService();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.DocumentSnapshot<Map<String, dynamic>>>(
         stream: doc,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -2830,7 +2242,7 @@ class PublicProfilePage extends StatelessWidget {
 
   Future<void> _openDM(String uid2) async {
     final me = FirebaseAuth.instance.currentUser!.uid;
-    final fs = FirebaseFirestore.instance;
+    final fs = cf.FirebaseFirestore.instance;
     final existing = await fs.collection('dmThreads')
       .where('participants', arrayContains: me)
       .limit(25).get();
@@ -2843,8 +2255,8 @@ class PublicProfilePage extends StatelessWidget {
     }
     threadId ??= (await fs.collection('dmThreads').add({
       'participants': [me, uid2],
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastMsgAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
+      'lastMsgAt': cf.FieldValue.serverTimestamp(),
       'last': null,
       'unread': {uid2: 0, me: 0},
     })).id;
@@ -2858,7 +2270,7 @@ class InboxPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final me = FirebaseAuth.instance.currentUser!.uid;
-    final q = FirebaseFirestore.instance.collection('dmThreads')
+    final q = cf.FirebaseFirestore.instance.collection('dmThreads')
       .where('participants', arrayContains: me)
       .orderBy('lastMsgAt', descending: true)
       .limit(50)
@@ -2866,7 +2278,7 @@ class InboxPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Inbox')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
         stream: q,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -2890,7 +2302,7 @@ class InboxPage extends StatelessWidget {
               final parts = List<String>.from((d['participants'] ?? []).cast<String>());
               final other = parts.firstWhere((x) => x != me, orElse: () => me);
               final last = (d['last'] ?? '') as String;
-              final lastAt = d['lastMsgAt'] as Timestamp?;
+              final lastAt = d['lastMsgAt'] as cf.Timestamp?;
               final unread = ((d['unread'] ?? {}) as Map)[me] ?? 0;
 
               return Card(
@@ -2945,13 +2357,13 @@ class _DMPageState extends State<DMPage> {
     threadId = (ModalRoute.of(context)!.settings.arguments ?? '') as String;
   }
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> _messages() {
-    return FirebaseFirestore.instance.collection('dmThreads').doc(threadId)
+  Stream<cf.QuerySnapshot<Map<String, dynamic>>> _messages() {
+    return cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId)
       .collection('messages').orderBy('createdAt', descending: true).limit(50).snapshots();
   }
 
   Future<void> _resolveOtherUid() async {
-    final th = await FirebaseFirestore.instance.collection('dmThreads').doc(threadId).get();
+    final th = await cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId).get();
     final parts = List<String>.from((th.data()?['participants'] ?? []).cast<String>());
     final me = FirebaseAuth.instance.currentUser!.uid;
     otherUid = parts.firstWhere((x) => x != me, orElse: ()=> me);
@@ -2962,17 +2374,17 @@ class _DMPageState extends State<DMPage> {
     final me = FirebaseAuth.instance.currentUser!.uid;
     final txt = c.text.trim();
     if (txt.isEmpty) return;
-    final ref = FirebaseFirestore.instance.collection('dmThreads').doc(threadId);
+    final ref = cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId);
     await ref.collection('messages').add({
       'from': me,
       'text': txt,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
     });
     await ref.set({
       'last': txt,
-      'lastMsgAt': FieldValue.serverTimestamp(),
-      'unread': { otherUid: FieldValue.increment(1), me: 0 },
-    }, SetOptions(merge: true));
+      'lastMsgAt': cf.FieldValue.serverTimestamp(),
+      'unread': { otherUid: cf.FieldValue.increment(1), me: 0 },
+    }, cf.SetOptions(merge: true));
     c.clear();
   }
 
@@ -2990,14 +2402,14 @@ class _DMPageState extends State<DMPage> {
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
               stream: _messages(),
               builder: (c, s) {
                 if (!s.hasData) return const Center(child: CircularProgressIndicator());
                 final docs = s.data!.docs;
                 // عند فتح الشاشة اعتبر الرسائل مقروءة
-                FirebaseFirestore.instance.collection('dmThreads').doc(threadId)
-                  .set({'unread': {me: 0}}, SetOptions(merge: true));
+                cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId)
+                  .set({'unread': {me: 0}}, cf.SetOptions(merge: true));
                 return ListView.builder(
                   reverse: true,
                   padding: const EdgeInsets.all(12),
@@ -3049,129 +2461,6 @@ class _DMPageState extends State<DMPage> {
   }
 }
 
-// ---------------------- Global Search ----------------------
-class GlobalSearchPage extends StatefulWidget {
-  const GlobalSearchPage({super.key});
-  @override
-  State<GlobalSearchPage> createState() => _GlobalSearchPageState();
-}
-class _GlobalSearchPageState extends State<GlobalSearchPage> {
-  final c = TextEditingController();
-  String q = '';
-  @override
-  Widget build(BuildContext context) {
-    final fs = FirebaseFirestore.instance;
-    final usersQ = (q.trim().isEmpty)
-        ? null
-        : fs.collection('users').where('displayName', isGreaterThanOrEqualTo: q).where('displayName', isLessThan: '${q}z').limit(10).snapshots();
-    final roomsQ = (q.trim().isEmpty)
-        ? null
-        : fs.collection('rooms').where('name', isGreaterThanOrEqualTo: q).where('name', isLessThan: '${q}z').limit(10).snapshots();
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Search')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              controller: c,
-              onChanged: (v)=> setState(()=> q=v),
-              decoration: const InputDecoration(
-                hintText: 'ابحث عن أشخاص أو غرف…',
-                prefixIcon: Icon(Icons.search),
-                filled: true, border: OutlineInputBorder(borderSide: BorderSide.none, borderRadius: BorderRadius.all(Radius.circular(14))),
-              ),
-            ),
-          ),
-          Expanded(
-            child: q.trim().isEmpty
-                ? const Center(child: Text('أدخل عبارة للبحث'))
-                : ListView(
-                    children: [
-                      if (usersQ != null) StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: usersQ,
-                        builder: (c, s) {
-                          if (!s.hasData) return const SizedBox.shrink();
-                          final docs = s.data!.docs;
-                          if (docs.isEmpty) return const SizedBox.shrink();
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                child: Text('أشخاص', style: TextStyle(fontWeight: FontWeight.w700)),
-                              ),
-                              ...docs.map((d) {
-                                final name = (d.data()['displayName'] ?? d.id) as String;
-                                return ListTile(
-                                  leading: const CircleAvatar(child: Icon(Icons.person)),
-                                  title: Text(name),
-                                  onTap: ()=> Navigator.push(context, MaterialPageRoute(builder: (_) => PublicProfilePage(userId: d.id))),
-                                  trailing: IconButton(
-                                    icon: const Icon(Icons.chat_bubble_outline_rounded),
-                                    onPressed: () async {
-                                      // افتح DM بسرعة
-                                      final me = FirebaseAuth.instance.currentUser!.uid;
-                                      final fs = FirebaseFirestore.instance;
-                                      final existing = await fs.collection('dmThreads')
-                                        .where('participants', arrayContains: me).limit(25).get();
-                                      String? threadId;
-                                      for (final t in existing.docs) {
-                                        final parts = List<String>.from((t.data()['participants'] ?? []).cast<String>());
-                                        if (parts.length == 2 && parts.contains(d.id)) { threadId = t.id; break; }
-                                      }
-                                      threadId ??= (await fs.collection('dmThreads').add({
-                                        'participants': [me, d.id],
-                                        'createdAt': FieldValue.serverTimestamp(),
-                                        'lastMsgAt': FieldValue.serverTimestamp(),
-                                        'last': null,
-                                        'unread': {d.id: 0, me: 0},
-                                      })).id;
-                                      navigatorKey.currentState?.pushNamed('/dm', arguments: threadId);
-                                    },
-                                  ),
-                                );
-                              }),
-                            ],
-                          );
-                        },
-                      ),
-                      if (roomsQ != null) StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: roomsQ,
-                        builder: (c, s) {
-                          if (!s.hasData) return const SizedBox.shrink();
-                          final docs = s.data!.docs;
-                          if (docs.isEmpty) return const SizedBox.shrink();
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                child: Text('غرف', style: TextStyle(fontWeight: FontWeight.w700)),
-                              ),
-                              ...docs.map((d) {
-                                final name = (d.data()['name'] ?? d.id) as String;
-                                final about = (d.data()['about'] ?? '') as String;
-                                return ListTile(
-                                  leading: const CircleAvatar(child: Icon(Icons.forum_rounded)),
-                                  title: Text(name),
-                                  subtitle: Text(about, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                  onTap: ()=> navigatorKey.currentState?.pushNamed('/room', arguments: d.id),
-                                );
-                              }),
-                            ],
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 7/12] =====================
 // Advanced Profile: view + edit + upload avatar/cover to Firebase Storage
 
@@ -3184,7 +2473,7 @@ class ProfilePage extends StatelessWidget {
     if (uid == null) {
       return const Scaffold(body: Center(child: Text('غير مسجّل')));
     }
-    final doc = FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
+    final doc = cf.FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
 
     return Scaffold(
       appBar: AppBar(
@@ -3202,7 +2491,7 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
       ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.DocumentSnapshot<Map<String, dynamic>>>(
         stream: doc,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -3366,7 +2655,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   Future<void> _load() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final d = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final d = await cf.FirebaseFirestore.instance.collection('users').doc(uid).get();
     final data = d.data() ?? {};
     _name.text = (data['displayName'] ?? '') as String;
     _bio.text  = (data['bio'] ?? '') as String;
@@ -3375,7 +2664,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _avatarUrl = (data['avatarUrl'] ?? '') as String;
     _coverUrl  = (data['coverUrl'] ?? '') as String;
     final ts = data['birthday'];
-    if (ts is Timestamp) _birthday = ts.toDate();
+    if (ts is cf.Timestamp) _birthday = ts.toDate();
     if (mounted) setState((){});
   }
 
@@ -3388,7 +2677,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       final ref = FirebaseStorage.instance.ref('users/$uid/avatar_${DateTime.now().millisecondsSinceEpoch}.jpg');
       await ref.putFile(File(x.path), SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({'avatarUrl': url}, SetOptions(merge: true));
+      await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({'avatarUrl': url}, cf.SetOptions(merge: true));
       _avatarUrl = url;
     } finally {
       if (mounted) setState(()=> _saving = false);
@@ -3404,7 +2693,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
       final ref = FirebaseStorage.instance.ref('users/$uid/cover_${DateTime.now().millisecondsSinceEpoch}.jpg');
       await ref.putFile(File(x.path), SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({'coverUrl': url}, SetOptions(merge: true));
+      await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({'coverUrl': url}, cf.SetOptions(merge: true));
       _coverUrl = url;
     } finally {
       if (mounted) setState(()=> _saving = false);
@@ -3415,14 +2704,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final uid = FirebaseAuth.instance.currentUser!.uid;
     setState(()=> _saving = true);
     try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+      await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({
         'displayName': _name.text.trim().isEmpty ? 'User' : _name.text.trim(),
         'bio'        : _bio.text.trim(),
         'link'       : _link.text.trim(),
         'location'   : _location.text.trim(),
-        if (_birthday != null) 'birthday': Timestamp.fromDate(_birthday!),
-        'updatedAt'  : FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+        if (_birthday != null) 'birthday': cf.Timestamp.fromDate(_birthday!),
+        'updatedAt'  : cf.FieldValue.serverTimestamp(),
+      }, cf.SetOptions(merge: true));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم حفظ التغييرات ✅')));
         Navigator.pop(context);
@@ -3565,12 +2854,12 @@ class AdminPortalPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rooms = FirebaseFirestore.instance.collection('rooms')
+    final rooms = cf.FirebaseFirestore.instance.collection('rooms')
       .orderBy('createdAt', descending: true).limit(100).snapshots();
 
     return Scaffold(
       appBar: AppBar(title: const Text('لوحة الإدارة')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
         stream: rooms,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -3678,9 +2967,9 @@ class _ReportsTabState extends State<_ReportsTab> {
   final _type   = ValueNotifier<String>('all');  // message | user | room | all
   final _search = TextEditingController();
 
-  Query<Map<String, dynamic>> _buildQuery() {
-    var q = FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
-      .collection('reports').orderBy('createdAt', descending: true) as Query<Map<String, dynamic>>;
+  cf.Query<Map<String, dynamic>> _buildQuery() {
+    var q = cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
+      .collection('reports').orderBy('createdAt', descending: true) as cf.Query<Map<String, dynamic>>;
     if (_status.value != 'all') q = q.where('status', isEqualTo: _status.value);
     if (_type.value != 'all')   q = q.where('targetType', isEqualTo: _type.value);
     return q.limit(100);
@@ -3724,7 +3013,7 @@ class _ReportsTabState extends State<_ReportsTab> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
             stream: _buildQuery().snapshots(),
             builder: (c, s) {
               if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -3749,7 +3038,7 @@ class _ReportsTabState extends State<_ReportsTab> {
                   final reason = d['reason'] ?? '';
                   final status = d['status'] ?? 'open';
                   final targetId = d['targetId'] ?? '';
-                  final createdAt = d['createdAt'] as Timestamp?;
+                  final createdAt = d['createdAt'] as cf.Timestamp?;
                   final createdBy = d['createdBy'] ?? '';
 
                   return Card(
@@ -3793,7 +3082,7 @@ class _MembersTabState extends State<_MembersTab> {
 
   @override
   Widget build(BuildContext context) {
-    final mref = FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
+    final mref = cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
       .collection('members').orderBy('joinedAt', descending: true).limit(200).snapshots();
 
     return Column(
@@ -3808,7 +3097,7 @@ class _MembersTabState extends State<_MembersTab> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
             stream: mref,
             builder: (c, s) {
               if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -3829,8 +3118,8 @@ class _MembersTabState extends State<_MembersTab> {
                   final uid = docs[i].id;
                   final m = docs[i].data();
                   final name = (m['displayName'] ?? uid) as String;
-                  final mutedUntil = m['mutedUntil'] as Timestamp?;
-                  final bannedUntil = m['bannedUntil'] as Timestamp?;
+                  final mutedUntil = m['mutedUntil'] as cf.Timestamp?;
+                  final bannedUntil = m['bannedUntil'] as cf.Timestamp?;
                   final role = (m['role'] ?? 'member') as String;
 
                   return Card(
@@ -3870,11 +3159,11 @@ class _ActionsLogTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('moderation').doc('actionsRoot')
       .collection('actions').orderBy('createdAt', descending: true).limit(200).snapshots();
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
       stream: q,
       builder: (c, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -3888,7 +3177,7 @@ class _ActionsLogTab extends StatelessWidget {
             final d = docs[i].data();
             final act = (d['action'] ?? 'action') as String;
             final by = (d['createdBy'] ?? '') as String;
-            final at = d['createdAt'] as Timestamp?;
+            final at = d['createdAt'] as cf.Timestamp?;
             final target = (d['targetUserId'] ?? d['targetId'] ?? '') as String;
             final reason = (d['reason'] ?? '') as String;
             final note = (d['note'] ?? '') as String;
@@ -4009,7 +3298,7 @@ class _ReportActionSheetState extends State<_ReportActionSheet> {
                 const Spacer(),
                 FilledButton(
                   onPressed: () async {
-                    await FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
+                    await cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
                       .collection('reports').doc(widget.reportId).update({'status': _status});
                     if (context.mounted) Navigator.pop(context);
                   },
@@ -4036,7 +3325,7 @@ class _ReportActionSheetState extends State<_ReportActionSheet> {
               onPressed: () async {
                 if (targetType == 'user' && (targetId as String).isNotEmpty) {
                   await _applyModerationAction(roomId: widget.roomId, targetUid: targetId, action: _quick, reason: reason, note: _note.text.trim());
-                  await FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
+                  await cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
                     .collection('reports').doc(widget.reportId).update({'status': 'actioned'});
                   if (context.mounted) Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم إجراء الإجراء وتحديث الحالة')));
@@ -4124,7 +3413,7 @@ Future<void> _applyModerationAction({
   String? reason,
   String? note,
 }) async {
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final me = FirebaseAuth.instance.currentUser?.uid ?? 'system';
   final now = DateTime.now();
 
@@ -4149,12 +3438,12 @@ Future<void> _applyModerationAction({
 
   await fs.runTransaction((tx) async {
     final updates = <String, dynamic>{};
-    if (muteDur != null) updates['mutedUntil'] = Timestamp.fromDate(now.add(muteDur));
-    if (banDur != null)  updates['bannedUntil'] = Timestamp.fromDate(now.add(banDur));
-    if (kick)            updates['kickedAt'] = Timestamp.fromDate(now);
+    if (muteDur != null) updates['mutedUntil'] = cf.Timestamp.fromDate(now.add(muteDur));
+    if (banDur != null)  updates['bannedUntil'] = cf.Timestamp.fromDate(now.add(banDur));
+    if (kick)            updates['kickedAt'] = cf.Timestamp.fromDate(now);
 
     if (updates.isNotEmpty) {
-      tx.set(mref, updates, SetOptions(merge: true));
+      tx.set(mref, updates, cf.SetOptions(merge: true));
     }
 
     tx.set(logRef, {
@@ -4163,7 +3452,7 @@ Future<void> _applyModerationAction({
       'reason': reason,
       'note': note,
       'createdBy': me,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
     });
   });
 
@@ -4214,14 +3503,14 @@ Future<String> createRoom({
   bool isPublic = true,
 }) async {
   final uid = FirebaseAuth.instance.currentUser!.uid;
-  final ref = FirebaseFirestore.instance.collection('rooms').doc();
+  final ref = cf.FirebaseFirestore.instance.collection('rooms').doc();
   await ref.set({
     'name': name.trim(),
     'about': (about ?? '').trim(),
     'public': isPublic,
     'ownerId': uid,
-    'createdAt': FieldValue.serverTimestamp(),
-    'meta': {'members': 1, 'messages': 0, 'lastMsgAt': FieldValue.serverTimestamp()},
+    'createdAt': cf.FieldValue.serverTimestamp(),
+    'meta': {'members': 1, 'messages': 0, 'lastMsgAt': cf.FieldValue.serverTimestamp()},
     'rules': [
       'احترام الجميع، لا سباب ولا تحرّش.',
       'ممنوع السبام والإعلانات غير المرخصة.',
@@ -4236,7 +3525,7 @@ Future<String> createRoom({
   // ضمّ المالك كعضو owner
   await ref.collection('members').doc(uid).set({
     'role': 'owner',
-    'joinedAt': FieldValue.serverTimestamp(),
+    'joinedAt': cf.FieldValue.serverTimestamp(),
     'displayName': FirebaseAuth.instance.currentUser?.displayName ?? 'Owner',
   });
   // رسالة ترحيب مبدئية
@@ -4245,24 +3534,24 @@ Future<String> createRoom({
 }
 
 Future<void> postSystemMessage({required String roomId, required String text}) async {
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final mref = fs.collection('rooms').doc(roomId).collection('messages').doc();
   await mref.set({
     'type': 'system',
     'text': text,
-    'createdAt': FieldValue.serverTimestamp(),
+    'createdAt': cf.FieldValue.serverTimestamp(),
   });
   await fs.collection('rooms').doc(roomId)
-    .set({'meta': {'lastMsgAt': FieldValue.serverTimestamp()}}, SetOptions(merge: true));
+    .set({'meta': {'lastMsgAt': cf.FieldValue.serverTimestamp()}}, cf.SetOptions(merge: true));
 }
 
-Future<String> generateInviteCode(String roomId, {int? maxUses, Timestamp? expiresAt}) async {
-  final fs = FirebaseFirestore.instance;
+Future<String> generateInviteCode(String roomId, {int? maxUses, cf.Timestamp? expiresAt}) async {
+  final fs = cf.FirebaseFirestore.instance;
   final code = _randomCode(7);
   await fs.collection('rooms').doc(roomId).collection('invites').doc(code).set({
     'code': code,
     'createdBy': FirebaseAuth.instance.currentUser!.uid,
-    'createdAt': FieldValue.serverTimestamp(),
+    'createdAt': cf.FieldValue.serverTimestamp(),
     'uses': 0,
     'maxUses': maxUses,
     'expiresAt': expiresAt,
@@ -4272,12 +3561,12 @@ Future<String> generateInviteCode(String roomId, {int? maxUses, Timestamp? expir
 
 String _randomCode(int len) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  final rnd = Random.secure();
+  final rnd = math.Random.secure();
   return List.generate(len, (_) => chars[rnd.nextInt(chars.length)]).join();
 }
 
 Future<bool> joinRoomWithCode(String code) async {
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final snap = await fs.collectionGroup('invites').where('code', isEqualTo: code).limit(1).get();
   if (snap.docs.isEmpty) return false;
   final invite = snap.docs.first;
@@ -4287,30 +3576,30 @@ Future<bool> joinRoomWithCode(String code) async {
   final uses = (d['uses'] ?? 0) as int;
   final exp = d['expiresAt'];
 
-  if (exp is Timestamp && DateTime.now().isAfter(exp.toDate())) return false;
+  if (exp is cf.Timestamp && DateTime.now().isAfter(exp.toDate())) return false;
   if (maxUses != null && uses >= maxUses) return false;
 
   final ok = await joinRoom(roomId);
   if (ok) {
-    await invite.reference.update({'uses': FieldValue.increment(1)});
+    await invite.reference.update({'uses': cf.FieldValue.increment(1)});
   }
   return ok;
 }
 
 Future<bool> joinRoom(String roomId) async {
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final uid = FirebaseAuth.instance.currentUser!.uid;
   final memRef = fs.collection('rooms').doc(roomId).collection('members').doc(uid);
   final exist = await memRef.get();
   if (!exist.exists) {
     await memRef.set({
       'role': 'member',
-      'joinedAt': FieldValue.serverTimestamp(),
+      'joinedAt': cf.FieldValue.serverTimestamp(),
       'displayName': FirebaseAuth.instance.currentUser?.displayName ?? 'Member',
     });
     await fs.collection('rooms').doc(roomId).set({
-      'meta': {'members': FieldValue.increment(1), 'lastMsgAt': FieldValue.serverTimestamp()}
-    }, SetOptions(merge: true));
+      'meta': {'members': cf.FieldValue.increment(1), 'lastMsgAt': cf.FieldValue.serverTimestamp()}
+    }, cf.SetOptions(merge: true));
     // رسالة ترحيب
     final doc = await fs.collection('rooms').doc(roomId).get();
     final welcome = ((doc.data()?['config'] ?? {}) as Map)['welcomeText'] ?? '👋 أهلاً بك!';
@@ -4395,7 +3684,7 @@ class _RoomSettingsPageState extends State<RoomSettingsPage> with SingleTickerPr
 
   @override
   Widget build(BuildContext context) {
-    final roomDoc = FirebaseFirestore.instance.collection('rooms').doc(roomId).snapshots();
+    final roomDoc = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).snapshots();
     return Scaffold(
       appBar: AppBar(
         title: Text('إعدادات الغرفة — $roomId'),
@@ -4409,7 +3698,7 @@ class _RoomSettingsPageState extends State<RoomSettingsPage> with SingleTickerPr
           ],
         ),
       ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.DocumentSnapshot<Map<String, dynamic>>>(
         stream: roomDoc,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -4459,12 +3748,12 @@ class _RoomBasicsTabState extends State<_RoomBasicsTab> {
         const SizedBox(height: 12),
         FilledButton(
           onPressed: () async {
-            await FirebaseFirestore.instance.collection('rooms').doc(widget.roomId).set({
+            await cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId).set({
               'name': nameC.text.trim(),
               'about': aboutC.text.trim(),
               'public': public,
-              'updatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
+              'updatedAt': cf.FieldValue.serverTimestamp(),
+            }, cf.SetOptions(merge: true));
             if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الحفظ ✅')));
           },
           child: const Text('حفظ'),
@@ -4564,7 +3853,7 @@ class _RoomRulesTabState extends State<_RoomRulesTab> {
         const SizedBox(height: 12),
         FilledButton(
           onPressed: () async {
-            await FirebaseFirestore.instance.collection('rooms').doc(widget.roomId).set({
+            await cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId).set({
               'rules': rules,
               'config': {
                 'badWords': badWords,
@@ -4572,7 +3861,7 @@ class _RoomRulesTabState extends State<_RoomRulesTab> {
                 'muteMinutes': muteMinutes,
                 'welcomeText': welcomeC.text.trim(),
               }
-            }, SetOptions(merge: true));
+            }, cf.SetOptions(merge: true));
             if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الحفظ ✅')));
           },
           child: const Text('حفظ'),
@@ -4587,9 +3876,9 @@ class _RoomRolesTab extends StatelessWidget {
   const _RoomRolesTab({required this.roomId});
   @override
   Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('members')
+    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('members')
       .orderBy('joinedAt', descending: true).limit(200).snapshots();
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
       stream: q,
       builder: (c, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -4627,8 +3916,8 @@ class _RoomRolesTab extends StatelessWidget {
   }
 
   Future<void> _setRole(String room, String uid, String role) async {
-    await FirebaseFirestore.instance.collection('rooms').doc(room).collection('members').doc(uid)
-      .set({'role': role}, SetOptions(merge: true));
+    await cf.FirebaseFirestore.instance.collection('rooms').doc(room).collection('members').doc(uid)
+      .set({'role': role}, cf.SetOptions(merge: true));
   }
 }
 
@@ -4640,11 +3929,11 @@ class _RoomInvitesTab extends StatefulWidget {
 }
 class _RoomInvitesTabState extends State<_RoomInvitesTab> {
   final usesC = TextEditingController();
-  Timestamp? _exp;
+  cf.Timestamp? _exp;
 
   @override
   Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
+    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
       .collection('invites').orderBy('createdAt', descending: true).limit(50).snapshots();
 
     return Column(
@@ -4679,7 +3968,7 @@ class _RoomInvitesTabState extends State<_RoomInvitesTab> {
                   final now = DateTime.now();
                   final picked = await showDatePicker(
                     context: context, initialDate: now, firstDate: now, lastDate: now.add(const Duration(days: 365)));
-                  if (picked != null) setState(()=> _exp = Timestamp.fromDate(DateTime(picked.year, picked.month, picked.day, 23, 59)));
+                  if (picked != null) setState(()=> _exp = cf.Timestamp.fromDate(DateTime(picked.year, picked.month, picked.day, 23, 59)));
                 },
                 icon: const Icon(Icons.event),
                 tooltip: 'تعيين تاريخ انتهاء',
@@ -4689,7 +3978,7 @@ class _RoomInvitesTabState extends State<_RoomInvitesTab> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
             stream: q,
             builder: (c, s) {
               if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -4704,7 +3993,7 @@ class _RoomInvitesTabState extends State<_RoomInvitesTab> {
                   final code = (d['code'] ?? '') as String;
                   final uses = (d['uses'] ?? 0) as int;
                   final max = d['maxUses'];
-                  final exp = d['expiresAt'] as Timestamp?;
+                  final exp = d['expiresAt'] as cf.Timestamp?;
                   return Card(
                     child: ListTile(
                       leading: const Icon(Icons.key_rounded, color: kTeal),
@@ -4730,7 +4019,7 @@ class _RoomInvitesTabState extends State<_RoomInvitesTab> {
 Future<void> _sendMessage(String text) async {
   final user = FirebaseAuth.instance.currentUser!;
   final tr = context.read<TranslatorService>();
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final ref = fs.collection('rooms').doc(roomId).collection('messages');
 
   // 1) جلب إعدادات الغرفة (القواعد/الكلمات الممنوعة)
@@ -4763,8 +4052,8 @@ Future<void> _sendMessage(String text) async {
   if (hitBad && autoMute) {
     final meMember = fs.collection('rooms').doc(roomId).collection('members').doc(user.uid);
     await meMember.set({
-      'mutedUntil': Timestamp.fromDate(DateTime.now().add(Duration(minutes: muteMinutes)))
-    }, SetOptions(merge: true));
+      'mutedUntil': cf.Timestamp.fromDate(DateTime.now().add(Duration(minutes: muteMinutes)))
+    }, cf.SetOptions(merge: true));
     await postSystemMessage(
       roomId: roomId,
       text: '🚫 تم كتم ${user.uid.substring(0,6)} لمدة $muteMinutes دقيقة لاستخدام كلمات محظورة.'
@@ -4774,7 +4063,7 @@ Future<void> _sendMessage(String text) async {
   // 5) تحقق إن كان العضو مكتومًا الآن
   final meMember = await fs.collection('rooms').doc(roomId).collection('members').doc(user.uid).get();
   final muted = meMember.data()?['mutedUntil'];
-  if (muted is Timestamp && DateTime.now().isBefore(muted.toDate())) {
+  if (muted is cf.Timestamp && DateTime.now().isBefore(muted.toDate())) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('أنت مكتوم مؤقتًا ولا يمكنك الإرسال حالياً.')));
     }
@@ -4789,7 +4078,7 @@ Future<void> _sendMessage(String text) async {
     'replyTo': _replyToId,
     'translated': translated,
     'autoTranslated': translated != null,
-    'createdAt': FieldValue.serverTimestamp(),
+    'createdAt': cf.FieldValue.serverTimestamp(),
     'reactions': {},
     'pinned': false,
     'edited': false,
@@ -4797,30 +4086,10 @@ Future<void> _sendMessage(String text) async {
 
   // تحديث آخر نشاط الغرفة
   await fs.collection('rooms').doc(roomId)
-    .set({'meta': {'lastMsgAt': FieldValue.serverTimestamp(), 'messages': FieldValue.increment(1)}}, SetOptions(merge: true));
+    .set({'meta': {'lastMsgAt': cf.FieldValue.serverTimestamp(), 'messages': cf.FieldValue.increment(1)}}, cf.SetOptions(merge: true));
 
   setState(() => _replyToId = null);
-}
-actions: [
-  IconButton(
-    onPressed: ()=> navigatorKey.currentState?.pushNamed('/room/settings', arguments: roomId),
-    icon: const Icon(Icons.settings_outlined),
-    tooltip: 'إعدادات الغرفة',
-  ),
-  // ... أزرار أخرى لديك
-],
-floatingActionButton: FloatingActionButton(
-  onPressed: ()=> navigatorKey.currentState?.pushNamed('/rooms/create'),
-  child: const Icon(Icons.add_rounded),
-),
-actions: [
-  IconButton(
-    onPressed: ()=> navigatorKey.currentState?.pushNamed('/room/board', arguments: roomId),
-    icon: const Icon(Icons.dashboard_rounded),
-    tooltip: 'لوحة المنشورات',
-  ),
-  // ...
-]
+
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 10/12] =====================
 // Room Board: posts (text/image/poll) + likes + comments + pin-as-announcement
 
@@ -4835,7 +4104,7 @@ actions: [
 String shortUid(String uid) => uid.length <= 6 ? uid : uid.substring(0,6);
 
 Future<void> toggleLike(String roomId, String postId) async {
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final me = FirebaseAuth.instance.currentUser!.uid;
   final likeRef = fs.collection('rooms').doc(roomId).collection('posts').doc(postId)
       .collection('likes').doc(me);
@@ -4849,7 +4118,7 @@ Future<void> toggleLike(String roomId, String postId) async {
       tx.delete(likeRef);
       tx.update(postRef, {'likes': (cur > 0 ? cur - 1 : 0)});
     } else {
-      tx.set(likeRef, {'at': FieldValue.serverTimestamp()});
+      tx.set(likeRef, {'at': cf.FieldValue.serverTimestamp()});
       tx.update(postRef, {'likes': cur + 1});
     }
   });
@@ -4860,12 +4129,12 @@ Future<void> addComment({
   required String postId,
   required String text,
 }) async {
-  final fs = FirebaseFirestore.instance;
+  final fs = cf.FirebaseFirestore.instance;
   final me = FirebaseAuth.instance.currentUser!.uid;
   final cref = fs.collection('rooms').doc(roomId).collection('posts').doc(postId).collection('comments').doc();
   final pref = fs.collection('rooms').doc(roomId).collection('posts').doc(postId);
   await fs.runTransaction((tx) async {
-    tx.set(cref, {'text': text, 'authorId': me, 'createdAt': FieldValue.serverTimestamp()});
+    tx.set(cref, {'text': text, 'authorId': me, 'createdAt': cf.FieldValue.serverTimestamp()});
     final p = await tx.get(pref);
     final cur = (p.data()?['comments'] ?? 0) as int;
     tx.update(pref, {'comments': cur + 1});
@@ -4873,7 +4142,7 @@ Future<void> addComment({
 }
 
 Future<void> pinPost(String roomId, String postId, bool value) async {
-  final ref = FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('posts').doc(postId);
+  final ref = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('posts').doc(postId);
   await ref.update({'pinned': value});
   if (value) {
     await postSystemMessage(roomId: roomId, text: '📌 تم تثبيت منشور ($postId) بواسطة المشرف.');
@@ -4916,7 +4185,7 @@ class _PostComposerSheetState extends State<PostComposerSheet> {
     if (_saving) return;
     setState(()=> _saving = true);
     try {
-      final fs = FirebaseFirestore.instance;
+      final fs = cf.FirebaseFirestore.instance;
       final me = FirebaseAuth.instance.currentUser!.uid;
       final posts = fs.collection('rooms').doc(widget.roomId).collection('posts');
 
@@ -4926,7 +4195,7 @@ class _PostComposerSheetState extends State<PostComposerSheet> {
           'type': 'text',
           'text': txt.text.trim(),
           'authorId': me,
-          'createdAt': FieldValue.serverTimestamp(),
+          'createdAt': cf.FieldValue.serverTimestamp(),
           'likes': 0, 'comments': 0, 'pinned': false,
         });
       } else if (kind == 'image') {
@@ -4939,7 +4208,7 @@ class _PostComposerSheetState extends State<PostComposerSheet> {
           'imageUrl': url,
           'text': txt.text.trim(),
           'authorId': me,
-          'createdAt': FieldValue.serverTimestamp(),
+          'createdAt': cf.FieldValue.serverTimestamp(),
           'likes': 0, 'comments': 0, 'pinned': false,
         });
       } else if (kind == 'poll') {
@@ -4952,7 +4221,7 @@ class _PostComposerSheetState extends State<PostComposerSheet> {
           'type': 'poll',
           'text': txt.text.trim(),
           'authorId': me,
-          'createdAt': FieldValue.serverTimestamp(),
+          'createdAt': cf.FieldValue.serverTimestamp(),
           'likes': 0, 'comments': 0, 'pinned': false,
           'poll': {
             'options': opts.map((t) => {'text': t, 'votes': 0}).toList(),
@@ -5037,7 +4306,7 @@ class RoomBoardPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final roomId = (ModalRoute.of(context)!.settings.arguments ?? 'room_demo') as String;
-    final q = FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('posts').orderBy('pinned', descending: true).orderBy('createdAt', descending: true).limit(100).snapshots();
 
     return Scaffold(
@@ -5059,7 +4328,7 @@ class RoomBoardPage extends StatelessWidget {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
         stream: q,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -5105,7 +4374,7 @@ class _PostCard extends StatelessWidget {
     final likes = (data['likes'] ?? 0) as int;
     final comments = (data['comments'] ?? 0) as int;
     final pinned = data['pinned'] == true;
-    final at = data['createdAt'] as Timestamp?;
+    final at = data['createdAt'] as cf.Timestamp?;
 
     Widget content;
     if (type == 'image') {
@@ -5185,14 +4454,14 @@ class _PostCard extends StatelessWidget {
   }
 
   Future<void> _reportPost(String roomId, String postId) async {
-    await FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('reports').add({
+    await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('reports').add({
       'type': 'content',
       'targetType': 'post',
       'targetId': postId,
       'reason': 'inappropriate',
       'status': 'open',
       'createdBy': FirebaseAuth.instance.currentUser!.uid,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': cf.FieldValue.serverTimestamp(),
     });
   }
 }
@@ -5212,7 +4481,7 @@ class _PollWidgetState extends State<_PollWidget> {
     if (_voting) return;
     setState(()=> _voting = true);
     try {
-      final fs = FirebaseFirestore.instance;
+      final fs = cf.FirebaseFirestore.instance;
       final me = FirebaseAuth.instance.currentUser!.uid;
       final pref = fs.collection('rooms').doc(widget.roomId).collection('posts').doc(widget.postId);
       await fs.runTransaction((tx) async {
@@ -5300,11 +4569,20 @@ class PostDetailPage extends StatelessWidget {
     final roomId = (args['roomId'] ?? 'room_demo') as String;
     final postId = (args['postId'] ?? '') as String;
 
-    final pref = FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('posts').doc(postId);
+    final pref = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('posts').doc(postId);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('تفاصيل المنشور')),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      appBar: AppBar(
+        title: const Text('تفاصيل المنشور'),
+        actions: [
+          IconButton(
+            onPressed: () => navigatorKey.currentState?.pushNamed('/search'),
+            icon: const Icon(Icons.search_rounded),
+            tooltip: 'بحث',
+          ),
+        ],
+      ),
+      body: StreamBuilder<cf.DocumentSnapshot<Map<String, dynamic>>>(
         stream: pref.snapshots(),
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -5340,10 +4618,10 @@ class _CommentsList extends StatelessWidget {
   const _CommentsList({super.key, required this.roomId, required this.postId});
   @override
   Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance.collection('rooms').doc(roomId)
+    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('posts').doc(postId).collection('comments')
       .orderBy('createdAt', descending: true).limit(100).snapshots();
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
       stream: q,
       builder: (c, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -5359,7 +4637,7 @@ class _CommentsList extends StatelessWidget {
                 leading: const CircleAvatar(child: Icon(Icons.person, size: 18)),
                 title: Text(doc.data()['text'] ?? ''),
                 subtitle: Text(shortUid(doc.data()['authorId'] ?? '')),
-                trailing: Text(shortTime(doc.data()['createdAt'] as Timestamp?), style: const TextStyle(fontSize: 11, color: kGray)),
+                trailing: Text(shortTime(doc.data()['createdAt'] as cf.Timestamp?), style: const TextStyle(fontSize: 11, color: kGray)),
               )
           ],
         );
@@ -5416,31 +4694,8 @@ class _CommentBarState extends State<_CommentBar> {
     );
   }
 }
-IconButton(
-  onPressed: ()=> navigatorKey.currentState?.pushNamed('/search'),
-  icon: const Icon(Icons.search_rounded),
-  tooltip: 'بحث',
-),
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 11/12] =====================
 // Global Advanced Search: people, rooms, posts, messages with filters & quick suggestions
-
-// ---------------------- Utils (formatting) ----------------------
-String compactNumber(num n) {
-  if (n >= 1000000) return '${(n/1000000).toStringAsFixed(1)}M';
-  if (n >= 1000) return '${(n/1000).toStringAsFixed(1)}K';
-  return n.toString();
-}
-String shortTime(Timestamp? ts) {
-  if (ts == null) return '';
-  final d = ts.toDate();
-  final now = DateTime.now();
-  final diff = now.difference(d);
-  if (diff.inMinutes < 1) return 'الآن';
-  if (diff.inMinutes < 60) return '${diff.inMinutes} د';
-  if (diff.inHours < 24) return '${diff.inHours} س';
-  if (diff.inDays < 7) return '${diff.inDays} يوم';
-  return d.toString().substring(0, 16);
-}
 
 // ---------------------- Search Page ----------------------
 class GlobalSearchPage extends StatefulWidget {
@@ -5568,7 +4823,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> with SingleTickerPr
       'VIP',
       'announcement',
     ];
-    c.text = examples[Random().nextInt(examples.length)];
+    c.text = examples[math.Random().nextInt(examples.length)];
     set((){});
   }
 }
@@ -5640,6 +4895,20 @@ class _FilterChipX extends StatelessWidget {
 }
 
 // ---------------------- People Results ----------------------
+Future<void> showGiftDialog(BuildContext context, {required String toUserId}) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('إرسال هدية'),
+      content: Text('إرسال هدية إلى المستخدم: $toUserId؟'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إلغاء')),
+        FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('إرسال')),
+      ],
+    ),
+  );
+}
+
 class _PeopleResults extends StatelessWidget {
   final TextEditingController queryCtrl;
   final String sort;
@@ -5649,7 +4918,7 @@ class _PeopleResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final term = queryCtrl.text.trim();
-    Query<Map<String, dynamic>> base = FirebaseFirestore.instance.collection('users');
+    cf.Query<Map<String, dynamic>> base = cf.FirebaseFirestore.instance.collection('users');
     if (term.isNotEmpty) {
       base = base.where('keywords', arrayContainsAny: _keywords(term));
     }
@@ -5660,7 +4929,7 @@ class _PeopleResults extends StatelessWidget {
     else if (sort == 'popular') base = base.orderBy('followers', descending: true);
     else base = base.orderBy('displayName'); // relevance (تقريبية عبر keywords+الاسم)
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
       stream: base.limit(50).snapshots(),
       builder: (c, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -5717,7 +4986,7 @@ class _RoomsResults extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final term = queryCtrl.text.trim();
-    Query<Map<String, dynamic>> base = FirebaseFirestore.instance.collection('rooms').where('public', isEqualTo: true);
+    cf.Query<Map<String, dynamic>> base = cf.FirebaseFirestore.instance.collection('rooms').where('public', isEqualTo: true);
     if (term.isNotEmpty) {
       base = base.where('keywords', arrayContainsAny: _keywords(term));
     }
@@ -5728,7 +4997,7 @@ class _RoomsResults extends StatelessWidget {
     else if (sort == 'popular') base = base.orderBy('meta.members', descending: true);
     else base = base.orderBy('name');
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
       stream: base.limit(50).snapshots(),
       builder: (c, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -5773,7 +5042,7 @@ class _PostsResults extends StatelessWidget {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
     // مبدئيًا: نبحث عبر collectionGroup على posts ونفلتر بالنص/النوع
-    Query<Map<String, dynamic>> base = FirebaseFirestore.instance.collectionGroup('posts');
+    cf.Query<Map<String, dynamic>> base = cf.FirebaseFirestore.instance.collectionGroup('posts');
     if (term.isNotEmpty) {
       base = base.where('keywords', arrayContainsAny: _keywords(term));
     }
@@ -5791,12 +5060,12 @@ class _PostsResults extends StatelessWidget {
     return _postsStream(base, sort: sort);
   }
 
-  Widget _postsStream(Query<Map<String, dynamic>> base, {bool Function(String)? roomFilter, required String sort}) {
+  Widget _postsStream(cf.Query<Map<String, dynamic>> base, {bool Function(String)? roomFilter, required String sort}) {
     if (sort == 'newest') base = base.orderBy('createdAt', descending: true);
     else if (sort == 'popular') base = base.orderBy('likes', descending: true);
     else base = base.orderBy('pinned', descending: true).orderBy('createdAt', descending: true);
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
       stream: base.limit(60).snapshots(),
       builder: (c, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -5832,7 +5101,7 @@ class _MessagesResults extends StatelessWidget {
     final term = queryCtrl.text.trim();
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    Query<Map<String, dynamic>> base = FirebaseFirestore.instance.collectionGroup('messages').where('type', isEqualTo: 'text');
+    cf.Query<Map<String, dynamic>> base = cf.FirebaseFirestore.instance.collectionGroup('messages').where('type', isEqualTo: 'text');
     if (term.isNotEmpty) {
       base = base.where('keywords', arrayContainsAny: _keywords(term));
     }
@@ -5842,7 +5111,7 @@ class _MessagesResults extends StatelessWidget {
     return FutureBuilder<List<String>>(
       future: inMyRooms && uid != null ? _myRoomIds(uid) : Future.value(null),
       builder: (c, s) {
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
           stream: base.limit(60).snapshots(),
           builder: (c2, s2) {
             if (!s2.hasData) return const Center(child: CircularProgressIndicator());
@@ -5869,7 +5138,7 @@ class _MessagesResults extends StatelessWidget {
                     leading: const Icon(Icons.message_rounded),
                     title: Text(msg['text'] ?? ''),
                     subtitle: Text('Room: $roomId • by: ${shortUid(msg['from'] ?? '')}'),
-                    trailing: Text(shortTime(msg['createdAt'] as Timestamp?), style: const TextStyle(fontSize: 11, color: kGray)),
+                    trailing: Text(shortTime(msg['createdAt'] as cf.Timestamp?), style: const TextStyle(fontSize: 11, color: kGray)),
                     onTap: ()=> navigatorKey.currentState?.pushNamed('/room', arguments: roomId),
                   ),
                 );
@@ -5878,6 +5147,22 @@ class _MessagesResults extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+class _EmptyHint extends StatelessWidget {
+  final String text;
+  const _EmptyHint({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodyMedium?.copyWith(color: kGray);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(text, style: style, textAlign: TextAlign.center),
+      ),
     );
   }
 }
@@ -5895,8 +5180,8 @@ List<String> _keywords(String term) {
 }
 
 Future<List<String>> _myRoomIds(String uid) async {
-  final qs = await FirebaseFirestore.instance.collectionGroup('members')
-    .where(FieldPath.documentId, isEqualTo: uid).get();
+  final qs = await cf.FirebaseFirestore.instance.collectionGroup('members')
+    .where(cf.FieldPath.documentId, isEqualTo: uid).get();
   final ids = <String>[];
   for (final d in qs.docs) {
     final roomId = d.reference.parent.parent?.id;
@@ -5956,12 +5241,12 @@ class NotificationsService {
 
     final token = await fm.getToken();
     if (token != null) {
-      await FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'fcmToken': token, 'fcmUpdatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      await cf.FirebaseFirestore.instance.collection('users').doc(uid)
+        .set({'fcmToken': token, 'fcmUpdatedAt': cf.FieldValue.serverTimestamp()}, cf.SetOptions(merge: true));
     }
     fm.onTokenRefresh.listen((t) {
-      FirebaseFirestore.instance.collection('users').doc(uid)
-        .set({'fcmToken': t, 'fcmUpdatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      cf.FirebaseFirestore.instance.collection('users').doc(uid)
+        .set({'fcmToken': t, 'fcmUpdatedAt': cf.FieldValue.serverTimestamp()}, cf.SetOptions(merge: true));
     });
 
     FirebaseMessaging.onMessage.listen((m) {
@@ -5987,7 +5272,7 @@ class NotificationBadge extends ChangeNotifier {
 
   void bind(String uid) {
     _sub?.cancel();
-    _sub = FirebaseFirestore.instance
+    _sub = cf.FirebaseFirestore.instance
       .collection('users').doc(uid).collection('inbox')
       .where('read', isEqualTo: false)
       .snapshots()
@@ -6005,20 +5290,20 @@ Future<void> enqueueInbox({
   required String body,
   Map<String, dynamic>? extra,
 }) async {
-  final ref = FirebaseFirestore.instance.collection('users').doc(toUid).collection('inbox').doc();
+  final ref = cf.FirebaseFirestore.instance.collection('users').doc(toUid).collection('inbox').doc();
   await ref.set({
     'type': type,
     'title': title,
     'body': body,
     'read': false,
-    'createdAt': FieldValue.serverTimestamp(),
+    'createdAt': cf.FieldValue.serverTimestamp(),
     ...?extra,
   });
 }
 
 // مثال: إعلام أعضاء الغرفة برسالة مُثبّتة/إعلان (مبسّط جداً للـ MVP)
 Future<void> notifyRoomMembersOfAnnouncement(String roomId, String text) async {
-  final mems = await FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('members').limit(500).get();
+  final mems = await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId).collection('members').limit(500).get();
   for (final m in mems.docs) {
     final uid = m.id;
     await enqueueInbox(
@@ -6038,7 +5323,7 @@ class NotificationCenterPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return const Scaffold(body: Center(child: Text('سجّل الدخول أولاً')));
-    final q = FirebaseFirestore.instance.collection('users').doc(uid)
+    final q = cf.FirebaseFirestore.instance.collection('users').doc(uid)
       .collection('inbox').orderBy('createdAt', descending: true).limit(100).snapshots();
 
     return Scaffold(
@@ -6052,8 +5337,8 @@ class NotificationCenterPage extends StatelessWidget {
           ),
           IconButton(
             onPressed: () async {
-              final batch = FirebaseFirestore.instance.batch();
-              final docs = await FirebaseFirestore.instance.collection('users').doc(uid).collection('inbox')
+              final batch = cf.FirebaseFirestore.instance.batch();
+              final docs = await cf.FirebaseFirestore.instance.collection('users').doc(uid).collection('inbox')
                   .where('read', isEqualTo: false).get();
               for (final d in docs.docs) {
                 batch.update(d.reference, {'read': true});
@@ -6065,7 +5350,7 @@ class NotificationCenterPage extends StatelessWidget {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
         stream: q,
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
@@ -6148,7 +5433,7 @@ class _NotificationPrefsPageState extends State<NotificationPrefsPage> {
 
   Future<void> _load() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final doc = await cf.FirebaseFirestore.instance.collection('users').doc(uid).get();
     final n = (doc.data()?['notify'] ?? {}) as Map;
     dnd = n['dnd'] == true;
     mentionsOnly = n['mentionsOnly'] == true;
@@ -6161,9 +5446,9 @@ class _NotificationPrefsPageState extends State<NotificationPrefsPage> {
 
   Future<void> _save() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    await FirebaseFirestore.instance.collection('users').doc(uid).set({
+    await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({
       'notify': {'dnd': dnd, 'mentionsOnly': mentionsOnly, 'rooms': rooms, 'posts': posts, 'follows': follows, 'invites': invites}
-    }, SetOptions(merge: true));
+    }, cf.SetOptions(merge: true));
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الحفظ ✅')));
   }
 
