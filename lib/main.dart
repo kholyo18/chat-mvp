@@ -1351,16 +1351,9 @@ class _RoomPageState extends State<RoomPage> {
           ),
           if (_replyToId != null)
             _ReplyPreview(onCancel: ()=> setState(()=> _replyToId = null)),
-          _ChatInput(
-            recording: _recording,
-            onTyping: (t)=> _setTyping(t),
-            onSendText: _sendMessage,
-            onPickImage: _pickImage,
-            onPickVideo: _pickVideo,
-            onToggleRecord: _toggleRecord,
-          ),
         ],
       ),
+      bottomNavigationBar: _ChatInput(onSend: _sendMessage),
       floatingActionButton: FloatingActionButton(
         onPressed: () => navigatorKey.currentState?.pushNamed('/rooms/create'),
         child: const Icon(Icons.add_rounded),
@@ -1548,83 +1541,83 @@ class _ReplyPreview extends StatelessWidget {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Chat input with keyboard submit + send button
 class _ChatInput extends StatefulWidget {
-  final bool recording;
-  final ValueChanged<bool> onTyping;
-  final ValueChanged<String> onSendText;
-  final VoidCallback onPickImage;
-  final VoidCallback onPickVideo;
-  final Future<void> Function() onToggleRecord;
-  const _ChatInput({
-    super.key,
-    required this.recording,
-    required this.onTyping,
-    required this.onSendText,
-    required this.onPickImage,
-    required this.onPickVideo,
-    required this.onToggleRecord,
-  });
+  const _ChatInput({super.key, required this.onSend});
+  final void Function(String text) onSend;
 
   @override
   State<_ChatInput> createState() => _ChatInputState();
 }
 
 class _ChatInputState extends State<_ChatInput> {
-  final _controller = TextEditingController();
+  final TextEditingController _c = TextEditingController();
+  final FocusNode _f = FocusNode();
+  bool _sending = false;
 
   @override
   void dispose() {
-    widget.onTyping(false);
-    _controller.dispose();
+    _c.dispose();
+    _f.dispose();
     super.dispose();
   }
 
-  void _handleSend() {
-    final text = _controller.text;
-    widget.onSendText(text);
-    _controller.clear();
-    widget.onTyping(false);
+  Future<void> _handleSend() async {
+    if (_sending) return;
+    final t = _c.text.trim();
+    if (t.isEmpty) return;
+    setState(() => _sending = true);
+    try {
+      widget.onSend(t);       // calls host _sendMessage
+      _c.clear();
+      _f.requestFocus();
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
         child: Row(
           children: [
+            // مثال: زر مرفقات (اتركه غير موصول لو ماعندك باكر)
             IconButton(
-              tooltip: 'صورة',
-              onPressed: widget.onPickImage,
-              icon: const Icon(Icons.photo_rounded),
-            ),
-            IconButton(
-              tooltip: 'فيديو',
-              onPressed: widget.onPickVideo,
-              icon: const Icon(Icons.videocam_rounded),
+              icon: const Icon(Icons.add_photo_alternate_outlined),
+              onPressed: _sending ? null : () { /* TODO: open picker if exists */ },
             ),
             Expanded(
               child: TextField(
-                controller: _controller,
+                controller: _c,
+                focusNode: _f,
                 minLines: 1,
-                maxLines: 4,
-                onChanged: (value) => widget.onTyping(value.trim().isNotEmpty),
-                decoration: const InputDecoration.collapsed(hintText: 'اكتب رسالة...'),
+                maxLines: 5,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _handleSend(), // إرسال من الكيبورد
+                decoration: InputDecoration(
+                  hintText: 'اكتب رسالة...',
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                ),
               ),
             ),
-            IconButton(
-              tooltip: widget.recording ? 'إيقاف التسجيل' : 'تسجيل صوتي',
-              onPressed: () {
-                widget.onToggleRecord();
+            const SizedBox(width: 8),
+            // زر الإرسال يشتغل فقط لما يكون النص غير فارغ
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _c,
+              builder: (context, v, _) {
+                final canSend = v.text.trim().isNotEmpty && !_sending;
+                return IconButton.filled(
+                  onPressed: canSend ? _handleSend : null,
+                  icon: const Icon(Icons.send_rounded),
+                  color: cs.onPrimary,
+                );
               },
-              icon: Icon(widget.recording ? Icons.stop_circle_rounded : Icons.mic_rounded,
-                  color: widget.recording ? Colors.redAccent : null),
-            ),
-            IconButton(
-              tooltip: 'إرسال',
-              onPressed: _handleSend,
-              icon: const Icon(Icons.send_rounded),
             ),
           ],
         ),
