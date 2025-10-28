@@ -59,6 +59,13 @@ String shortTime(cf.Timestamp? ts) {
   }
   return '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2,'0')}';
 }
+
+cf.Timestamp normalizeTimestamp(dynamic raw, {DateTime? fallback}) {
+  if (raw is cf.Timestamp) return raw;
+  if (raw is DateTime) return cf.Timestamp.fromDate(raw);
+  if (raw is num) return cf.Timestamp.fromMillisecondsSinceEpoch(raw.toInt());
+  return cf.Timestamp.fromDate(fallback ?? DateTime.now());
+}
 String compactNumber(int n) {
   if (n >= 1000000) return '${(n/1000000).toStringAsFixed(1)}M';
   if (n >= 1000) return '${(n/1000).toStringAsFixed(1)}K';
@@ -1006,6 +1013,7 @@ class ChatMessage {
 
   factory ChatMessage.fromDoc(cf.DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? {};
+    final createdRaw = d['createdAt'] ?? d['createdAtLocal'];
     return ChatMessage(
       id: doc.id,
       from: d['from'] ?? '',
@@ -1017,7 +1025,7 @@ class ChatMessage {
       replyTo: d['replyTo'],
       translated: (d['translated'] as Map?)?.cast<String, dynamic>(),
       autoTranslated: d['autoTranslated'] == true,
-      createdAt: d['createdAt'] ?? cf.Timestamp.now(),
+      createdAt: normalizeTimestamp(createdRaw, fallback: DateTime.now()),
       reactions: (d['reactions'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v ?? 0) as int)),
       pinned: d['pinned'] == true,
     );
@@ -1118,7 +1126,7 @@ class _RoomPageState extends State<RoomPage> {
     _liveSub?.cancel();
     final q = cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
       .collection('messages').orderBy('createdAt', descending: true).limit(30);
-    _liveSub = q.snapshots().listen((snap) {
+    _liveSub = q.snapshots(includeMetadataChanges: true).listen((snap) {
       final docs = snap.docs.map(ChatMessage.fromDoc).toList();
       docs.sort((a, b) {
         if (a.pinned && !b.pinned) return -1;
@@ -1163,12 +1171,11 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   // ---------------------- Message Actions ----------------------
-  Future<void> _sendMessage(String text) async {
+  Future<bool> _sendMessage(String text) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return false;
     final fs = cf.FirebaseFirestore.instance;
     final user = FirebaseAuth.instance.currentUser!;
-    final now = cf.Timestamp.now();
 
     final ref = fs.collection('rooms').doc(roomId).collection('messages');
 
@@ -1186,11 +1193,11 @@ class _RoomPageState extends State<RoomPage> {
       mutedUntil = rawMuted.millisecondsSinceEpoch;
     }
     if (mutedUntil > DateTime.now().millisecondsSinceEpoch) {
-      if (!mounted) return;
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أنت مكتوم مؤقتًا ولا يمكنك الإرسال حالياً.')),
       );
-      return;
+      return false;
     }
 
     final tr = context.read<TranslatorService>();
@@ -1202,29 +1209,52 @@ class _RoomPageState extends State<RoomPage> {
       }
     }
 
-    final doc = await ref.add({
+    final docRef = ref.doc();
+    final payload = {
+      'id': docRef.id,
       'uid': user.uid,
       'from': user.uid,
+      'senderId': user.uid,
       'type': 'text',
       'text': trimmed,
       'replyTo': _replyToId,
       'translated': translated,
       'autoTranslated': translated != null,
-      'createdAt': now,
+      'createdAt': cf.FieldValue.serverTimestamp(),
+      'createdAtLocal': DateTime.now().millisecondsSinceEpoch,
       'reactions': {},
       'pinned': false,
-    });
+      'visibility': 'everyone',
+    };
 
-    await fs.collection('rooms').doc(roomId).set({
-      'lastMessageAt': now,
-      'lastMessageId': doc.id,
-      'meta': {
-        'lastMsgAt': cf.FieldValue.serverTimestamp(),
-        'messages': cf.FieldValue.increment(1),
-      },
-    }, cf.SetOptions(merge: true));
-
-    setState(() => _replyToId = null);
+    try {
+      await docRef.set(payload);
+      await fs.collection('rooms').doc(roomId).set({
+        'lastMessage': trimmed,
+        'lastAt': cf.FieldValue.serverTimestamp(),
+        'lastMessageAt': cf.FieldValue.serverTimestamp(),
+        'lastMessageId': docRef.id,
+        'meta': {
+          'lastMsgAt': cf.FieldValue.serverTimestamp(),
+          'messages': cf.FieldValue.increment(1),
+        },
+      }, cf.SetOptions(merge: true));
+      if (mounted) setState(() => _replyToId = null);
+      return true;
+    } catch (err, stack) {
+      debugPrint('RoomPage send error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تعذّر إرسال الرسالة، حاول مرة أخرى.'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return false;
+    }
   }
 
   Future<void> _sendMedia(MsgType type, {String? url, String? thumb, int? duration}) async {
@@ -1656,7 +1686,7 @@ class _ReplyPreview extends StatelessWidget {
 // Chat input with keyboard submit + send button
 class _LegacyChatInput extends StatefulWidget {
   const _LegacyChatInput({super.key, required this.onSend});
-  final void Function(String text) onSend;
+  final Future<bool> Function(String text) onSend;
 
   @override
   State<_LegacyChatInput> createState() => _LegacyChatInputState();
@@ -1680,9 +1710,11 @@ class _LegacyChatInputState extends State<_LegacyChatInput> {
     if (t.isEmpty) return;
     setState(() => _sending = true);
     try {
-      widget.onSend(t);       // calls host _sendMessage
-      _c.clear();
-      _f.requestFocus();
+      final success = await widget.onSend(t);       // calls host _sendMessage
+      if (success && mounted) {
+        _c.clear();
+        _f.requestFocus();
+      }
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -1747,7 +1779,7 @@ class _ChatInput extends StatefulWidget {
     this.recording = false,
   });
 
-  final void Function(String text) onSendText;
+  final Future<bool> Function(String text) onSendText;
   final Future<void> Function() onPickImage;
   final Future<void> Function() onPickVideo;
   final Future<void> Function() onStartVoice;
@@ -1761,6 +1793,7 @@ class _ChatInputState extends State<_ChatInput> {
   final _ctrl = TextEditingController();
   final _focus = FocusNode();
   bool _canSend = false;
+  bool _sending = false;
 
   @override
   void initState() {
@@ -1781,12 +1814,26 @@ class _ChatInputState extends State<_ChatInput> {
     if (enable != _canSend) setState(() => _canSend = enable);
   }
 
-  void _submit() {
+  Future<void> _submit() async {
+    if (_sending) return;
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
-    widget.onSendText(text);
-    _ctrl.clear();
-    _focus.requestFocus();
+    setState(() => _sending = true);
+    var success = false;
+    try {
+      success = await widget.onSendText(text);
+      if (success) {
+        _ctrl.clear();
+        _focus.requestFocus();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _canSend = _ctrl.text.trim().isNotEmpty;
+        });
+      }
+    }
   }
 
   void _openPlusMenu() {
@@ -1849,7 +1896,7 @@ class _ChatInputState extends State<_ChatInput> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6),
               child: IconButton.filled(
-                onPressed: _canSend ? _submit : null,
+                onPressed: (_canSend && !_sending) ? _submit : null,
                 icon: const Icon(Icons.send),
                 tooltip: 'إرسال',
               ),
@@ -3715,6 +3762,129 @@ class _DMPageState extends State<DMPage> {
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 7/12] =====================
 // Advanced Profile: view + edit + upload avatar/cover to Firebase Storage
 
+class StoryRingAvatar extends StatelessWidget {
+  final String uid;
+  final String avatarUrl;
+  final double radius;
+  const StoryRingAvatar({super.key, required this.uid, required this.avatarUrl, this.radius = 40});
+
+  Stream<cf.QuerySnapshot<Map<String, dynamic>>> _storiesStream() {
+    if (uid.isEmpty) {
+      return Stream<cf.QuerySnapshot<Map<String, dynamic>>>.empty();
+    }
+    final since = DateTime.now().subtract(const Duration(hours: 24));
+    final ref = cf.FirebaseFirestore.instance
+        .collection('stories')
+        .doc(uid)
+        .collection('items')
+        .where('createdAt', isGreaterThanOrEqualTo: cf.Timestamp.fromDate(since))
+        .orderBy('createdAt', descending: true)
+        .limit(25);
+    return ref.snapshots(includeMetadataChanges: true);
+  }
+
+  Widget _buildAvatar(BuildContext context, {required bool hasActive, required int count}) {
+    final theme = Theme.of(context);
+    final innerRadius = math.max(0.0, radius - 4);
+    final inner = CircleAvatar(
+      radius: innerRadius,
+      backgroundColor: Colors.grey.shade200,
+      backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+      child: avatarUrl.isEmpty ? const Icon(Icons.person, size: 36, color: kTeal) : null,
+    );
+
+    if (!hasActive) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: Colors.white,
+        child: inner,
+      );
+    }
+
+    final ring = Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          colors: [
+            theme.colorScheme.primary,
+            theme.colorScheme.secondary,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: inner,
+    );
+
+    final badgeLabel = count > 9 ? '9+' : '$count';
+    final badge = Positioned(
+      right: 0,
+      bottom: 0,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: count > 9 ? 6 : 5, vertical: 2),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primary,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white, width: 1.5),
+        ),
+        constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+        child: Center(
+          child: Text(
+            badgeLabel,
+            style: TextStyle(
+              color: theme.colorScheme.onPrimary,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        CircleAvatar(
+          radius: radius,
+          backgroundColor: Colors.white,
+          child: ring,
+        ),
+        badge,
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
+      stream: _storiesStream(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const [];
+        final now = DateTime.now();
+        int activeCount = 0;
+        for (final doc in docs) {
+          final data = doc.data();
+          final expiresRaw = data['expiresAt'];
+          if (expiresRaw != null) {
+            final expires = normalizeTimestamp(expiresRaw, fallback: now).toDate();
+            if (expires.isAfter(now)) activeCount++;
+          } else {
+            final created = normalizeTimestamp(data['createdAt'], fallback: now).toDate();
+            if (created.isAfter(now.subtract(const Duration(hours: 24)))) activeCount++;
+          }
+        }
+        final hasActive = activeCount > 0;
+        return SizedBox(
+          width: radius * 2,
+          height: radius * 2,
+          child: _buildAvatar(context, hasActive: hasActive, count: activeCount),
+        );
+      },
+    );
+  }
+}
+
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
@@ -3777,16 +3947,7 @@ class ProfilePage extends StatelessWidget {
                     bottom: 0, left: 16,
                     child: Container(
                       transform: Matrix4.translationValues(0, 24, 0),
-                      child: CircleAvatar(
-                        radius: 40,
-                        backgroundColor: Colors.white,
-                        child: CircleAvatar(
-                          radius: 37,
-                          backgroundColor: Colors.grey.shade200,
-                          backgroundImage: avatar.isNotEmpty ? NetworkImage(avatar) : null,
-                          child: avatar.isEmpty ? const Icon(Icons.person, size: 36, color: kTeal) : null,
-                        ),
-                      ),
+                      child: StoryRingAvatar(uid: uid, avatarUrl: avatar, radius: 40),
                     ),
                   ),
                   Positioned(
