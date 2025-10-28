@@ -27,9 +27,12 @@ import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:intl/intl.dart';
 
 import 'package:flutter/services.dart'; // للروابط العميقة/الحافظة/الاذونات
 // (للمعاينة لاحقًا قد نستخدم url_launcher/file_picker/cached_network_image إن أضفتها في pubspec)
+
+import 'services/coins_service.dart';
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -749,9 +752,275 @@ class _LangChip extends StatelessWidget {
   }
 }
 
-class StorePage extends StatelessWidget { const StorePage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Store (part 8)'))); }
-class WalletPage extends StatelessWidget { const WalletPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Wallet (part 8)'))); }
-class VIPHubPage extends StatelessWidget { const VIPHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('VIP Hub (part 8)'))); }
+class StorePage extends StatefulWidget {
+  const StorePage({super.key});
+
+  @override
+  State<StorePage> createState() => _StorePageState();
+}
+
+class _StorePageState extends State<StorePage> {
+  static const List<({String id, int amount})> _packages = [
+    (id: 'pkg_100', amount: 100),
+    (id: 'pkg_250', amount: 250),
+    (id: 'pkg_600', amount: 600),
+    (id: 'pkg_1500', amount: 1500),
+  ];
+
+  final CoinsService _coinsService = CoinsService();
+  bool _processing = false;
+
+  Future<void> _confirmAndPurchase(({String id, int amount}) pkg) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Login required to buy coins.')),
+        );
+      }
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Dev purchase'),
+            content: const Text('Dev purchase – no real payment. Proceed?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Proceed')),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirm || mounted == false) return;
+
+    setState(() => _processing = true);
+    try {
+      await _coinsService.addCoinsDev(
+        uid: uid,
+        amount: pkg.amount,
+        packageId: pkg.id,
+        note: 'dev_mode_purchase',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added ${pkg.amount} coins.')),
+      );
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Purchase failed. Please try again.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _processing = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return const Scaffold(
+        body: Center(child: Text('Please login to access the store.')),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Store')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: StreamBuilder<int>(
+                stream: _coinsService.coinsStream(uid),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Row(
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(width: 16),
+                        Text('Loading balance...'),
+                      ],
+                    );
+                  }
+                  final coins = snapshot.data ?? 0;
+                  return Row(
+                    children: [
+                      const Icon(Icons.monetization_on_rounded, color: kTeal),
+                      const SizedBox(width: 12),
+                      Text('Current balance: $coins coins'),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text('Packages', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          ..._packages.map(
+            (pkg) => Card(
+              child: ListTile(
+                title: Text('${pkg.amount} Coins'),
+                subtitle: Text(pkg.id),
+                trailing: ElevatedButton(
+                  onPressed: _processing ? null : () => _confirmAndPurchase(pkg),
+                  child: _processing
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Buy'),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class WalletPage extends StatelessWidget {
+  const WalletPage({super.key});
+
+  static final CoinsService _coinsService = CoinsService();
+
+  IconData _iconForType(String? type) {
+    switch (type) {
+      case 'purchase':
+        return Icons.arrow_downward_rounded;
+      case 'grant':
+        return Icons.card_giftcard_rounded;
+      case 'spend':
+        return Icons.arrow_upward_rounded;
+      default:
+        return Icons.monetization_on_rounded;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return const Scaffold(
+        body: Center(child: Text('Please login to view wallet.')),
+      );
+    }
+
+    final txStream = _coinsService.txStream(uid);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Wallet')),
+      body: Column(
+        children: [
+          Card(
+            margin: const EdgeInsets.all(16),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: StreamBuilder<int>(
+                stream: _coinsService.coinsStream(uid),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Row(
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(width: 16),
+                        Text('Loading balance...'),
+                      ],
+                    );
+                  }
+                  final coins = snapshot.data ?? 0;
+                  return Row(
+                    children: [
+                      const Icon(Icons.account_balance_wallet_rounded, color: kTeal),
+                      const SizedBox(width: 12),
+                      Text('Balance: $coins coins'),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
+              stream: txStream,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return const Center(child: Text('No transactions yet'));
+                }
+
+                final docs = snapshot.data!.docs;
+                final dateFormat = DateFormat.yMMMd().add_jm();
+
+                return ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  itemCount: docs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data();
+                    final type = data['type'] as String?;
+                    final amount = (data['amount'] ?? 0) as int;
+                    final balanceAfter = (data['balanceAfter'] ?? 0) as int;
+                    final packageId = data['packageId'] as String?;
+                    final note = data['note'] as String?;
+                    final createdAtRaw = data['createdAt'];
+                    DateTime? createdAt;
+                    if (createdAtRaw is cf.Timestamp) {
+                      createdAt = createdAtRaw.toDate();
+                    }
+                    final dateStr = createdAt != null
+                        ? dateFormat.format(createdAt)
+                        : 'Pending';
+
+                    final subtitleParts = <String>[dateStr];
+                    if (packageId != null && packageId.isNotEmpty) {
+                      subtitleParts.add('Package: $packageId');
+                    }
+                    if (note != null && note.isNotEmpty) {
+                      subtitleParts.add(note);
+                    }
+
+                    final sign = amount > 0 ? '+' : '';
+
+                    return Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                          child: Icon(_iconForType(type), color: Theme.of(context).colorScheme.primary),
+                        ),
+                        title: Text('$sign$amount'),
+                        subtitle: Text(subtitleParts.join(' • ')),
+                        trailing: Text('Bal: $balanceAfter'),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class VIPHubPage extends StatelessWidget {
+  const VIPHubPage({super.key});
+  @override
+  Widget build(BuildContext context) => const Scaffold(body: Center(child: Text('VIP Hub (part 8)')));
+}
 class ProfileEditPage extends StatelessWidget { const ProfileEditPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Profile Edit (part 7)'))); }
 class PrivacySettingsPage extends StatelessWidget { const PrivacySettingsPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Privacy (part 9)'))); }
 class SettingsHubPage extends StatelessWidget { const SettingsHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Settings (part 9)'))); }
@@ -3895,6 +4164,7 @@ class ProfilePage extends StatelessWidget {
       return const Scaffold(body: Center(child: Text('غير مسجّل')));
     }
     final doc = cf.FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
+    final coinsService = CoinsService();
 
     return Scaffold(
       appBar: AppBar(
@@ -3920,7 +4190,7 @@ class ProfilePage extends StatelessWidget {
           final data = d.data() ?? {};
           final name = (data['displayName'] ?? 'Guest') as String;
           final vip = (data['vipLevel'] ?? 'Bronze') as String;
-          final coins = (data['coins'] ?? 0) as int;
+          final coinsInitial = (data['coins'] ?? 0) as int;
           final followers = (data['followers'] ?? 0) as int;
           final following = (data['following'] ?? 0) as int;
           final bio = (data['bio'] ?? '') as String;
@@ -3977,7 +4247,14 @@ class ProfilePage extends StatelessWidget {
                         const SizedBox(width: 12),
                         const Icon(Icons.monetization_on_rounded, color: kTeal, size: 18),
                         const SizedBox(width: 4),
-                        Text('$coins Coins'),
+                        StreamBuilder<int>(
+                          stream: coinsService.coinsStream(uid),
+                          initialData: coinsInitial,
+                          builder: (context, snap) {
+                            final coins = snap.data ?? coinsInitial;
+                            return Text('$coins Coins');
+                          },
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
