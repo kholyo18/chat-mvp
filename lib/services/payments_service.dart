@@ -14,16 +14,54 @@ const String kFunctionsRegion =
 
 enum PaymentProvider { play, stripe }
 
+class CoinPackConfig {
+  const CoinPackConfig({
+    required this.id,
+    required this.label,
+    required this.coins,
+    required this.price,
+  });
+
+  factory CoinPackConfig.fromJson(Map<String, dynamic> data) {
+    return CoinPackConfig(
+      id: (data['id'] as String?) ?? '',
+      label: (data['label'] as String?) ?? '',
+      coins: (data['coins'] as num?)?.toInt() ?? 0,
+      price: (data['price'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  final String id;
+  final String label;
+  final int coins;
+  final double price;
+
+  bool get hasValidPrice => price > 0;
+}
+
 class CoinsConfig {
   CoinsConfig({
     required this.rate,
     required this.currency,
     required this.dailyLimitCoins,
     required this.playSkus,
+    required this.packs,
   });
 
   factory CoinsConfig.fromJson(Map<String, dynamic> data) {
     final playSkusDynamic = data['playSkus'];
+    final rawPacks = data['packs'];
+    final parsedPacks = <CoinPackConfig>[];
+    if (rawPacks is Iterable) {
+      for (final entry in rawPacks) {
+        if (entry is Map<String, dynamic>) {
+          parsedPacks.add(CoinPackConfig.fromJson(entry));
+        } else if (entry is Map) {
+          parsedPacks.add(CoinPackConfig.fromJson(
+              Map<String, dynamic>.from(entry as Map<dynamic, dynamic>)));
+        }
+      }
+    }
     return CoinsConfig(
       rate: (data['rate'] as num?)?.toInt() ?? 100,
       currency: (data['currency'] as String?) ?? 'USD',
@@ -31,6 +69,7 @@ class CoinsConfig {
       playSkus: playSkusDynamic is Iterable
           ? playSkusDynamic.map((e) => e.toString()).toList()
           : const <String>[],
+      packs: parsedPacks,
     );
   }
 
@@ -38,16 +77,42 @@ class CoinsConfig {
   final String currency;
   final int dailyLimitCoins;
   final List<String> playSkus;
+  final List<CoinPackConfig> packs;
+
+  CoinPackConfig? packById(String id) {
+    for (final pack in packs) {
+      if (pack.id == id) {
+        return pack;
+      }
+    }
+    return null;
+  }
+
+  CoinPackConfig? packForCoins(int coins) {
+    for (final pack in packs) {
+      if (pack.coins == coins) {
+        return pack;
+      }
+    }
+    return null;
+  }
 
   double estimateFiat(int coins) {
+    final pack = packForCoins(coins);
+    if (pack != null && pack.hasValidPrice) {
+      return pack.price;
+    }
     if (rate <= 0) {
       return 0;
     }
     return coins / rate;
   }
 
-
   int coinsForSku(String sku) {
+    final pack = packById(sku);
+    if (pack != null) {
+      return pack.coins;
+    }
     final digits = sku.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) {
       return 0;

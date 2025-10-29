@@ -870,12 +870,42 @@ class _StorePageState extends State<StorePage> {
 
   List<_CoinPackage> _packages(CoinsConfig config) {
     final items = <_CoinPackage>[];
+    final seenIds = <String>{};
+
+    for (final pack in config.packs) {
+      if (pack.coins <= 0) continue;
+      final id = pack.id.isNotEmpty ? pack.id : 'coins_${pack.coins}';
+      items.add(
+        _CoinPackage(
+          id: id,
+          coins: pack.coins,
+          label: pack.label.isNotEmpty ? pack.label : null,
+          price: pack.hasValidPrice ? pack.price : null,
+        ),
+      );
+      seenIds.add(id);
+    }
+
     for (final sku in config.playSkus) {
-      final coins = config.coinsForSku(sku);
+      if (seenIds.contains(sku)) continue;
+      final pack = config.packById(sku);
+      final coins = pack?.coins ?? config.coinsForSku(sku);
       if (coins > 0) {
-        items.add(_CoinPackage(id: sku, coins: coins));
+        final price = pack?.hasValidPrice == true
+            ? pack!.price
+            : config.packForCoins(coins)?.price;
+        items.add(
+          _CoinPackage(
+            id: sku,
+            coins: coins,
+            label: pack?.label.isNotEmpty == true ? pack!.label : null,
+            price: price != null && price > 0 ? price : null,
+          ),
+        );
+        seenIds.add(sku);
       }
     }
+
     if (items.isEmpty) {
       for (final amount in _fallbackPackages) {
         items.add(_CoinPackage(id: 'coins_$amount', coins: amount));
@@ -885,6 +915,10 @@ class _StorePageState extends State<StorePage> {
   }
 
   String _estimatedPrice(CoinsConfig config, int coins) {
+    final pack = config.packForCoins(coins);
+    if (pack != null && pack.hasValidPrice) {
+      return '${pack.price.toStringAsFixed(2)} ${config.currency}';
+    }
     final estimate = config.estimateFiat(coins);
     if (estimate <= 0) return '--';
     return '≈ ${estimate.toStringAsFixed(2)} ${config.currency}';
@@ -1072,7 +1106,20 @@ class _StorePageState extends State<StorePage> {
       return Scaffold(
         appBar: AppBar(title: const Text('Store')),
         body: Center(
-          child: Text(_error ?? 'Unable to load store.'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _error ?? 'Unable to load store.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: _initializing ? null : () => _initialize(),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -1083,6 +1130,29 @@ class _StorePageState extends State<StorePage> {
       body: StreamBuilder<int>(
         stream: _completedTodayStream,
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Failed to load store status. Please retry.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: _initializing ? null : () => _initialize(),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
           final purchasedToday = snapshot.data ?? 0;
           final bool hasLimit = config.dailyLimitCoins > 0;
           final int? remaining = hasLimit
@@ -1241,6 +1311,8 @@ class _StorePageState extends State<StorePage> {
                     final product = _productDetails[pkg.id];
                     final subtitleLines = <String>[
                       'Coins: ${pkg.coins}',
+                      if (pkg.price != null)
+                        'Server price: ${pkg.price!.toStringAsFixed(2)} ${config.currency}',
                       if (provider == PaymentProvider.play) 'SKU: ${pkg.id}',
                       if (provider == PaymentProvider.play && product != null)
                         'Google Play price: ${product.price}',
@@ -1248,7 +1320,7 @@ class _StorePageState extends State<StorePage> {
                     ];
                     return Card(
                       child: ListTile(
-                        title: Text('${pkg.coins} coins'),
+                        title: Text(pkg.displayLabel),
                         subtitle: Text(subtitleLines.join('\n')),
                         trailing: ElevatedButton(
                           onPressed: _processing || (remaining != null && remaining < pkg.coins)
@@ -1286,10 +1358,20 @@ class _StorePageState extends State<StorePage> {
 }
 
 class _CoinPackage {
-  const _CoinPackage({required this.id, required this.coins});
+  const _CoinPackage({
+    required this.id,
+    required this.coins,
+    this.label,
+    this.price,
+  });
 
   final String id;
   final int coins;
+  final String? label;
+  final double? price;
+
+  String get displayLabel =>
+      (label != null && label!.isNotEmpty) ? label! : '${coins} coins';
 }
 
 class WalletPage extends StatelessWidget {
