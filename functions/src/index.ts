@@ -39,6 +39,11 @@ const DEFAULT_RATE = 100; // coins per currency unit
 const DEFAULT_CURRENCY = "EUR";
 const DEFAULT_DAILY_LIMIT = 5000;
 
+const INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const INVITE_CODE_LENGTH = 7;
+
+type CallableRequest = httpsFn.CallableRequest<Record<string, unknown>>;
+
 function getPack(options: { coins?: number; packageId?: string | null }): CoinPack | undefined {
   if (options.packageId) {
     const pack = PACK_BY_ID.get(options.packageId);
@@ -88,6 +93,51 @@ function coinsToAmountCents(coins: number, pack?: CoinPack): number {
   }
   const estimated = coins / DEFAULT_RATE;
   return Math.max(1, Math.round(estimated * 100));
+}
+
+function randomInviteCode(length = INVITE_CODE_LENGTH): string {
+  let code = "";
+  for (let i = 0; i < length; i++) {
+    const index = Math.floor(Math.random() * INVITE_CODE_CHARS.length);
+    code += INVITE_CODE_CHARS.charAt(index);
+  }
+  return code;
+}
+
+function parseOptionalTimestamp(value: unknown, field: string): admin.firestore.Timestamp | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  if (value instanceof admin.firestore.Timestamp) {
+    return value;
+  }
+  if (typeof value === "number") {
+    return admin.firestore.Timestamp.fromMillis(Math.trunc(value));
+  }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return admin.firestore.Timestamp.fromDate(parsed);
+    }
+  }
+  throw new httpsFn.HttpsError("invalid-argument", `invalid_${field}`);
+}
+
+async function ensureRoomMember(roomId: string, uid: string): Promise<admin.firestore.DocumentReference<admin.firestore.DocumentData>> {
+  const roomRef = db.collection("rooms").doc(roomId);
+  const memberRef = roomRef.collection("members").doc(uid);
+  const memberSnap = await memberRef.get();
+  if (!memberSnap.exists) {
+    throw new httpsFn.HttpsError("permission-denied", "not_member");
+  }
+  return roomRef;
+}
+
+function timestampToIso(ts?: admin.firestore.Timestamp | null): string | null {
+  if (!ts) {
+    return null;
+  }
+  return ts.toDate().toISOString();
 }
 
 export const createCheckoutSession = httpsFn.onRequest(async (req: httpsFn.Request, res: httpsFn.Response): Promise<void> => {
@@ -231,3 +281,192 @@ export const coinsConfig = httpsFn.onRequest((_req: httpsFn.Request, res: httpsF
     })),
   });
 });
+
+export const createInviteCode = httpsFn.onCall<Record<string, unknown>, Record<string, unknown>>(
+  { region: "us-central1" },
+  async (request: CallableRequest): Promise<Record<string, unknown>> => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new httpsFn.HttpsError("unauthenticated", "auth_required");
+    }
+
+    const roomIdRaw = (request.data as Record<string, unknown> | undefined)?.["roomId"];
+    const roomId = typeof roomIdRaw === "string" && roomIdRaw.trim().length > 0 ? roomIdRaw.trim() : undefined;
+    if (!roomId) {
+      throw new httpsFn.HttpsError("invalid-argument", "invalid_roomId");
+    }
+
+    const data = (request.data ?? {}) as Record<string, unknown>;
+    const maxUsesRaw = data["maxUses"];
+    let maxUses: number | null = null;
+    if (maxUsesRaw !== undefined && maxUsesRaw !== null && maxUsesRaw !== "") {
+      const parsed = Number(maxUsesRaw);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new httpsFn.HttpsError("invalid-argument", "invalid_maxUses");
+      }
+      maxUses = Math.trunc(parsed);
+    }
+
+    const expiresAt = parseOptionalTimestamp(data["expiresAt"], "expiresAt");
+    const roomRef = await ensureRoomMember(roomId, uid);
+
+    let code = randomInviteCode();
+    let inviteRef = roomRef.collection("invites").doc(code);
+    for (let i = 0; i < 5; i++) {
+      const snapshot = await inviteRef.get();
+      if (!snapshot.exists) {
+        break;
+      }
+      code = randomInviteCode();
+      inviteRef = roomRef.collection("invites").doc(code);
+      if (i === 4) {
+        throw new httpsFn.HttpsError("internal", "invite_code_collision");
+      }
+    }
+
+    await inviteRef.set({
+      code,
+      createdBy: uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      uses: 0,
+      maxUses: maxUses ?? null,
+      expiresAt: expiresAt ?? null,
+    });
+
+    const saved = await inviteRef.get();
+    const savedData = saved.data() ?? {};
+
+    return {
+      code,
+      invite: {
+        code,
+        roomId,
+        createdBy: savedData["createdBy"] ?? uid,
+        createdAt: timestampToIso(savedData["createdAt"] as admin.firestore.Timestamp | undefined),
+        expiresAt: timestampToIso(savedData["expiresAt"] as admin.firestore.Timestamp | undefined),
+        uses: savedData["uses"] ?? 0,
+        maxUses: savedData["maxUses"] ?? null,
+      },
+    };
+  }
+);
+
+export const listRoomInvites = httpsFn.onCall<Record<string, unknown>, Record<string, unknown>>(
+  { region: "us-central1" },
+  async (request: CallableRequest): Promise<Record<string, unknown>> => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new httpsFn.HttpsError("unauthenticated", "auth_required");
+    }
+
+    const roomIdRaw = (request.data as Record<string, unknown> | undefined)?.["roomId"];
+    const roomId = typeof roomIdRaw === "string" && roomIdRaw.trim().length > 0 ? roomIdRaw.trim() : undefined;
+    if (!roomId) {
+      throw new httpsFn.HttpsError("invalid-argument", "invalid_roomId");
+    }
+
+    const roomRef = await ensureRoomMember(roomId, uid);
+    const invitesSnap = await roomRef.collection("invites").orderBy("createdAt", "desc").get();
+    const invites = invitesSnap.docs.map((doc: admin.firestore.QueryDocumentSnapshot<admin.firestore.DocumentData>) => {
+      const payload = doc.data();
+      return {
+        code: payload["code"] ?? doc.id,
+        createdBy: payload["createdBy"] ?? null,
+        createdAt: timestampToIso(payload["createdAt"] as admin.firestore.Timestamp | undefined),
+        expiresAt: timestampToIso(payload["expiresAt"] as admin.firestore.Timestamp | undefined),
+        uses: payload["uses"] ?? 0,
+        maxUses: payload["maxUses"] ?? null,
+      };
+    });
+
+    return { invites };
+  }
+);
+
+export const redeemInviteCode = httpsFn.onCall<Record<string, unknown>, Record<string, unknown>>(
+  { region: "us-central1" },
+  async (request: CallableRequest): Promise<Record<string, unknown>> => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new httpsFn.HttpsError("unauthenticated", "auth_required");
+    }
+
+    const data = (request.data ?? {}) as Record<string, unknown>;
+    const codeRaw = data["code"];
+    const code = typeof codeRaw === "string" && codeRaw.trim().length > 0 ? codeRaw.trim().toUpperCase() : undefined;
+    if (!code) {
+      throw new httpsFn.HttpsError("invalid-argument", "invalid_code");
+    }
+
+    const displayNameRaw = data["displayName"];
+    const displayName = typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0 ? displayNameRaw.trim() : undefined;
+
+    const inviteQuery = await db.collectionGroup("invites").where("code", "==", code).limit(1).get();
+    if (inviteQuery.empty) {
+      throw new httpsFn.HttpsError("not-found", "invite_not_found");
+    }
+
+    const inviteDoc = inviteQuery.docs[0];
+    const roomRef = inviteDoc.ref.parent.parent;
+    if (!roomRef) {
+      throw new httpsFn.HttpsError("internal", "room_not_found");
+    }
+
+    let alreadyMember = false;
+    await db.runTransaction(async (tx: admin.firestore.Transaction) => {
+      const freshInvite = await tx.get(inviteDoc.ref);
+      if (!freshInvite.exists) {
+        throw new httpsFn.HttpsError("not-found", "invite_not_found");
+      }
+
+      const payload = freshInvite.data() ?? {};
+      const expiresAt = payload["expiresAt"] as admin.firestore.Timestamp | undefined;
+      if (expiresAt && expiresAt.toDate().getTime() <= Date.now()) {
+        throw new httpsFn.HttpsError("failed-precondition", "invite_expired");
+      }
+
+      const maxUsesValue = payload["maxUses"];
+      const maxUses = typeof maxUsesValue === "number" ? Math.trunc(maxUsesValue) : null;
+      const usesValue = payload["uses"];
+      const uses = typeof usesValue === "number" ? usesValue : 0;
+      if (maxUses !== null && uses >= maxUses) {
+        throw new httpsFn.HttpsError("failed-precondition", "invite_maxed_out");
+      }
+
+      const memberRef = roomRef.collection("members").doc(uid);
+      const memberSnap = await tx.get(memberRef);
+      alreadyMember = memberSnap.exists;
+
+      if (!alreadyMember) {
+        tx.set(
+          memberRef,
+          {
+            role: (memberSnap.data()?.role as string | undefined) ?? "member",
+            joinedAt: admin.firestore.FieldValue.serverTimestamp(),
+            displayName: displayName ?? ((request.auth?.token?.name as string | undefined) ?? "Member"),
+          },
+          { merge: true }
+        );
+        tx.set(
+          roomRef,
+          {
+            meta: {
+              members: admin.firestore.FieldValue.increment(1),
+              lastMsgAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+          },
+          { merge: true }
+        );
+        tx.update(inviteDoc.ref, {
+          uses: admin.firestore.FieldValue.increment(1),
+        });
+      }
+    });
+
+    return {
+      roomId: roomRef.id,
+      joined: true,
+      alreadyMember,
+    };
+  }
+);
