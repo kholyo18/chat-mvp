@@ -2150,6 +2150,7 @@ class _RoomPageState extends State<RoomPage> {
         ],
       ),
       bottomNavigationBar: _ChatInput(
+        roomId: roomId,
         onSendText: (txt) => _sendMessage(txt),
         onPickImage: _pickImage,
         onPickVideo: _pickVideo,
@@ -2441,6 +2442,7 @@ class _LegacyChatInputState extends State<_LegacyChatInput> {
 // ───────────────── Chat Input (drop-in) ─────────────────
 class _ChatInput extends StatefulWidget {
   const _ChatInput({
+    required this.roomId,
     required this.onSendText,
     required this.onPickImage,
     required this.onPickVideo,
@@ -2448,6 +2450,7 @@ class _ChatInput extends StatefulWidget {
     this.recording = false,
   });
 
+  final String roomId;
   final Future<bool> Function(String text) onSendText;
   final Future<void> Function() onPickImage;
   final Future<void> Function() onPickVideo;
@@ -2459,7 +2462,7 @@ class _ChatInput extends StatefulWidget {
 }
 
 class _ChatInputState extends State<_ChatInput> {
-  final _ctrl = TextEditingController();
+  final messageController = TextEditingController();
   final _focus = FocusNode();
   bool _canSend = false;
   bool _sending = false;
@@ -2467,40 +2470,66 @@ class _ChatInputState extends State<_ChatInput> {
   @override
   void initState() {
     super.initState();
-    _ctrl.addListener(_onChanged);
+    messageController.addListener(_onChanged);
   }
 
   @override
   void dispose() {
-    _ctrl.removeListener(_onChanged);
-    _ctrl.dispose();
+    messageController.removeListener(_onChanged);
+    messageController.dispose();
     _focus.dispose();
     super.dispose();
   }
 
   void _onChanged() {
-    final enable = _ctrl.text.trim().isNotEmpty;
+    final enable = messageController.text.trim().isNotEmpty;
     if (enable != _canSend) setState(() => _canSend = enable);
   }
 
-  Future<void> _submit() async {
+  Future<void> sendTextMessage(String roomId) async {
     if (_sending) return;
-    final text = _ctrl.text.trim();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please sign in')),
+        );
+      }
+      return;
+    }
+    final text = messageController.text.trim();
     if (text.isEmpty) return;
+
     setState(() => _sending = true);
-    var success = false;
     try {
-      success = await widget.onSendText(text);
-      if (success) {
-        _ctrl.clear();
+      await cf.FirebaseFirestore.instance
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .add({
+        'text': text,
+        'senderId': user.uid,
+        'createdAt': cf.FieldValue.serverTimestamp(),
+        'type': 'text',
+      });
+      messageController.clear();
+      if (mounted) {
         _focus.requestFocus();
+        setState(() => _canSend = false);
+      }
+    } catch (err, stack) {
+      debugPrint('sendTextMessage error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذر إرسال الرسالة')), // localized message
+        );
       }
     } finally {
       if (mounted) {
-        setState(() {
-          _sending = false;
-          _canSend = _ctrl.text.trim().isNotEmpty;
-        });
+        setState(() => _sending = false);
+      } else {
+        _sending = false;
       }
     }
   }
@@ -2549,10 +2578,10 @@ class _ChatInputState extends State<_ChatInput> {
             IconButton(icon: const Icon(Icons.mic_none_outlined), onPressed: widget.onStartVoice, tooltip: 'صوت'),
             Expanded(
               child: TextField(
-                controller: _ctrl,
+                controller: messageController,
                 focusNode: _focus,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _submit(),
+                onSubmitted: (_) => sendTextMessage(widget.roomId),
                 decoration: const InputDecoration(
                   hintText: 'اكتب رسالة...',
                   border: InputBorder.none,
@@ -2565,7 +2594,9 @@ class _ChatInputState extends State<_ChatInput> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6),
               child: IconButton.filled(
-                onPressed: (_canSend && !_sending) ? _submit : null,
+                onPressed: (_canSend && !_sending)
+                    ? () async { await sendTextMessage(widget.roomId); }
+                    : null,
                 icon: const Icon(Icons.send),
                 tooltip: 'إرسال',
               ),
