@@ -4,30 +4,39 @@
       "android": {
         "default": {
           "projectId": "chat-mvp-20750",
-          "appId": "1:1094490827601:android:96db3f4c3b27b2f2e74170",
+          "appId": "1:1094490827601:android:96db3f4c3b27b2f2",
           "fileOutput": "android/app/google-services.json"
         }
-      },
-      "dart": {
-        "lib/firebase_options.dart": {
-          "projectId": "chat-mvp-20750",
-          "configurations": {
-            "android": "1:1094490827601:android:96db3f4c3b27b2f2e74170",
-            "web": "1:1094490827601:web:377083e014a997e6e74170"
-          }
+      }
+    },
+    "dart": {
+      "lib/firebase_options.dart": {
+        "projectId": "chat-mvp-20750",
+        "configurations": {
+          "android": "1:1094490827601:android:96db3f4c3b27b2f2",
+          "web": "1:1094490827601:web:377083e014a997e6e74170"
         }
       }
     }
   },
+
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20",
+    "region": "us-central1"
+  },
+
   "firestore": {
     "database": "(default)",
     "location": "nam5",
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
+
   "storage": {
     "rules": "storage.rules"
   },
+
   "database": {
     "rules": "database.rules.json"
   }
