@@ -35,6 +35,7 @@ import 'package:flutter/services.dart'; // للروابط العميقة/الح�
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 
@@ -531,6 +532,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/login': (_) => const LoginPage(),
                 '/appearance': (_) => const AppearancePage(),
                 '/translator': (_) => const TranslatorSettingsPage(),
+                '/buy-coins': (_) => const CoinsPurchasePage(),
 
                 // غرف ومجتمعات + دردشة
                 '/rooms': (_) => const RoomsTab(),
@@ -633,6 +635,10 @@ class LoginPage extends StatelessWidget {
           },
           label: const Text('Continue as Guest'),
         ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => Navigator.of(context).pushNamed('/buy-coins'),
+        child: const Icon(Icons.monetization_on),
       ),
     );
   }
