@@ -1050,7 +1050,9 @@ class _StorePageState extends State<StorePage> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
       return const Scaffold(
-        body: Center(child: Text('Please login to access the store.')),
+        body: Center(
+          child: const Text('Please login to access the store.'),
+        ),
       );
     }
 
@@ -1058,9 +1060,11 @@ class _StorePageState extends State<StorePage> {
     final provider = _provider;
 
     if (_initializing) {
-      return const Scaffold(
-        appBar: AppBar(title: Text('Store')),
-        body: Center(child: CircularProgressIndicator()),
+      return Scaffold(
+        appBar: AppBar(title: const Text('Store')),
+        body: Center(
+          child: const CircularProgressIndicator(),
+        ),
       );
     }
 
