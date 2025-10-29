@@ -21,6 +21,7 @@ import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -38,6 +39,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
+import 'services/invites_service.dart';
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -5765,17 +5767,17 @@ Future<void> postSystemMessage({required String roomId, required String text}) a
 }
 
 Future<String> generateInviteCode(String roomId, {int? maxUses, cf.Timestamp? expiresAt}) async {
-  final fs = cf.FirebaseFirestore.instance;
-  final code = _randomCode(7);
-  await fs.collection('rooms').doc(roomId).collection('invites').doc(code).set({
-    'code': code,
-    'createdBy': FirebaseAuth.instance.currentUser!.uid,
-    'createdAt': cf.FieldValue.serverTimestamp(),
-    'uses': 0,
-    'maxUses': maxUses,
-    'expiresAt': expiresAt,
-  });
-  return code;
+  try {
+    return await InvitesService.createInvite(roomId: roomId, maxUses: maxUses, expiresAt: expiresAt);
+  } on FirebaseFunctionsException catch (err, stack) {
+    debugPrint('generateInviteCode error: ${err.code} ${err.message}');
+    FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    rethrow;
+  } catch (err, stack) {
+    debugPrint('generateInviteCode error: $err');
+    FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    rethrow;
+  }
 }
 
 String _randomCode(int len) {
@@ -5785,24 +5787,20 @@ String _randomCode(int len) {
 }
 
 Future<bool> joinRoomWithCode(String code) async {
-  final fs = cf.FirebaseFirestore.instance;
-  final snap = await fs.collectionGroup('invites').where('code', isEqualTo: code).limit(1).get();
-  if (snap.docs.isEmpty) return false;
-  final invite = snap.docs.first;
-  final roomId = invite.reference.parent.parent!.id;
-  final d = invite.data();
-  final maxUses = d['maxUses'] as int?;
-  final uses = (d['uses'] ?? 0) as int;
-  final exp = d['expiresAt'];
-
-  if (exp is cf.Timestamp && DateTime.now().isAfter(exp.toDate())) return false;
-  if (maxUses != null && uses >= maxUses) return false;
-
-  final ok = await joinRoom(roomId);
-  if (ok) {
-    await invite.reference.update({'uses': cf.FieldValue.increment(1)});
+  try {
+    final me = FirebaseAuth.instance.currentUser;
+    final displayName = me?.displayName;
+    final result = await InvitesService.redeemInvite(code: code, displayName: displayName);
+    return result.joined;
+  } on FirebaseFunctionsException catch (err, stack) {
+    debugPrint('joinRoomWithCode error: ${err.code} ${err.message}');
+    FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    return false;
+  } catch (err, stack) {
+    debugPrint('joinRoomWithCode error: $err');
+    FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    return false;
   }
-  return ok;
 }
 
 Future<bool> joinRoom(String roomId) async {
@@ -6160,12 +6158,25 @@ class _RoomInvitesTab extends StatefulWidget {
 class _RoomInvitesTabState extends State<_RoomInvitesTab> {
   final usesC = TextEditingController();
   cf.Timestamp? _exp;
+  bool _loading = false;
+  bool _creating = false;
+  String? _error;
+  List<InviteCodeInfo> _invites = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInvites();
+  }
+
+  @override
+  void dispose() {
+    usesC.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final q = cf.FirebaseFirestore.instance.collection('rooms').doc(widget.roomId)
-      .collection('invites').orderBy('createdAt', descending: true).limit(50).snapshots();
-
     return Column(
       children: [
         Padding(
@@ -6181,68 +6192,191 @@ class _RoomInvitesTabState extends State<_RoomInvitesTab> {
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
-                onPressed: () async {
-                  final maxUses = int.tryParse(usesC.text);
-                  final code = await generateInviteCode(widget.roomId, maxUses: maxUses, expiresAt: _exp);
-                  if (mounted) {
-                    await Clipboard.setData(ClipboardData(text: code));
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم إنشاء الكود ونسخه: $code')));
-                  }
-                },
-                icon: const Icon(Icons.link_rounded),
-                label: const Text('إنشاء كود'),
+                onPressed: _creating ? null : _handleCreateInvite,
+                icon: _creating
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.link_rounded),
+                label: Text(_creating ? 'جارٍ الإنشاء...' : 'إنشاء كود'),
               ),
               const SizedBox(width: 8),
               IconButton(
                 onPressed: () async {
                   final now = DateTime.now();
                   final picked = await showDatePicker(
-                    context: context, initialDate: now, firstDate: now, lastDate: now.add(const Duration(days: 365)));
-                  if (picked != null) setState(()=> _exp = cf.Timestamp.fromDate(DateTime(picked.year, picked.month, picked.day, 23, 59)));
+                    context: context, initialDate: now, firstDate: now, lastDate: now.add(const Duration(days: 365)),
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      _exp = cf.Timestamp.fromDate(DateTime(picked.year, picked.month, picked.day, 23, 59));
+                    });
+                  }
                 },
                 icon: const Icon(Icons.event),
                 tooltip: 'تعيين تاريخ انتهاء',
               ),
+              if (_exp != null)
+                IconButton(
+                  onPressed: () => setState(() => _exp = null),
+                  icon: const Icon(Icons.close),
+                  tooltip: 'إزالة تاريخ الانتهاء',
+                ),
             ],
           ),
         ),
         const Divider(height: 1),
-        Expanded(
-          child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
-            stream: q,
-            builder: (c, s) {
-              if (!s.hasData) return const Center(child: CircularProgressIndicator());
-              final docs = s.data!.docs;
-              if (docs.isEmpty) return const Center(child: Text('لا أكواد دعوة بعد.'));
-              return ListView.separated(
-                padding: const EdgeInsets.all(12),
-                itemCount: docs.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 6),
-                itemBuilder: (_, i) {
-                  final d = docs[i].data();
-                  final code = (d['code'] ?? '') as String;
-                  final uses = (d['uses'] ?? 0) as int;
-                  final max = d['maxUses'];
-                  final exp = d['expiresAt'] as cf.Timestamp?;
-                  return Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.key_rounded, color: kTeal),
-                      title: Text(code),
-                      subtitle: Text('استخدامات: $uses${max!=null ? '/$max' : ''}${exp!=null ? ' • ينتهي: ${shortTime(exp)}' : ''}'),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.copy_rounded),
-                        onPressed: () => Clipboard.setData(ClipboardData(text: code))
-                          .then((_) => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم النسخ')))),
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-        ),
+        Expanded(child: _buildInvitesBody()),
       ],
     );
+  }
+
+  Widget _buildInvitesBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+              const SizedBox(height: 12),
+              Text(_error!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () => _loadInvites(showSpinner: true),
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_invites.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: () => _loadInvites(showSpinner: false),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 120),
+            Center(child: Text('لا أكواد دعوة بعد.')),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () => _loadInvites(showSpinner: false),
+      child: ListView.separated(
+        padding: const EdgeInsets.all(12),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: _invites.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 6),
+        itemBuilder: (_, i) {
+          final invite = _invites[i];
+          final max = invite.maxUses;
+          final exp = invite.expiresAt;
+          final subtitle = StringBuffer('استخدامات: ${invite.uses}${max != null ? '/$max' : ''}');
+          if (exp != null) {
+            subtitle.write(' • ينتهي: ${shortTime(exp)}');
+          }
+          return Card(
+            child: ListTile(
+              leading: const Icon(Icons.key_rounded, color: kTeal),
+              title: Text(invite.code),
+              subtitle: Text(subtitle.toString()),
+              trailing: IconButton(
+                icon: const Icon(Icons.copy_rounded),
+                onPressed: () => Clipboard.setData(ClipboardData(text: invite.code))
+                    .then((_) => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم النسخ')))),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _handleCreateInvite() async {
+    setState(() {
+      _creating = true;
+    });
+    try {
+      final maxUses = int.tryParse(usesC.text.trim());
+      final code = await generateInviteCode(widget.roomId, maxUses: maxUses, expiresAt: _exp);
+      if (!mounted) return;
+      await Clipboard.setData(ClipboardData(text: code));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('تم إنشاء الكود ونسخه: $code')));
+      await _loadInvites(showSpinner: false);
+    } on FirebaseFunctionsException catch (err) {
+      if (!mounted) return;
+      final message = _friendlyError(err.code);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('فشل إنشاء الكود: $err')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _creating = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadInvites({bool showSpinner = true}) async {
+    if (showSpinner) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    } else {
+      setState(() {
+        _error = null;
+      });
+    }
+    try {
+      final invites = await InvitesService.listInvites(roomId: widget.roomId);
+      if (!mounted) return;
+      setState(() {
+        _invites = invites;
+        _loading = false;
+      });
+    } on FirebaseFunctionsException catch (err, stack) {
+      debugPrint('listInvites error: ${err.code} ${err.message}');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = _friendlyError(err.code);
+      });
+    } catch (err, stack) {
+      debugPrint('listInvites error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'حدث خطأ أثناء تحميل الدعوات. حاول مجددًا لاحقًا.';
+      });
+    }
+  }
+
+  String _friendlyError(String code) {
+    switch (code) {
+      case 'permission-denied':
+        return 'ليس لديك صلاحية لإدارة الدعوات في هذه الغرفة.';
+      case 'failed-precondition':
+        return 'لا يمكن معالجة الطلب بسبب حالة الغرفة أو الدعوة.';
+      case 'not-found':
+        return 'الدعوة غير موجودة أو انتهت صلاحيتها.';
+      case 'deadline-exceeded':
+        return 'انتهت مهلة الطلب، تحقق من الاتصال وحاول مرة أخرى.';
+      default:
+        return 'تعذر تنفيذ الطلب. (${code.isEmpty ? 'خطأ غير معروف' : code})';
+    }
   }
 }
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 10/12] =====================

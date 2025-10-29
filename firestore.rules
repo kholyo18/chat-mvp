@@ -10,6 +10,15 @@ service cloud.firestore {
         allow read: if isSignedIn();
         allow create: if isSignedIn() && request.resource.data.text is string && request.resource.data.text.size() > 0;
       }
+
+      match /members/{uid} {
+        allow read: if isSignedIn();
+        allow create, update: if isSignedIn() && request.auth.uid == uid;
+      }
+
+      match /invites/{inviteId} {
+        allow read, write: if false;
+      }
     }
 
     match /users/{uid} {
