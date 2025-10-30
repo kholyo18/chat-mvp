@@ -6,14 +6,12 @@
 
 // ---------- Imports أساسية ----------
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -40,6 +38,9 @@ import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
+// CODEX-BEGIN:TRANSLATOR_IMPORT
+import 'modules/translator/translator_service.dart';
+// CODEX-END:TRANSLATOR_IMPORT
 // CODEX-BEGIN:STORE_IMPORTS
 import 'services/cache_service.dart';
 import 'services/firestore_service.dart';
@@ -373,84 +374,6 @@ extension NotificationsDeepLinks on NotificationsService {
   }
 }
 
-// ---------- Translator (MVP HTTP) ----------
-class TranslatorService extends ChangeNotifier {
-  String targetLang = 'ar';
-  bool autoTranslateEnabled = true;
-
-  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
-
-  Future<void> load() async {
-    try {
-      final sp = await _prefs;
-      targetLang = sp.getString('i18n.lang') ?? 'ar';
-      autoTranslateEnabled = sp.getBool('i18n.auto') ?? true;
-      notifyListeners();
-    } catch (err, stack) {
-      debugPrint('TranslatorService.load error: $err');
-      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
-    }
-  }
-
-  Future<void> setLang(String code) async {
-    if (code == targetLang) return;
-    targetLang = code;
-    try {
-      final sp = await _prefs;
-      await sp.setString('i18n.lang', code);
-      notifyListeners();
-    } catch (err, stack) {
-      debugPrint('TranslatorService.setLang error: $err');
-      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
-    }
-  }
-
-  Future<void> setAuto(bool v) async {
-    if (v == autoTranslateEnabled) return;
-    autoTranslateEnabled = v;
-    try {
-      final sp = await _prefs;
-      await sp.setBool('i18n.auto', v);
-      notifyListeners();
-    } catch (err, stack) {
-      debugPrint('TranslatorService.setAuto error: $err');
-      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
-    }
-  }
-
-  Future<String> translate(String text, {String? to}) async {
-    final tl = to ?? targetLang;
-    if (!autoTranslateEnabled || text.trim().isEmpty) return text;
-    final uri = Uri.parse(
-      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=$tl&dt=t&q=${Uri.encodeComponent(text)}'
-    );
-    try {
-      final res = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        if (data is List && data.isNotEmpty && data.first is List) {
-          final firstRow = data.first as List;
-          if (firstRow.isNotEmpty && firstRow.first is List) {
-            final firstCell = firstRow.first as List;
-            if (firstCell.isNotEmpty && firstCell.first is String) {
-              return firstCell.first as String;
-            }
-          }
-        }
-      } else {
-        debugPrint('TranslatorService.translate unexpected status ${res.statusCode}');
-      }
-    } on TimeoutException catch (err, stack) {
-      debugPrint('TranslatorService.translate timeout: $err');
-      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
-    } catch (err, stack) {
-      debugPrint('TranslatorService.translate error: $err');
-      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
-    }
-    return text;
-  }
-}
-
 // ---------- Navigator ----------
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -529,12 +452,18 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                       await fcm.init(user.uid);
                       // تطبيق إعدادات الترجمة من الوثيقة
                       final tr = _.read<TranslatorService>();
-                      final doc = await cf.FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-                      final i18n = (doc.data() ?? {})['i18n'] as Map<String, dynamic>?;
-                      if (i18n != null) {
-                        await tr.setLang((i18n['target'] as String?) ?? tr.targetLang);
-                        await tr.setAuto((i18n['auto'] as bool?) ?? true);
+                      // CODEX-BEGIN:TRANSLATOR_SETTINGS_BOOT
+                      final settingsSnap = await cf.FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(user.uid)
+                          .collection('settings')
+                          .doc('app')
+                          .get();
+                      final settingsData = settingsSnap.data();
+                      if (settingsData != null) {
+                        tr.applyRemoteSettings(settingsData);
                       }
+                      // CODEX-END:TRANSLATOR_SETTINGS_BOOT
                       navigatorKey.currentState?.pushReplacementNamed('/home');
                     }),
                 '/home': (_) => const HomePage(),
@@ -743,7 +672,15 @@ class TranslatorSettingsPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          SwitchListTile(title: const Text('Auto translate messages'), value: t.autoTranslateEnabled, onChanged: t.setAuto),
+          SwitchListTile(
+            title: const Text('Auto translate messages'),
+            value: t.autoTranslateEnabled,
+            // CODEX-BEGIN:TRANSLATOR_TOGGLE_HANDLER
+            onChanged: (v) {
+              t.setAuto(v);
+            },
+            // CODEX-END:TRANSLATOR_TOGGLE_HANDLER
+          ),
           const SizedBox(height: 8),
           const Text('Target language'),
           const SizedBox(height: 8),
@@ -2283,9 +2220,41 @@ class _RoomPageState extends State<RoomPage> {
     final rid = roomId;
     if (_currentRoomId != rid) {
       _currentRoomId = rid;
+      // CODEX-BEGIN:ROOM_TRANSLATION_OVERRIDE_SYNC
+      unawaited(_loadRoomTranslationOverrides(rid));
+      // CODEX-END:ROOM_TRANSLATION_OVERRIDE_SYNC
       _subscribeLive();
     }
   }
+
+  // CODEX-BEGIN:ROOM_TRANSLATION_OVERRIDE_HELPER
+  Future<void> _loadRoomTranslationOverrides(String rid) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return;
+    }
+    try {
+      final snap = await cf.FirebaseFirestore.instance
+          .collection('rooms')
+          .doc(rid)
+          .collection('members')
+          .doc(user.uid)
+          .get();
+      if (!mounted) {
+        return;
+      }
+      final data = snap.data();
+      context.read<TranslatorService>().applyRoomOverride(
+            rid,
+            auto: data?['autoTranslateOverride'] as bool?,
+            targetLang: (data?['targetLangOverride'] as String?),
+          );
+    } catch (err, stack) {
+      debugPrint('RoomPage._loadRoomTranslationOverrides error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
+  }
+  // CODEX-END:ROOM_TRANSLATION_OVERRIDE_HELPER
 
   void _subscribeLive() {
     _liveSub?.cancel();
@@ -2332,6 +2301,12 @@ class _RoomPageState extends State<RoomPage> {
         FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
       }
     }());
+    // CODEX-BEGIN:ROOM_TRANSLATION_CLEAR
+    final rid = _currentRoomId;
+    if (rid != null) {
+      context.read<TranslatorService>().clearRoomOverride(rid);
+    }
+    // CODEX-END:ROOM_TRANSLATION_CLEAR
     super.dispose();
   }
 
@@ -2365,15 +2340,6 @@ class _RoomPageState extends State<RoomPage> {
       return false;
     }
 
-    final tr = context.read<TranslatorService>();
-    Map<String, dynamic>? translated;
-    if (tr.autoTranslateEnabled) {
-      final translatedText = await tr.translate(trimmed);
-      if (translatedText != trimmed) {
-        translated = {tr.targetLang: translatedText};
-      }
-    }
-
     final docRef = ref.doc();
     final payload = {
       'id': docRef.id,
@@ -2383,8 +2349,6 @@ class _RoomPageState extends State<RoomPage> {
       'type': 'text',
       'text': trimmed,
       'replyTo': _replyToId,
-      'translated': translated,
-      'autoTranslated': translated != null,
       'createdAt': cf.FieldValue.serverTimestamp(),
       'createdAtLocal': DateTime.now().millisecondsSinceEpoch,
       'reactions': {},
@@ -2680,8 +2644,43 @@ class _MessageBubble extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final bg = mine ? cs.primaryContainer : cs.surfaceVariant;
     final BoxBorder? border = mine ? Border.all(color: kTeal.withOpacity(0.35)) : null;
-    final tr = context.read<TranslatorService>();
-    final translated = message.translated?[tr.targetLang]?.toString();
+    // CODEX-BEGIN:TRANSLATOR_RENDER
+    final tr = context.watch<TranslatorService>();
+    final baseText = message.text ?? '';
+    final roomLang = tr.effectiveLangForRoom(roomId);
+    final autoEnabled = tr.isAutoEnabledForRoom(roomId);
+    final showOriginalOnly = tr.isShowingOriginal(message.id);
+    String? translated;
+    if (!showOriginalOnly && autoEnabled && baseText.isNotEmpty) {
+      translated = tr.getCachedTranslation(message.id, roomLang);
+      translated ??= message.translated?[roomLang]?.toString();
+      if (translated != null && translated.trim().isNotEmpty) {
+        if (translated.trim() != baseText.trim()) {
+          tr.primeTranslation(message.id, roomLang, translated);
+        } else {
+          translated = null;
+        }
+      } else {
+        tr.requestTranslation(roomId: roomId, messageId: message.id, text: baseText);
+      }
+    }
+    final bool showTranslatedText =
+        !showOriginalOnly && translated != null && translated.trim().isNotEmpty;
+
+    VoidCallback? showOriginalAction;
+    VoidCallback? showTranslationAction;
+    if (autoEnabled && baseText.isNotEmpty) {
+      if (showTranslatedText) {
+        showOriginalAction = () {
+          tr.showOriginal(message.id);
+        };
+      } else if (showOriginalOnly) {
+        showTranslationAction = () {
+          tr.showTranslation(message.id);
+        };
+      }
+    }
+    // CODEX-END:TRANSLATOR_RENDER
 
     Widget content;
     switch (message.type) {
@@ -2726,12 +2725,11 @@ class _MessageBubble extends StatelessWidget {
         ]);
         break;
       default:
-        final baseText = message.text ?? '';
-        content = (translated != null && translated.trim().isNotEmpty)
+        content = (showTranslatedText)
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(translated, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(translated!, style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text(baseText, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
                   if (_hasUrl(baseText)) _LinkPreview(text: baseText),
@@ -2760,9 +2758,21 @@ class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onLongPress: (){
-          showModalBottomSheet(context: context, builder: (_) => _MessageActions(
-            onReact: onReact, onReply: onReply, onPin: onPin, onDelete: onDelete, pinned: message.pinned));
+        onLongPress: () {
+          showModalBottomSheet(
+            context: context,
+            builder: (_) => _MessageActions(
+              onReact: onReact,
+              onReply: onReply,
+              onPin: onPin,
+              onDelete: onDelete,
+              pinned: message.pinned,
+              // CODEX-BEGIN:TRANSLATOR_ACTIONS
+              onShowOriginal: showOriginalAction,
+              onShowTranslation: showTranslationAction,
+              // CODEX-END:TRANSLATOR_ACTIONS
+            ),
+          );
         },
         onDoubleTap: () async {
           if (mine && message.type == MsgType.text && (message.text?.isNotEmpty ?? false)) {
@@ -3174,6 +3184,8 @@ class _MessageActions extends StatelessWidget {
   final VoidCallback onPin;
   final VoidCallback onDelete;
   final bool pinned;
+  final VoidCallback? onShowOriginal;
+  final VoidCallback? onShowTranslation;
   const _MessageActions({
     super.key,
     required this.onReact,
@@ -3181,6 +3193,8 @@ class _MessageActions extends StatelessWidget {
     required this.onPin,
     required this.onDelete,
     required this.pinned,
+    this.onShowOriginal,
+    this.onShowTranslation,
   });
 
   @override
@@ -3212,6 +3226,26 @@ class _MessageActions extends StatelessWidget {
               onReply();
             },
           ),
+          // CODEX-BEGIN:TRANSLATOR_ACTION_ITEMS
+          if (onShowOriginal != null)
+            ListTile(
+              leading: const Icon(Icons.translate_rounded),
+              title: const Text('Show original'),
+              onTap: () {
+                Navigator.of(context).pop();
+                onShowOriginal?.call();
+              },
+            ),
+          if (onShowTranslation != null)
+            ListTile(
+              leading: const Icon(Icons.translate_rounded),
+              title: const Text('Show translation'),
+              onTap: () {
+                Navigator.of(context).pop();
+                onShowTranslation?.call();
+              },
+            ),
+          // CODEX-END:TRANSLATOR_ACTION_ITEMS
           ListTile(
             leading: Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
             title: Text(pinned ? 'إلغاء التثبيت' : 'تثبيت'),
