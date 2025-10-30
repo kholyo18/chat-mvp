@@ -3,6 +3,9 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+// CODEX-BEGIN:PRIVACY_SERVICE_IMPORT
+import 'user_settings_service.dart';
+// CODEX-END:PRIVACY_SERVICE_IMPORT
 
 sealed class SafeResult<T> {
   const SafeResult();
@@ -867,6 +870,26 @@ class FirestoreService {
       final String threadId = participants.join('_');
       final DocumentReference<Map<String, dynamic>> docRef =
           _firestore.collection('dm_threads').doc(threadId);
+      // CODEX-BEGIN:PRIVACY_DM_CHECK
+      final existing = await docRef.get();
+      if (!existing.exists) {
+        final settings = await UserSettingsService().fetchPrivacy(otherUid);
+        if (settings.canMessage == 'no_one') {
+          throw Exception('لا يمكن مراسلة هذا المستخدم حالياً.');
+        }
+        if (settings.canMessage == 'followers') {
+          final followerDoc = await _firestore
+              .collection('follows')
+              .doc(otherUid)
+              .collection('followers')
+              .doc(currentUid)
+              .get();
+          if (!followerDoc.exists) {
+            throw Exception('يمكن للمتابعين فقط بدء محادثة خاصة.');
+          }
+        }
+      }
+      // CODEX-END:PRIVACY_DM_CHECK
       return _firestore.runTransaction<String>((transaction) async {
         final snapshot = await transaction.get(docRef);
         if (!snapshot.exists) {

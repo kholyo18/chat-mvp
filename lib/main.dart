@@ -48,6 +48,11 @@ import 'services/firestore_service.dart';
 // CODEX-BEGIN:WALLET_IMPORT
 import 'modules/wallet/wallet_controller.dart';
 // CODEX-END:WALLET_IMPORT
+// CODEX-BEGIN:PRIVACY_IMPORTS
+import 'modules/privacy/privacy_controller.dart';
+import 'modules/privacy/privacy_settings_page.dart';
+import 'services/user_settings_service.dart';
+// CODEX-END:PRIVACY_IMPORTS
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -232,10 +237,18 @@ class AppUser extends ChangeNotifier {
             'showLastSeen': true,
             'showOnline': true,
             'showProfilePic': true,
-            'storyVisibility': 'everyone', // everyone/contacts/custom
-          },
-          'notify': {'dnd': false, 'mentionsOnly': true},
-        }, cf.SetOptions(merge: true));
+          'storyVisibility': 'everyone', // everyone/contacts/custom
+        },
+        'notify': {'dnd': false, 'mentionsOnly': true},
+      }, cf.SetOptions(merge: true));
+      // CODEX-BEGIN:PRIVACY_DEFAULTS
+      await cf.FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc('privacy')
+          .set(PrivacySettings.defaults.toMap(), cf.SetOptions(merge: true));
+      // CODEX-END:PRIVACY_DEFAULTS
       }
     } catch (err, stack) {
       debugPrint('AppUser._ensureDoc error: $err');
@@ -404,6 +417,9 @@ class ChatUltraApp extends StatefulWidget {
 class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver {
   final presence = PresenceService();
   final fcm = NotificationsService();
+  // CODEX-BEGIN:PRIVACY_PRESENCE_STATE
+  bool? _lastPresenceVisible;
+  // CODEX-END:PRIVACY_PRESENCE_STATE
 
   @override
   void initState() { super.initState(); WidgetsBinding.instance.addObserver(this); }
@@ -415,11 +431,31 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     if (state == AppLifecycleState.resumed) {
-      unawaited(presence.start(uid));
+      // CODEX-BEGIN:PRIVACY_PRESENCE_RESUME
+      if (_lastPresenceVisible == false) {
+        unawaited(presence.stop(uid));
+      } else {
+        unawaited(presence.start(uid));
+      }
+      // CODEX-END:PRIVACY_PRESENCE_RESUME
     } else if (state == AppLifecycleState.paused) {
       unawaited(presence.stop(uid));
     }
   }
+
+  // CODEX-BEGIN:PRIVACY_PRESENCE_HELPER
+  void _handlePresenceVisibility(String uid, bool showOnline) {
+    if (_lastPresenceVisible == showOnline) {
+      return;
+    }
+    _lastPresenceVisible = showOnline;
+    if (showOnline) {
+      unawaited(presence.start(uid));
+    } else {
+      unawaited(presence.stop(uid));
+    }
+  }
+  // CODEX-END:PRIVACY_PRESENCE_HELPER
 
   @override
   Widget build(BuildContext context) {
@@ -428,10 +464,43 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
         ChangeNotifierProvider(create: (_) => AppTheme()..load()),
         ChangeNotifierProvider(create: (_) => AppUser()..init()),
         ChangeNotifierProvider(create: (_) => TranslatorService()..load()),
+        // CODEX-BEGIN:PRIVACY_PROVIDER
+        ChangeNotifierProxyProvider2<AppUser, AppTheme, PrivacySettingsController>(
+          create: (_) => PrivacySettingsController(UserSettingsService()),
+          update: (context, appUser, theme, controller) {
+            final current = controller ?? PrivacySettingsController(UserSettingsService());
+            current.onError = (error, stack) {
+              debugPrint('PrivacySettingsController error: $error');
+              FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
+            };
+            unawaited(current.attach(
+              uid: appUser.firebaseUser?.uid,
+              highContrastGetter: () => theme.highContrast,
+              highContrastSetter: (value) {
+                if (theme.highContrast != value) {
+                  theme.setContrast(value);
+                }
+              },
+            ));
+            return current;
+          },
+        ),
+        // CODEX-END:PRIVACY_PROVIDER
       ],
-      child: Consumer2<AppTheme, AppUser>(
-        builder: (_, theme, appUser, __) {
+      child: Consumer3<AppTheme, AppUser, PrivacySettingsController>(
+        builder: (_, theme, appUser, privacy, __) {
           final td = theme.dark ? buildDark(theme.seed) : buildLight(theme.seed);
+          // CODEX-BEGIN:PRIVACY_PRESENCE_OBSERVER
+          final uid = appUser.firebaseUser?.uid;
+          if (uid == null) {
+            _lastPresenceVisible = null;
+          } else {
+            final showOnline = privacy.settings?.showOnline ?? true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _handlePresenceVisibility(uid, showOnline);
+            });
+          }
+          // CODEX-END:PRIVACY_PRESENCE_OBSERVER
           return MediaQuery(
             data: MediaQuery.of(context).copyWith(textScaleFactor: theme.textScale),
             child: MaterialApp(
@@ -448,7 +517,16 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
               routes: {
                 '/': (_) => SplashPage(onReady: (u) async {
                       final user = await _.read<AppUser>().autoLogin();
-                      await presence.start(user.uid);
+                      // CODEX-BEGIN:PRIVACY_BOOTSTRAP
+                      final settingsService = UserSettingsService();
+                      final privacySettings = await settingsService.fetchPrivacy(user.uid);
+                      _lastPresenceVisible = privacySettings.showOnline;
+                      if (privacySettings.showOnline) {
+                        await presence.start(user.uid);
+                      } else {
+                        await presence.stop(user.uid);
+                      }
+                      // CODEX-END:PRIVACY_BOOTSTRAP
                       await fcm.init(user.uid);
                       // تطبيق إعدادات الترجمة من الوثيقة
                       final tr = _.read<TranslatorService>();
@@ -654,7 +732,16 @@ class AppearancePage extends StatelessWidget {
               onChanged: (v)=> theme.setTextScale(v),
             ),
           ),
-          SwitchListTile(value: theme.highContrast, onChanged: theme.setContrast, title: const Text('High contrast')),
+          SwitchListTile(
+            value: theme.highContrast,
+            onChanged: (v) {
+              theme.setContrast(v);
+              // CODEX-BEGIN:PRIVACY_THEME_SYNC
+              unawaited(context.read<PrivacySettingsController>().setHighContrastFromTheme(v));
+              // CODEX-END:PRIVACY_THEME_SYNC
+            },
+            title: const Text('High contrast'),
+          ),
         ],
       ),
     );
@@ -1855,7 +1942,6 @@ class VIPHubPage extends StatelessWidget {
   Widget build(BuildContext context) => const Scaffold(body: Center(child: Text('VIP Hub (part 8)')));
 }
 class ProfileEditPage extends StatelessWidget { const ProfileEditPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Profile Edit (part 7)'))); }
-class PrivacySettingsPage extends StatelessWidget { const PrivacySettingsPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Privacy (part 9)'))); }
 class SettingsHubPage extends StatelessWidget { const SettingsHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Settings (part 9)'))); }
 class AdminPanelPage extends StatelessWidget { const AdminPanelPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Admin (part 9)'))); }
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 2/12] =====================
@@ -3832,6 +3918,53 @@ class StoriesHubPage extends StatelessWidget {
   }
 }
 
+// CODEX-BEGIN:STORY_REPLY_HELPERS
+Future<bool> _storyRepliesAllowed(String ownerUid) async {
+  final viewerUid = FirebaseAuth.instance.currentUser?.uid;
+  if (viewerUid == null || viewerUid == ownerUid) {
+    return false;
+  }
+  try {
+    final service = UserSettingsService();
+    final settings = await service.fetchPrivacy(ownerUid);
+    final mode = settings.allowStoriesReplies;
+    switch (mode) {
+      case 'no_one':
+        return false;
+      case 'contacts':
+        return await _isMutualStoryContact(ownerUid, viewerUid);
+      case 'everyone':
+      default:
+        return true;
+    }
+  } catch (err, stack) {
+    debugPrint('storyRepliesAllowed error: $err');
+    FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    return false;
+  }
+}
+
+Future<bool> _isMutualStoryContact(String ownerUid, String viewerUid) async {
+  final fs = cf.FirebaseFirestore.instance;
+  final followerDoc = await fs
+      .collection('follows')
+      .doc(ownerUid)
+      .collection('followers')
+      .doc(viewerUid)
+      .get();
+  if (!followerDoc.exists) {
+    return false;
+  }
+  final followingDoc = await fs
+      .collection('follows')
+      .doc(ownerUid)
+      .collection('following')
+      .doc(viewerUid)
+      .get();
+  return followingDoc.exists;
+}
+// CODEX-END:STORY_REPLY_HELPERS
+
 class StoryViewerPage extends StatefulWidget {
   final String uid;
   final int initialIndex;
@@ -3842,6 +3975,11 @@ class StoryViewerPage extends StatefulWidget {
 }
 
 class _StoryViewerPageState extends State<StoryViewerPage> {
+  // CODEX-BEGIN:STORY_PRIVACY_HELPERS
+  Future<bool> _canReplyToOwner() {
+    return _storyRepliesAllowed(widget.uid);
+  }
+  // CODEX-END:STORY_PRIVACY_HELPERS
   List<StoryItem> _stories = [];
   int _index = 0;
   bool _loading = true;
@@ -3849,6 +3987,9 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   VideoPlayerController? _videoController;
   bool _videoInitializing = false;
   bool _videoPaused = false;
+  bool _canReply = false;
+  bool _replyKnown = false;
+  bool _replying = false;
 
   @override
   void initState() {
@@ -3874,7 +4015,10 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
         _stories = list;
         _index = safeIndex;
         _loading = false;
+        _replyKnown = false;
+        _canReply = false;
       });
+      unawaited(_evaluateReplyPermission());
       if (list.isNotEmpty) {
         await _prepareCurrent();
       }
@@ -3887,6 +4031,58 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
           _loading = false;
         });
       }
+    }
+  }
+
+  Future<void> _evaluateReplyPermission() async {
+    try {
+      final allowed = await _canReplyToOwner();
+      if (!mounted) return;
+      setState(() {
+        _canReply = allowed;
+        _replyKnown = true;
+      });
+    } catch (err, stack) {
+      debugPrint('StoryViewerPage reply permission error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (!mounted) return;
+      setState(() {
+        _canReply = false;
+        _replyKnown = true;
+      });
+    }
+  }
+
+  Future<void> _replyToStory() async {
+    if (!_replyKnown || !_canReply || _replying) {
+      return;
+    }
+    setState(() {
+      _replying = true;
+    });
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null) {
+      setState(() {
+        _replying = false;
+      });
+      return;
+    }
+    final result = await FirestoreService().openOrCreateDirectThread(
+      currentUid: currentUid,
+      otherUid: widget.uid,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _replying = false;
+    });
+    if (result is SafeSuccess<String>) {
+      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+    } else if (result is SafeFailure<String>) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
     }
   }
 
@@ -4048,6 +4244,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     }
 
     final story = _stories[_index];
+    final replyButtonBottom = (story.type == StoryType.video && _videoController != null) ? 96.0 : 24.0;
     Widget content;
     switch (story.type) {
       case StoryType.text:
@@ -4156,6 +4353,22 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
                     ],
                   ),
                 ),
+              if (_replyKnown && _canReply)
+                Positioned(
+                  bottom: replyButtonBottom,
+                  left: 16,
+                  right: 16,
+                  child: SafeArea(
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _replying ? null : _replyToStory,
+                        icon: const Icon(Icons.reply_rounded),
+                        label: Text(_replying ? 'Opening…' : 'Reply'),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -4176,6 +4389,9 @@ class _StoriesViewerState extends State<_StoriesViewer> {
   List<StoryItem> stories = [];
   int idx = 0;
   bool loading = true;
+  bool canReply = false;
+  bool replyKnown = false;
+  bool replying = false;
 
   @override
   void initState() {
@@ -4199,8 +4415,63 @@ class _StoriesViewerState extends State<_StoriesViewer> {
       stories = list;
       loading = false;
       idx = 0;
+      canReply = false;
+      replyKnown = false;
     });
     if (stories.isNotEmpty) _markViewed(stories.first);
+    unawaited(_evaluateReplyPermission());
+  }
+
+  Future<void> _evaluateReplyPermission() async {
+    try {
+      final allowed = await _storyRepliesAllowed(widget.ownerUid);
+      if (!mounted) return;
+      setState(() {
+        canReply = allowed;
+        replyKnown = true;
+      });
+    } catch (err, stack) {
+      debugPrint('StoriesViewer reply permission error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      if (!mounted) return;
+      setState(() {
+        canReply = false;
+        replyKnown = true;
+      });
+    }
+  }
+
+  Future<void> _replyToStory() async {
+    if (!replyKnown || !canReply || replying) {
+      return;
+    }
+    setState(() {
+      replying = true;
+    });
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null) {
+      setState(() {
+        replying = false;
+      });
+      return;
+    }
+    final result = await FirestoreService().openOrCreateDirectThread(
+      currentUid: currentUid,
+      otherUid: widget.ownerUid,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      replying = false;
+    });
+    if (result is SafeSuccess<String>) {
+      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+    } else if (result is SafeFailure<String>) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+    }
   }
 
   Future<void> _markViewed(StoryItem s) async {
@@ -4311,14 +4582,32 @@ class _StoriesViewerState extends State<_StoriesViewer> {
             ),
             // bottom actions
             Positioned(
-              bottom: 8, left: 12, right: 12,
-              child: Row(
+              bottom: 8,
+              left: 12,
+              right: 12,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(shortTime(s.createdAt), style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                  const Spacer(),
-                  const Icon(Icons.remove_red_eye, color: Colors.white70, size: 16),
-                  const SizedBox(width: 4),
-                  Text('${s.viewsCount}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  if (replyKnown && canReply)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.tonalIcon(
+                        onPressed: replying ? null : _replyToStory,
+                        icon: const Icon(Icons.reply_rounded),
+                        label: Text(replying ? 'Opening…' : 'Reply'),
+                      ),
+                    ),
+                  if (replyKnown && canReply) const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Text(shortTime(s.createdAt), style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      const Spacer(),
+                      const Icon(Icons.remove_red_eye, color: Colors.white70, size: 16),
+                      const SizedBox(width: 4),
+                      Text('${s.viewsCount}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -5120,6 +5409,9 @@ class _DMPageState extends State<DMPage> {
   @override
   Widget build(BuildContext context) {
     final me = FirebaseAuth.instance.currentUser!.uid;
+    // CODEX-BEGIN:PRIVACY_DM_READ_RECEIPTS
+    final readReceiptsEnabled = context.watch<PrivacySettingsController>().settings?.readReceipts ?? true;
+    // CODEX-END:PRIVACY_DM_READ_RECEIPTS
     return Scaffold(
       appBar: AppBar(title: Text(otherUid.isEmpty ? 'Loading...' : otherUid)),
       body: Column(
@@ -5131,8 +5423,10 @@ class _DMPageState extends State<DMPage> {
                 if (!s.hasData) return const Center(child: CircularProgressIndicator());
                 final docs = s.data!.docs;
                 // عند فتح الشاشة اعتبر الرسائل مقروءة
-                cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId)
-                  .set({'unread': {me: 0}}, cf.SetOptions(merge: true));
+                if (readReceiptsEnabled) {
+                  cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId)
+                      .set({'unread': {me: 0}}, cf.SetOptions(merge: true));
+                }
                 return ListView.builder(
                   reverse: true,
                   padding: const EdgeInsets.all(12),
