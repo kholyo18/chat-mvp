@@ -20,6 +20,11 @@ class CacheService {
   String? _memoryWalletUid;
   // CODEX-END:WALLET_CACHE_FIELDS
 
+  // CODEX-BEGIN:TRANSLATION_CACHE_FIELDS
+  static const String _translationKeyPrefix = 'translator.message.';
+  final Map<String, Map<String, String>> _memoryTranslations = {};
+  // CODEX-END:TRANSLATION_CACHE_FIELDS
+
   List<StoreItem>? _memoryStoreFirstPage;
   DateTime? _memoryStoreFirstPageAt;
 
@@ -151,5 +156,33 @@ class CacheService {
     await prefs.remove('$_walletDataKeyPrefix$uid');
   }
   // CODEX-END:WALLET_CACHE_METHODS
+
+  // CODEX-BEGIN:TRANSLATION_CACHE_METHODS
+  Future<String?> getCachedTranslation(String messageId, String lang) async {
+    if (messageId.isEmpty || lang.isEmpty) {
+      return null;
+    }
+    final inMemory = _memoryTranslations[messageId]?[lang];
+    if (inMemory != null) {
+      return inMemory;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_translationKeyPrefix$messageId::$lang');
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    _memoryTranslations.putIfAbsent(messageId, () => {})[lang] = raw;
+    return raw;
+  }
+
+  Future<void> saveTranslation(String messageId, String lang, String text) async {
+    if (messageId.isEmpty || lang.isEmpty || text.isEmpty) {
+      return;
+    }
+    _memoryTranslations.putIfAbsent(messageId, () => {})[lang] = text;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('$_translationKeyPrefix$messageId::$lang', text);
+  }
+  // CODEX-END:TRANSLATION_CACHE_METHODS
 }
 // CODEX-END:STORE_CACHE_SERVICE
