@@ -280,6 +280,197 @@ class WalletTransactionsPage {
 }
 // CODEX-END:WALLET_FIRESTORE_MODELS
 
+// CODEX-BEGIN:STORY_FIRESTORE_MODELS
+enum StoryType {
+  text,
+  image,
+  video,
+}
+
+extension StoryTypeParser on StoryType {
+  String get value {
+    switch (this) {
+      case StoryType.text:
+        return 'text';
+      case StoryType.image:
+        return 'image';
+      case StoryType.video:
+        return 'video';
+    }
+  }
+
+  static StoryType fromValue(String raw) {
+    switch (raw) {
+      case 'image':
+        return StoryType.image;
+      case 'video':
+        return StoryType.video;
+      case 'text':
+      default:
+        return StoryType.text;
+    }
+  }
+}
+
+enum StoryPrivacy {
+  public,
+  contacts,
+  custom,
+}
+
+extension StoryPrivacyParser on StoryPrivacy {
+  String get value {
+    switch (this) {
+      case StoryPrivacy.public:
+        return 'public';
+      case StoryPrivacy.contacts:
+        return 'contacts';
+      case StoryPrivacy.custom:
+        return 'custom';
+    }
+  }
+
+  static StoryPrivacy fromValue(String raw) {
+    switch (raw) {
+      case 'contacts':
+        return StoryPrivacy.contacts;
+      case 'custom':
+        return StoryPrivacy.custom;
+      case 'public':
+      default:
+        return StoryPrivacy.public;
+    }
+  }
+}
+
+class Story {
+  const Story({
+    required this.id,
+    required this.uid,
+    required this.type,
+    required this.privacy,
+    required this.viewers,
+    required this.createdAt,
+    this.text,
+    this.mediaUrl,
+    this.bgColor,
+    this.allowedUids = const <String>[],
+    this.isPending = false,
+  });
+
+  final String id;
+  final String uid;
+  final StoryType type;
+  final StoryPrivacy privacy;
+  final int viewers;
+  final DateTime createdAt;
+  final String? text;
+  final String? mediaUrl;
+  final String? bgColor;
+  final List<String> allowedUids;
+  final bool isPending;
+
+  bool isActive(DateTime now) {
+    return createdAt.isAfter(now.subtract(const Duration(hours: 24)));
+  }
+
+  bool canBeViewedBy(
+    String viewerUid, {
+    Set<String> contactUids = const <String>{},
+  }) {
+    if (viewerUid == uid) {
+      return true;
+    }
+    switch (privacy) {
+      case StoryPrivacy.public:
+        return true;
+      case StoryPrivacy.contacts:
+        return contactUids.contains(uid);
+      case StoryPrivacy.custom:
+        return allowedUids.contains(viewerUid);
+    }
+  }
+
+  Story copyWith({
+    String? id,
+    String? uid,
+    StoryType? type,
+    StoryPrivacy? privacy,
+    int? viewers,
+    DateTime? createdAt,
+    String? text,
+    String? mediaUrl,
+    String? bgColor,
+    List<String>? allowedUids,
+    bool? isPending,
+  }) {
+    return Story(
+      id: id ?? this.id,
+      uid: uid ?? this.uid,
+      type: type ?? this.type,
+      privacy: privacy ?? this.privacy,
+      viewers: viewers ?? this.viewers,
+      createdAt: createdAt ?? this.createdAt,
+      text: text ?? this.text,
+      mediaUrl: mediaUrl ?? this.mediaUrl,
+      bgColor: bgColor ?? this.bgColor,
+      allowedUids: allowedUids ?? this.allowedUids,
+      isPending: isPending ?? this.isPending,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'id': id,
+      'uid': uid,
+      'type': type.value,
+      'privacy': privacy.value,
+      'viewers': viewers,
+      'createdAt': Timestamp.fromDate(createdAt),
+      if (text != null) 'text': text,
+      if (mediaUrl != null) 'mediaUrl': mediaUrl,
+      if (bgColor != null) 'bgColor': bgColor,
+      if (allowedUids.isNotEmpty) 'allowedUids': allowedUids,
+    };
+  }
+
+  factory Story.fromDocument(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    return Story.fromMap(doc.id, doc.data());
+  }
+
+  factory Story.fromSnapshot(DocumentSnapshot<Map<String, dynamic>> snapshot) {
+    return Story.fromMap(snapshot.id, snapshot.data() ?? <String, dynamic>{});
+  }
+
+  factory Story.fromMap(String id, Map<String, dynamic> data) {
+    final createdAt = _parseDateTime(data['createdAt']) ?? DateTime.now();
+    final allowed = data['allowedUids'];
+    return Story(
+      id: data['id'] is String && (data['id'] as String).isNotEmpty
+          ? data['id'] as String
+          : id,
+      uid: (data['uid'] as String?) ?? '',
+      type: StoryTypeParser.fromValue((data['type'] as String?) ?? 'text'),
+      privacy:
+          StoryPrivacyParser.fromValue((data['privacy'] as String?) ?? 'public'),
+      viewers: _parseInt(data['viewers']),
+      createdAt: createdAt,
+      text: data['text'] as String?,
+      mediaUrl: data['mediaUrl'] as String?,
+      bgColor: data['bgColor'] as String?,
+      allowedUids: allowed is Iterable
+          ? List<String>.unmodifiable(
+              allowed.map((dynamic item) => item.toString()),
+            )
+          : const <String>[],
+      isPending: false,
+    );
+  }
+}
+// CODEX-END:STORY_FIRESTORE_MODELS
+
 class FirestoreService {
   FirestoreService({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -386,5 +577,118 @@ class FirestoreService {
     }, debugLabel: 'simulateWalletTopUp');
   }
   // CODEX-END:WALLET_FIRESTORE_METHODS
+
+  // CODEX-BEGIN:STORY_FIRESTORE_METHODS
+  CollectionReference<Map<String, dynamic>> get _storiesCollection {
+    return _firestore.collection('stories');
+  }
+
+  Future<SafeResult<Story>> createStory({
+    required String uid,
+    required StoryType type,
+    required StoryPrivacy privacy,
+    required DateTime createdAt,
+    String? text,
+    String? mediaUrl,
+    String? bgColor,
+    List<String>? allowedUids,
+  }) {
+    return safeRequest<Story>(() async {
+      final docRef = _storiesCollection.doc();
+      final Map<String, dynamic> payload = <String, dynamic>{
+        'id': docRef.id,
+        'uid': uid,
+        'type': type.value,
+        'privacy': privacy.value,
+        'viewers': 0,
+        'createdAt': Timestamp.fromDate(createdAt),
+        if (text != null) 'text': text,
+        if (mediaUrl != null) 'mediaUrl': mediaUrl,
+        if (bgColor != null) 'bgColor': bgColor,
+      };
+      if (privacy == StoryPrivacy.custom && allowedUids != null) {
+        payload['allowedUids'] = allowedUids;
+      }
+      await docRef.set(payload);
+      return Story.fromMap(docRef.id, payload);
+    }, debugLabel: 'createStory');
+  }
+
+  Stream<List<Story>> latestPublicStories({int limit = 50}) {
+    final Timestamp cutoff = Timestamp.fromDate(
+      DateTime.now().subtract(const Duration(hours: 24)),
+    );
+    return _storiesCollection
+        .where('privacy', isEqualTo: StoryPrivacy.public.value)
+        .where('createdAt', isGreaterThan: cutoff)
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map(Story.fromDocument).toList());
+  }
+
+  Stream<List<Story>> storiesForViewer({
+    required String viewerUid,
+    Set<String> contactUids = const <String>{},
+    int limit = 100,
+  }) {
+    final Timestamp cutoff = Timestamp.fromDate(
+      DateTime.now().subtract(const Duration(hours: 24)),
+    );
+    final Set<String> normalizedContacts = Set<String>.from(contactUids);
+    normalizedContacts.add(viewerUid);
+    return _storiesCollection
+        .where('createdAt', isGreaterThan: cutoff)
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) {
+      final stories = snapshot.docs.map(Story.fromDocument).toList();
+      return stories
+          .where(
+            (story) => story.canBeViewedBy(
+              viewerUid,
+              contactUids: normalizedContacts,
+            ),
+          )
+          .toList();
+    });
+  }
+
+  Stream<List<Story>> storiesForUser(String uid) {
+    final Timestamp cutoff = Timestamp.fromDate(
+      DateTime.now().subtract(const Duration(hours: 24)),
+    );
+    return _storiesCollection
+        .where('uid', isEqualTo: uid)
+        .where('createdAt', isGreaterThan: cutoff)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map(Story.fromDocument).toList());
+  }
+
+  Stream<bool> hasActiveStory(String uid) {
+    return storiesForUser(uid).map((stories) {
+      final DateTime now = DateTime.now();
+      return stories.any((story) => story.isActive(now));
+    });
+  }
+
+  Future<SafeResult<void>> incrementStoryViewers(String storyId) {
+    return safeRequest<void>(() async {
+      final DocumentReference<Map<String, dynamic>> doc =
+          _storiesCollection.doc(storyId);
+      await _firestore.runTransaction((transaction) async {
+        final snapshot = await transaction.get(doc);
+        final current = _parseInt(snapshot.data()?['viewers']);
+        transaction.set(
+          doc,
+          <String, dynamic>{'viewers': current + 1},
+          SetOptions(merge: true),
+        );
+      });
+    }, debugLabel: 'incrementStoryViewers');
+  }
+  // CODEX-END:STORY_FIRESTORE_METHODS
 }
 // CODEX-END:STORE_FIRESTORE_SERVICE
