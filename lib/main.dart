@@ -40,6 +40,10 @@ import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
+// CODEX-BEGIN:STORE_IMPORTS
+import 'services/cache_service.dart';
+import 'services/firestore_service.dart';
+// CODEX-END:STORE_IMPORTS
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -778,6 +782,18 @@ class _StorePageState extends State<StorePage> {
   final PaymentsService _paymentsService = PaymentsService();
   final InAppPurchase _inAppPurchase = InAppPurchase.instance;
 
+  // CODEX-BEGIN:STORE_STATE
+  final FirestoreService _firestoreService = FirestoreService();
+  final CacheService _cacheService = CacheService.instance;
+  late final ScrollController _storeScrollController;
+  final Set<String> _storeSeenIds = <String>{};
+  List<StoreItem> _storeItems = <StoreItem>[];
+  cf.DocumentSnapshot<Map<String, dynamic>>? _storeCursor;
+  bool _loadingStore = false;
+  bool _loadingMoreStore = false;
+  bool _hasMoreStore = true;
+  // CODEX-END:STORE_STATE
+
   static const List<int> _fallbackPackages = [100, 250, 600, 1500];
 
   late final TextEditingController _manualController;
@@ -796,7 +812,14 @@ class _StorePageState extends State<StorePage> {
     super.initState();
     _manualController = TextEditingController();
     _manualController.addListener(() => setState(() {}));
+    // CODEX-BEGIN:STORE_INIT
+    _storeScrollController = ScrollController();
+    _storeScrollController.addListener(_handleStoreScroll);
+    // CODEX-END:STORE_INIT
     _initialize();
+    // CODEX-BEGIN:STORE_LOAD_INIT
+    unawaited(_loadInitialStore());
+    // CODEX-END:STORE_LOAD_INIT
   }
 
   Future<void> _initialize() async {
@@ -804,8 +827,33 @@ class _StorePageState extends State<StorePage> {
     if (uid != null) {
       _completedTodayStream = _paymentsService.completedCoinsTodayStream(uid);
     }
+    if (mounted) {
+      setState(() {
+        _initializing = true;
+        _error = null;
+      });
+    }
+
+    final configResult = await safeRequest(
+      () => _paymentsService.fetchConfig(),
+      debugLabel: 'payments.fetchConfig',
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (configResult is SafeFailure<CoinsConfig>) {
+      setState(() {
+        _initializing = false;
+        _error = 'Failed to load the store. Please try again later.';
+      });
+      return;
+    }
+
+    final config = (configResult as SafeSuccess<CoinsConfig>).value;
+
     try {
-      final config = await _paymentsService.fetchConfig();
       bool playAvailable = false;
       if (!kIsWeb && Platform.isAndroid) {
         playAvailable = await _inAppPurchase.isAvailable();
@@ -815,23 +863,30 @@ class _StorePageState extends State<StorePage> {
       final products = <String, ProductDetails>{};
       StreamSubscription<List<PurchaseDetails>>? sub;
       if (provider == PaymentProvider.play && playAvailable) {
-        final response =
-            await _inAppPurchase.queryProductDetails(config.playSkus.toSet());
-        if (response.error != null) {
-          debugPrint('Play Billing query error: ${response.error}');
-        }
-        for (final detail in response.productDetails) {
-          products[detail.id] = detail;
-        }
-        sub = _inAppPurchase.purchaseStream.listen(
-          _onPurchasesUpdated,
-          onError: (Object error, StackTrace stack) {
-            debugPrint('Purchase stream error: $error');
-            FlutterError.reportError(
-              FlutterErrorDetails(exception: error, stack: stack),
-            );
-          },
+        final productResult = await safeRequest(
+          () => _inAppPurchase.queryProductDetails(config.playSkus.toSet()),
+          debugLabel: 'iap.queryProductDetails',
         );
+        if (productResult is SafeSuccess<ProductDetailsResponse>) {
+          final response = productResult.value;
+          if (response.error != null) {
+            debugPrint('Play Billing query error: ${response.error}');
+          }
+          for (final detail in response.productDetails) {
+            products[detail.id] = detail;
+          }
+          sub = _inAppPurchase.purchaseStream.listen(
+            _onPurchasesUpdated,
+            onError: (Object error, StackTrace stack) {
+              debugPrint('Purchase stream error: $error');
+              FlutterError.reportError(
+                FlutterErrorDetails(exception: error, stack: stack),
+              );
+            },
+          );
+        } else if (productResult is SafeFailure<ProductDetailsResponse>) {
+          debugPrint('Play Billing query failed: ${productResult.message}');
+        }
       }
 
       if (!mounted) {
@@ -865,6 +920,10 @@ class _StorePageState extends State<StorePage> {
   void dispose() {
     _purchaseSub?.cancel();
     _manualController.dispose();
+    // CODEX-BEGIN:STORE_DISPOSE
+    _storeScrollController.removeListener(_handleStoreScroll);
+    _storeScrollController.dispose();
+    // CODEX-END:STORE_DISPOSE
     super.dispose();
   }
 
@@ -873,6 +932,35 @@ class _StorePageState extends State<StorePage> {
   List<_CoinPackage> _packages(CoinsConfig config) {
     final items = <_CoinPackage>[];
     final seenIds = <String>{};
+
+    // CODEX-BEGIN:STORE_PACKAGES
+    if (_storeItems.isNotEmpty) {
+      for (final storeItem in _storeItems) {
+        final sku = (storeItem.sku ?? '').trim();
+        final id = sku.isNotEmpty ? sku : storeItem.id;
+        if (id.isEmpty || seenIds.contains(id)) continue;
+        final coinsFromItem = storeItem.coins;
+        final packMatch = config.packById(id);
+        final coins = coinsFromItem > 0
+            ? coinsFromItem
+            : packMatch?.coins ?? config.coinsForSku(id);
+        if (coins <= 0) continue;
+        final label = (storeItem.label?.isNotEmpty == true)
+            ? storeItem.label
+            : packMatch?.label;
+        final price = storeItem.price ?? packMatch?.price;
+        items.add(
+          _CoinPackage(
+            id: id,
+            coins: coins,
+            label: label,
+            price: price,
+          ),
+        );
+        seenIds.add(id);
+      }
+    }
+    // CODEX-END:STORE_PACKAGES
 
     for (final pack in config.packs) {
       if (pack.coins <= 0) continue;
@@ -915,6 +1003,193 @@ class _StorePageState extends State<StorePage> {
     }
     return items;
   }
+
+  // CODEX-BEGIN:STORE_LOADERS
+  Future<void> _loadInitialStore() async {
+    if (_loadingStore) return;
+    if (mounted) {
+      setState(() {
+        _loadingStore = true;
+      });
+    }
+    final cached = await _cacheService.getStoreFirstPage();
+    if (!mounted) {
+      return;
+    }
+    if (cached != null && cached.isNotEmpty) {
+      final cachedItems = List<StoreItem>.from(cached);
+      setState(() {
+        _storeItems = cachedItems;
+        _storeSeenIds
+          ..clear()
+          ..addAll(cachedItems.map((e) => e.id));
+        if (_storeItems.isNotEmpty) {
+          _error = null;
+        }
+      });
+    }
+    var success = true;
+    try {
+      success = await _retryFetchStore(reset: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingStore = false;
+        });
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    if (!success && _storeItems.isEmpty) {
+      setState(() {
+        _error ??= 'Failed to load the store. Please try again later.';
+      });
+    }
+  }
+
+  Future<bool> _retryFetchStore({required bool reset}) async {
+    if (reset) {
+      _storeCursor = null;
+      _hasMoreStore = true;
+    }
+    const maxAttempts = 3;
+    Duration delay = const Duration(milliseconds: 500);
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      final success = await _fetchStorePage(
+        cursor: reset ? null : _storeCursor,
+        replace: reset && attempt == 0,
+      );
+      if (success) {
+        return true;
+      }
+      if (attempt < maxAttempts - 1) {
+        await Future.delayed(delay);
+        delay *= 2;
+      }
+    }
+    return false;
+  }
+
+  Future<bool> _fetchStorePage({
+    required cf.DocumentSnapshot<Map<String, dynamic>>? cursor,
+    required bool replace,
+  }) async {
+    final result = await safeRequest(
+      () => _firestoreService.fetchStorePage(
+        startAfter: cursor,
+        limit: 20,
+      ),
+      debugLabel: 'store.fetchPage',
+    );
+
+    if (!mounted) {
+      return false;
+    }
+
+    if (result is SafeSuccess<StorePagePayload>) {
+      final payload = result.value;
+      final updatedItems =
+          replace ? <StoreItem>[] : List<StoreItem>.from(_storeItems);
+      final updatedIds =
+          replace ? <String>{} : Set<String>.from(_storeSeenIds);
+
+      for (final item in payload.items) {
+        if (updatedIds.add(item.id)) {
+          updatedItems.add(item);
+        } else {
+          final index =
+              updatedItems.indexWhere((existing) => existing.id == item.id);
+          if (index != -1) {
+            updatedItems[index] = item;
+          }
+        }
+      }
+
+      setState(() {
+        _storeItems = updatedItems;
+        _storeSeenIds
+          ..clear()
+          ..addAll(updatedIds);
+        _storeCursor = payload.lastDocument ?? cursor;
+        _hasMoreStore = payload.hasMore;
+        if (_storeItems.isNotEmpty) {
+          _error = null;
+        }
+      });
+      if (replace && payload.items.isNotEmpty) {
+        unawaited(_cacheService.saveStoreFirstPage(payload.items));
+      }
+      return true;
+    }
+
+    if (result is SafeFailure<StorePagePayload>) {
+      debugPrint('Store page fetch failed: ${result.message}');
+      if (_storeItems.isEmpty) {
+        setState(() {
+          _error = 'Failed to load the store. Please try again later.';
+        });
+      }
+    }
+    return false;
+  }
+
+  void _handleStoreScroll() {
+    if (!_storeScrollController.hasClients || _loadingMoreStore || !_hasMoreStore) {
+      return;
+    }
+    final position = _storeScrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 120) {
+      unawaited(_loadMoreStore());
+    }
+  }
+
+  Future<void> _loadMoreStore() async {
+    if (_loadingMoreStore || !_hasMoreStore) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loadingMoreStore = true;
+      });
+    }
+    final success = await _retryFetchStore(reset: false);
+    if (!mounted) {
+      return;
+    }
+    if (!success && _storeItems.isEmpty) {
+      setState(() {
+        _error ??= 'Failed to load the store. Please try again later.';
+      });
+    }
+    setState(() {
+      _loadingMoreStore = false;
+    });
+  }
+
+  Future<void> _onRetryPressed() async {
+    if (_initializing || _loadingStore) {
+      return;
+    }
+    setState(() {
+      _error = null;
+      _loadingStore = true;
+    });
+    try {
+      await Future.wait([
+        _initialize(),
+        _retryFetchStore(reset: true),
+      ]);
+    } finally {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadingStore = false;
+      });
+    }
+  }
+  // CODEX-END:STORE_LOADERS
 
   String _estimatedPrice(CoinsConfig config, int coins) {
     final pack = config.packForCoins(coins);
@@ -1117,7 +1392,10 @@ class _StorePageState extends State<StorePage> {
               ),
               const SizedBox(height: 16),
               FilledButton(
-                onPressed: _initializing ? null : () => _initialize(),
+                // CODEX-BEGIN:STORE_RETRY_BUTTON
+                onPressed:
+                    (_initializing || _loadingStore) ? null : _onRetryPressed,
+                // CODEX-END:STORE_RETRY_BUTTON
                 child: const Text('Retry'),
               ),
             ],
@@ -1143,7 +1421,11 @@ class _StorePageState extends State<StorePage> {
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
-                    onPressed: _initializing ? null : () => _initialize(),
+                    // CODEX-BEGIN:STORE_STATUS_RETRY
+                    onPressed: (_initializing || _loadingStore)
+                        ? null
+                        : _onRetryPressed,
+                    // CODEX-END:STORE_STATUS_RETRY
                     child: const Text('Retry'),
                   ),
                 ],
@@ -1166,6 +1448,9 @@ class _StorePageState extends State<StorePage> {
           final manualEstimate = _estimatedPrice(config, manualCoins);
 
           return ListView(
+            // CODEX-BEGIN:STORE_SCROLL_CONTROLLER
+            controller: _storeScrollController,
+            // CODEX-END:STORE_SCROLL_CONTROLLER
             padding: const EdgeInsets.all(16),
             children: [
               Card(
@@ -1351,6 +1636,13 @@ class _StorePageState extends State<StorePage> {
                     );
                   },
                 ),
+              // CODEX-BEGIN:STORE_PAGINATION_INDICATOR
+              if (_loadingMoreStore)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              // CODEX-END:STORE_PAGINATION_INDICATOR
             ],
           );
         },
