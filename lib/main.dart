@@ -44,6 +44,9 @@ import 'services/invites_service.dart';
 import 'services/cache_service.dart';
 import 'services/firestore_service.dart';
 // CODEX-END:STORE_IMPORTS
+// CODEX-BEGIN:WALLET_IMPORT
+import 'modules/wallet/wallet_controller.dart';
+// CODEX-END:WALLET_IMPORT
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -1668,10 +1671,9 @@ class _CoinPackage {
       (label != null && label!.isNotEmpty) ? label! : '${coins} coins';
 }
 
+// CODEX-BEGIN:WALLET_PAGE
 class WalletPage extends StatelessWidget {
   const WalletPage({super.key});
-
-  static final CoinsService _coinsService = CoinsService();
 
   IconData _iconForType(String? type) {
     switch (type) {
@@ -1686,6 +1688,64 @@ class WalletPage extends StatelessWidget {
     }
   }
 
+  Future<void> _showAddBalanceSheet(
+    BuildContext context,
+    WalletController controller,
+  ) async {
+    if (controller.addingBalance) return;
+    const packages = <_CoinPackage>[
+      _CoinPackage(id: 'pack_100', coins: 100, label: '100 coins'),
+      _CoinPackage(id: 'pack_500', coins: 500, label: '500 coins'),
+      _CoinPackage(id: 'pack_1000', coins: 1000, label: '1000 coins'),
+    ];
+
+    final selected = await showModalBottomSheet<_CoinPackage>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final pack in packages)
+                ListTile(
+                  leading: const Icon(Icons.add_circle_outline),
+                  title: Text(pack.displayLabel),
+                  subtitle: Text('${pack.coins} coins'),
+                  onTap: controller.addingBalance
+                      ? null
+                      : () => Navigator.of(sheetContext).pop(pack),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (selected == null) {
+      return;
+    }
+
+    final success = await controller.addBalance(
+      packId: selected.id,
+      amount: selected.coins,
+    );
+
+    if (!context.mounted) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    if (success) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Balance updated successfully')),
+      );
+    } else {
+      messenger.showSnackBar(
+        SnackBar(content: Text(controller.errorMessage ?? 'Failed to add balance')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -1695,106 +1755,162 @@ class WalletPage extends StatelessWidget {
       );
     }
 
-    final txStream = _coinsService.txStream(uid);
+    return ChangeNotifierProvider<WalletController>(
+      create: (_) {
+        final controller = WalletController(
+          firestoreService: FirestoreService(),
+          cacheService: CacheService.instance,
+        );
+        unawaited(controller.init(uid));
+        return controller;
+      },
+      child: Builder(
+        builder: (context) {
+          final controller = context.watch<WalletController>();
+          final summary = controller.summary;
+          final balance = summary?.balance ?? 0;
+          final vipTier = summary?.vipTier ?? 'Bronze';
+          final transactions = controller.transactions;
+          final dateFormat = DateFormat.yMMMd().add_jm();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Wallet')),
-      body: Column(
-        children: [
-          Card(
-            margin: const EdgeInsets.all(16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: StreamBuilder<int>(
-                stream: _coinsService.coinsStream(uid),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Row(
+          return Scaffold(
+            appBar: AppBar(title: const Text('Wallet')),
+            body: Column(
+              children: [
+                Card(
+                  margin: const EdgeInsets.all(16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        CircularProgressIndicator(),
-                        SizedBox(width: 16),
-                        Text('Loading balance...'),
-                      ],
-                    );
-                  }
-                  final coins = snapshot.data ?? 0;
-                  return Row(
-                    children: [
-                      const Icon(Icons.account_balance_wallet_rounded, color: kTeal),
-                      const SizedBox(width: 12),
-                      Text('Balance: $coins coins'),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-          Expanded(
-            child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
-              stream: txStream,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return const Center(child: Text('No transactions yet'));
-                }
-
-                final docs = snapshot.data!.docs;
-                final dateFormat = DateFormat.yMMMd().add_jm();
-
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final doc = docs[index];
-                    final data = doc.data();
-                    final type = data['type'] as String?;
-                    final amount = (data['amount'] ?? 0) as int;
-                    final balanceAfter = (data['balanceAfter'] ?? 0) as int;
-                    final packageId = data['packageId'] as String?;
-                    final note = data['note'] as String?;
-                    final createdAtRaw = data['createdAt'];
-                    DateTime? createdAt;
-                    if (createdAtRaw is cf.Timestamp) {
-                      createdAt = createdAtRaw.toDate();
-                    }
-                    final dateStr = createdAt != null
-                        ? dateFormat.format(createdAt)
-                        : 'Pending';
-
-                    final subtitleParts = <String>[dateStr];
-                    if (packageId != null && packageId.isNotEmpty) {
-                      subtitleParts.add('Package: $packageId');
-                    }
-                    if (note != null && note.isNotEmpty) {
-                      subtitleParts.add(note);
-                    }
-
-                    final sign = amount > 0 ? '+' : '';
-
-                    return Card(
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                          child: Icon(_iconForType(type), color: Theme.of(context).colorScheme.primary),
+                        Row(
+                          children: [
+                            const Icon(Icons.account_balance_wallet_rounded, color: kTeal),
+                            const SizedBox(width: 12),
+                            if (summary == null && controller.loading)
+                              const Expanded(
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    ),
+                                    SizedBox(width: 12),
+                                    Text('Loading balance...'),
+                                  ],
+                                ),
+                              )
+                            else
+                              Expanded(
+                                child: Text('Balance: $balance coins'),
+                              ),
+                          ],
                         ),
-                        title: Text('$sign$amount'),
-                        subtitle: Text(subtitleParts.join(' • ')),
-                        trailing: Text('Bal: $balanceAfter'),
-                      ),
-                    );
-                  },
-                );
-              },
+                        const SizedBox(height: 12),
+                        Text('VIP Tier: $vipTier'),
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: ElevatedButton(
+                            onPressed: controller.addingBalance
+                                ? null
+                                : () => _showAddBalanceSheet(context, controller),
+                            child: controller.addingBalance
+                                ? const SizedBox(
+                                    height: 16,
+                                    width: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : const Text('Add Balance'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (controller.errorMessage != null && transactions.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      controller.errorMessage!,
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: controller.refresh,
+                    child: controller.loading && transactions.isEmpty
+                        ? const Center(child: CircularProgressIndicator())
+                        : transactions.isEmpty
+                            ? ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                children: const [
+                                  SizedBox(height: 160),
+                                  Center(child: Text('No transactions yet')),
+                                ],
+                              )
+                            : NotificationListener<ScrollNotification>(
+                                onNotification: (notification) {
+                                  if (notification.metrics.pixels >=
+                                          notification.metrics.maxScrollExtent - 120 &&
+                                      controller.hasMore &&
+                                      !controller.loadingMore) {
+                                    controller.loadMore();
+                                  }
+                                  return false;
+                                },
+                                child: ListView.separated(
+                                  physics: const AlwaysScrollableScrollPhysics(),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 8),
+                                  itemCount: transactions.length +
+                                      (controller.loadingMore ? 1 : 0),
+                                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                  itemBuilder: (context, index) {
+                                    if (index >= transactions.length) {
+                                      return const Padding(
+                                        padding:
+                                            EdgeInsets.symmetric(vertical: 16),
+                                        child: Center(
+                                            child: CircularProgressIndicator()),
+                                      );
+                                    }
+                                    final tx = transactions[index];
+                                    final sign = tx.amount > 0 ? '+' : '';
+                                    final dateStr = dateFormat.format(tx.createdAt.toLocal());
+                                    return Card(
+                                      child: ListTile(
+                                        leading: CircleAvatar(
+                                          backgroundColor: Theme.of(context)
+                                              .colorScheme
+                                              .primaryContainer,
+                                          child: Icon(
+                                            _iconForType(tx.type),
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                          ),
+                                        ),
+                                        title: Text('$sign${tx.amount}'),
+                                        subtitle: Text('${tx.type} • $dateStr'),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 }
+// CODEX-END:WALLET_PAGE
 
 class VIPHubPage extends StatelessWidget {
   const VIPHubPage({super.key});
