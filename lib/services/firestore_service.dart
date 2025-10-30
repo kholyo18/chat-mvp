@@ -280,6 +280,106 @@ class WalletTransactionsPage {
 }
 // CODEX-END:WALLET_FIRESTORE_MODELS
 
+// CODEX-BEGIN:CHAT_FIRESTORE_MODELS
+class DiscoverUser {
+  const DiscoverUser({
+    required this.uid,
+    required this.displayName,
+    required this.photoUrl,
+    required this.vipTier,
+    required this.followers,
+    required this.following,
+    required this.raw,
+  });
+
+  final String uid;
+  final String displayName;
+  final String? photoUrl;
+  final String vipTier;
+  final int followers;
+  final int following;
+  final Map<String, dynamic> raw;
+
+  factory DiscoverUser.fromDocument(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = _cloneMap(doc.data());
+    return DiscoverUser(
+      uid: doc.id,
+      displayName: (data['displayName'] as String?) ?? 'User',
+      photoUrl: data['photoUrl'] as String?,
+      vipTier: (data['vipTier'] as String?) ?? (data['vipLevel'] as String?) ?? 'Bronze',
+      followers: _parseInt(data['followers']),
+      following: _parseInt(data['following']),
+      raw: Map<String, dynamic>.unmodifiable(data),
+    );
+  }
+}
+
+class DiscoverUsersPage {
+  const DiscoverUsersPage({
+    required this.users,
+    required this.lastDocument,
+    required this.hasMore,
+  });
+
+  final List<DiscoverUser> users;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+  final bool hasMore;
+}
+
+class InboxThreadItem {
+  const InboxThreadItem({
+    required this.id,
+    required this.members,
+    required this.lastMessage,
+    required this.updatedAt,
+    required this.unread,
+    required this.raw,
+  });
+
+  final String id;
+  final List<String> members;
+  final String? lastMessage;
+  final Timestamp? updatedAt;
+  final Map<String, int> unread;
+  final Map<String, dynamic> raw;
+
+  factory InboxThreadItem.fromDocument(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = _cloneMap(doc.data());
+    final members = List<String>.from((data['members'] ?? const <String>[]).cast<String>());
+    final rawUnread = (data['unread'] as Map?) ?? const <String, dynamic>{};
+    final normalizedUnread = <String, int>{};
+    for (final entry in rawUnread.entries) {
+      final key = entry.key.toString();
+      normalizedUnread[key] = _parseInt(entry.value);
+    }
+    return InboxThreadItem(
+      id: doc.id,
+      members: List<String>.unmodifiable(members),
+      lastMessage: data['lastMessage'] as String?,
+      updatedAt: data['updatedAt'] as Timestamp?,
+      unread: Map<String, int>.unmodifiable(normalizedUnread),
+      raw: Map<String, dynamic>.unmodifiable(data),
+    );
+  }
+}
+
+class InboxThreadsPage {
+  const InboxThreadsPage({
+    required this.threads,
+    required this.lastDocument,
+    required this.hasMore,
+  });
+
+  final List<InboxThreadItem> threads;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+  final bool hasMore;
+}
+// CODEX-END:CHAT_FIRESTORE_MODELS
+
 // CODEX-BEGIN:STORY_FIRESTORE_MODELS
 enum StoryType {
   text,
@@ -690,5 +790,117 @@ class FirestoreService {
     }, debugLabel: 'incrementStoryViewers');
   }
   // CODEX-END:STORY_FIRESTORE_METHODS
+
+  // CODEX-BEGIN:CHAT_FIRESTORE_METHODS
+  Future<SafeResult<DiscoverUsersPage>> fetchDiscoverUsers({
+    required String currentUid,
+    DocumentSnapshot<Map<String, dynamic>>? startAfter,
+    int limit = 20,
+  }) {
+    return safeRequest<DiscoverUsersPage>(() async {
+      Query<Map<String, dynamic>> query = _firestore
+          .collection('users')
+          .orderBy('followers', descending: true)
+          .limit(limit + 1);
+      if (startAfter != null) {
+        query = query.startAfterDocument(startAfter);
+      }
+      final snapshot = await query.get();
+      final docs = snapshot.docs;
+      final filtered = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in docs) {
+        if (doc.id == currentUid) {
+          continue;
+        }
+        filtered.add(doc);
+        if (filtered.length == limit) {
+          break;
+        }
+      }
+      final users = filtered.map(DiscoverUser.fromDocument).toList();
+      final lastDoc = docs.isNotEmpty ? docs.last : startAfter;
+      final hasMore = docs.length == limit + 1 || filtered.length == limit;
+      return DiscoverUsersPage(
+        users: users,
+        lastDocument: lastDoc,
+        hasMore: hasMore,
+      );
+    }, debugLabel: 'fetchDiscoverUsers');
+  }
+
+  Future<SafeResult<InboxThreadsPage>> fetchInboxThreads({
+    required String currentUid,
+    DocumentSnapshot<Map<String, dynamic>>? startAfter,
+    int limit = 20,
+  }) {
+    return safeRequest<InboxThreadsPage>(() async {
+      Query<Map<String, dynamic>> query = _firestore
+          .collection('dm_threads')
+          .where('members', arrayContains: currentUid)
+          .orderBy('updatedAt', descending: true)
+          .limit(limit);
+      if (startAfter != null) {
+        query = query.startAfterDocument(startAfter);
+      }
+      final snapshot = await query.get();
+      final docs = snapshot.docs;
+      final threads = docs.map(InboxThreadItem.fromDocument).toList();
+      final lastDoc = docs.isNotEmpty ? docs.last : startAfter;
+      final hasMore = docs.length == limit;
+      return InboxThreadsPage(
+        threads: threads,
+        lastDocument: lastDoc,
+        hasMore: hasMore,
+      );
+    }, debugLabel: 'fetchInboxThreads');
+  }
+
+  Future<SafeResult<String>> openOrCreateDirectThread({
+    required String currentUid,
+    required String otherUid,
+  }) {
+    return safeRequest<String>(() async {
+      if (currentUid == otherUid) {
+        throw ArgumentError('Cannot start DM with yourself');
+      }
+      final List<String> participants = <String>[currentUid, otherUid]..sort();
+      final String threadId = participants.join('_');
+      final DocumentReference<Map<String, dynamic>> docRef =
+          _firestore.collection('dm_threads').doc(threadId);
+      return _firestore.runTransaction<String>((transaction) async {
+        final snapshot = await transaction.get(docRef);
+        if (!snapshot.exists) {
+          transaction.set(
+            docRef,
+            <String, dynamic>{
+              'members': participants,
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+              'lastMessage': null,
+              'unread': <String, int>{
+                for (final member in participants) member: 0,
+              },
+            },
+            SetOptions(merge: true),
+          );
+        } else {
+          final data = snapshot.data() ?? <String, dynamic>{};
+          final storedMembers =
+              List<String>.from((data['members'] ?? const <String>[]).cast<String>());
+          if (storedMembers.length != 2 ||
+              !storedMembers.contains(currentUid) ||
+              !storedMembers.contains(otherUid)) {
+            transaction.set(
+              docRef,
+              <String, dynamic>{'members': participants},
+              SetOptions(merge: true),
+            );
+          }
+        }
+        return threadId;
+      });
+    }, debugLabel: 'openOrCreateDirectThread');
+  }
+  // CODEX-END:CHAT_FIRESTORE_METHODS
 }
 // CODEX-END:STORE_FIRESTORE_SERVICE
