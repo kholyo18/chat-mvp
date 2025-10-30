@@ -14,6 +14,12 @@ class CacheService {
   static const String _storeDataKey = 'store.firstPage.data';
   static const String _storeTsKey = 'store.firstPage.ts';
 
+  // CODEX-BEGIN:WALLET_CACHE_FIELDS
+  static const String _walletDataKeyPrefix = 'wallet.summary.';
+  WalletSummary? _memoryWalletSummary;
+  String? _memoryWalletUid;
+  // CODEX-END:WALLET_CACHE_FIELDS
+
   List<StoreItem>? _memoryStoreFirstPage;
   DateTime? _memoryStoreFirstPageAt;
 
@@ -85,5 +91,65 @@ class CacheService {
     await prefs.remove(_storeDataKey);
     await prefs.remove(_storeTsKey);
   }
+
+  // CODEX-BEGIN:WALLET_CACHE_METHODS
+  Future<WalletSummary?> getCachedWallet(String uid) async {
+    if (uid.isEmpty) {
+      return null;
+    }
+    if (_memoryWalletUid == uid && _memoryWalletSummary != null) {
+      return _memoryWalletSummary;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_walletDataKeyPrefix$uid');
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        final summary = WalletSummary.fromJson(decoded);
+        _memoryWalletSummary = summary;
+        _memoryWalletUid = uid;
+        return summary;
+      }
+      if (decoded is Map) {
+        final summary = WalletSummary.fromJson(
+            Map<String, dynamic>.from(decoded as Map<dynamic, dynamic>));
+        _memoryWalletSummary = summary;
+        _memoryWalletUid = uid;
+        return summary;
+      }
+    } catch (_) {
+      await prefs.remove('$_walletDataKeyPrefix$uid');
+    }
+    return null;
+  }
+
+  Future<void> saveWallet(String uid, WalletSummary summary) async {
+    if (uid.isEmpty) {
+      return;
+    }
+    _memoryWalletUid = uid;
+    _memoryWalletSummary = summary;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      '$_walletDataKeyPrefix$uid',
+      jsonEncode(summary.toJson()),
+    );
+  }
+
+  Future<void> clearWallet(String uid) async {
+    if (uid.isEmpty) {
+      return;
+    }
+    if (_memoryWalletUid == uid) {
+      _memoryWalletUid = null;
+      _memoryWalletSummary = null;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_walletDataKeyPrefix$uid');
+  }
+  // CODEX-END:WALLET_CACHE_METHODS
 }
 // CODEX-END:STORE_CACHE_SERVICE
