@@ -4566,104 +4566,197 @@ class FollowService {
 }
 
 // ---------------------- Discover People ----------------------
-class PeopleDiscoverPage extends StatelessWidget {
+// CODEX-BEGIN:DISCOVER_PAGE
+class PeopleDiscoverPage extends StatefulWidget {
   const PeopleDiscoverPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    final fs = cf.FirebaseFirestore.instance;
-    final q = fs.collection('users').orderBy('createdAt', descending: true).limit(50);
-    final follow = FollowService();
+  State<PeopleDiscoverPage> createState() => _PeopleDiscoverPageState();
+}
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Discover People')),
-      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
-        stream: q.snapshots(),
-        builder: (c, s) {
-          if (!s.hasData) return const Center(child: CircularProgressIndicator());
-          final docs = s.data!.docs.where((d) => d.id != me).toList();
-          if (docs.isEmpty) return const Center(child: Text('لا يوجد اقتراحات حالياً'));
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: docs.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (_, i) {
-              final d = docs[i];
-              final data = d.data();
-              final name = (data['displayName'] ?? 'User') as String;
-              final vip = (data['vipLevel'] ?? 'Bronze') as String;
-              final followers = (data['followers'] ?? 0) as int;
-              return Card(
-                child: ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.person)),
-                  title: Text(name, overflow: TextOverflow.ellipsis),
-                  subtitle: Text('VIP: $vip • ${compactNumber(followers)} متابع'),
-                  trailing: FutureBuilder<bool>(
-                    future: follow.isFollowing(me, d.id),
-                    builder: (c2, fsnap) {
-                      final isF = fsnap.data == true;
-                      return Wrap(
-                        spacing: 8,
-                        children: [
-                          OutlinedButton(
-                            onPressed: () => isF
-                                ? follow.unfollow(me, d.id)
-                                : follow.follow(me, d.id),
-                            child: Text(isF ? 'إلغاء المتابعة' : 'متابعة'),
-                          ),
-                          FilledButton(
-                            onPressed: () => _openOrCreateDMWith(d.id),
-                            child: const Text('رسالة'),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                  onTap: () => _openProfile(context, d.id),
-                ),
-              );
-            },
-          );
-        },
-      ),
+class _PeopleDiscoverPageState extends State<PeopleDiscoverPage> {
+  final ScrollController _scrollController = ScrollController();
+  final FirestoreService _firestoreService = FirestoreService();
+  final FollowService _followService = FollowService();
+  final List<DiscoverUser> _users = <DiscoverUser>[];
+  cf.DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _initialLoading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  String? _errorMessage;
+  late final String _currentUid;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentUid = FirebaseAuth.instance.currentUser!.uid;
+    _scrollController.addListener(_onScroll);
+    _loadPage(reset: true);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_hasMore || _loadingMore) return;
+    if (_scrollController.position.extentAfter < 320) {
+      _loadPage(reset: false);
+    }
+  }
+
+  Future<void> _loadPage({required bool reset}) async {
+    if (_loadingMore) return;
+    if (reset) {
+      setState(() {
+        _initialLoading = true;
+        _loadingMore = true;
+        _errorMessage = null;
+        _hasMore = true;
+        _lastDoc = null;
+        _users.clear();
+      });
+    } else {
+      setState(() {
+        _loadingMore = true;
+      });
+    }
+
+    final result = await _firestoreService.fetchDiscoverUsers(
+      currentUid: _currentUid,
+      startAfter: reset ? null : _lastDoc,
+      limit: 20,
     );
+    if (!mounted) return;
+
+    if (result is SafeSuccess<DiscoverUsersPage>) {
+      setState(() {
+        _users.addAll(result.value.users);
+        _lastDoc = result.value.lastDocument;
+        _hasMore = result.value.hasMore;
+        _errorMessage = null;
+        _initialLoading = false;
+        _loadingMore = false;
+      });
+    } else if (result is SafeFailure<DiscoverUsersPage>) {
+      setState(() {
+        _errorMessage = result.message;
+        _initialLoading = false;
+        _loadingMore = false;
+      });
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    await _loadPage(reset: true);
+  }
+
+  Future<void> _openOrCreateDMWith(String otherUid) async {
+    final result = await _firestoreService.openOrCreateDirectThread(
+      currentUid: _currentUid,
+      otherUid: otherUid,
+    );
+    if (!mounted) return;
+    if (result is SafeSuccess<String>) {
+      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+    } else if (result is SafeFailure<String>) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+    }
   }
 
   void _openProfile(BuildContext context, String uid) {
     Navigator.push(context, MaterialPageRoute(builder: (_) => PublicProfilePage(userId: uid)));
   }
 
-  Future<void> _openOrCreateDMWith(String otherUid) async {
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    final fs = cf.FirebaseFirestore.instance;
-
-    // حاول إيجاد ثريد موجود لنفس الثنائي
-    final existing = await fs.collection('dmThreads')
-      .where('participants', arrayContains: me)
-      .limit(25)
-      .get();
-
-    String? threadId;
-    for (final t in existing.docs) {
-      final parts = List<String>.from((t.data()['participants'] ?? []).cast<String>());
-      if (parts.length == 2 && parts.contains(otherUid)) {
-        threadId = t.id;
-        break;
-      }
+  Widget _buildList() {
+    if (_initialLoading) {
+      return const Center(child: CircularProgressIndicator());
     }
+    if (_errorMessage != null) {
+      return Center(
+        child: TextButton(
+          onPressed: () => _loadPage(reset: true),
+          child: const Text('حدث خطأ، حاول مرة أخرى'),
+        ),
+      );
+    }
+    if (_users.isEmpty) {
+      return const Center(child: Text('لا يوجد اقتراحات حالياً'));
+    }
+    return ListView.separated(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(12),
+      itemCount: _users.length + (_hasMore ? 1 : 0),
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (_, i) {
+        if (i >= _users.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final user = _users[i];
+        return Card(
+          child: ListTile(
+            leading: const CircleAvatar(child: Icon(Icons.person)),
+            title: Text(user.displayName, overflow: TextOverflow.ellipsis),
+            subtitle: Text('VIP: ${user.vipTier} • ${compactNumber(user.followers)} متابع'),
+            trailing: FutureBuilder<bool>(
+              future: _followService.isFollowing(_currentUid, user.uid),
+              builder: (c2, fsnap) {
+                final isF = fsnap.data == true;
+                return Wrap(
+                  spacing: 8,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => isF
+                          ? _followService.unfollow(_currentUid, user.uid)
+                          : _followService.follow(_currentUid, user.uid),
+                      child: Text(isF ? 'إلغاء المتابعة' : 'متابعة'),
+                    ),
+                    FilledButton(
+                      onPressed: () => _openOrCreateDMWith(user.uid),
+                      child: const Text('رسالة'),
+                    ),
+                  ],
+                );
+              },
+            ),
+            onTap: () => _openProfile(context, user.uid),
+          ),
+        );
+      },
+    );
+  }
 
-    threadId ??= (await fs.collection('dmThreads').add({
-      'participants': [me, otherUid],
-      'createdAt': cf.FieldValue.serverTimestamp(),
-      'lastMsgAt': cf.FieldValue.serverTimestamp(),
-      'last': null,
-      'unread': {otherUid: 0, me: 0},
-    })).id;
-
-    navigatorKey.currentState?.pushNamed('/dm', arguments: threadId);
+  @override
+  Widget build(BuildContext context) {
+    final content = _buildList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Discover People')),
+      body: RefreshIndicator(
+        onRefresh: _onRefresh,
+        child: content is ListView
+            ? content
+            : ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.5,
+                    child: content,
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 }
+// CODEX-END:DISCOVER_PAGE
 
 // ---------------------- Public Profile View ----------------------
 class PublicProfilePage extends StatelessWidget {
@@ -4736,102 +4829,204 @@ class PublicProfilePage extends StatelessWidget {
 
   Future<void> _openDM(String uid2) async {
     final me = FirebaseAuth.instance.currentUser!.uid;
-    final fs = cf.FirebaseFirestore.instance;
-    final existing = await fs.collection('dmThreads')
-      .where('participants', arrayContains: me)
-      .limit(25).get();
-    String? threadId;
-    for (final t in existing.docs) {
-      final parts = List<String>.from((t.data()['participants'] ?? []).cast<String>());
-      if (parts.length == 2 && parts.contains(uid2)) {
-        threadId = t.id; break;
-      }
+    // CODEX-BEGIN:PROFILE_DM
+    final service = FirestoreService();
+    final result = await service.openOrCreateDirectThread(
+      currentUid: me,
+      otherUid: uid2,
+    );
+    if (result is SafeSuccess<String>) {
+      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+    } else if (result is SafeFailure<String>) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
     }
-    threadId ??= (await fs.collection('dmThreads').add({
-      'participants': [me, uid2],
-      'createdAt': cf.FieldValue.serverTimestamp(),
-      'lastMsgAt': cf.FieldValue.serverTimestamp(),
-      'last': null,
-      'unread': {uid2: 0, me: 0},
-    })).id;
-    navigatorKey.currentState?.pushNamed('/dm', arguments: threadId);
+    // CODEX-END:PROFILE_DM
   }
 }
 
 // ---------------------- Inbox (Threads list) ----------------------
-class InboxPage extends StatelessWidget {
+// CODEX-BEGIN:INBOX_PAGE
+class InboxPage extends StatefulWidget {
   const InboxPage({super.key});
+
+  @override
+  State<InboxPage> createState() => _InboxPageState();
+}
+
+class _InboxPageState extends State<InboxPage> {
+  final ScrollController _scrollController = ScrollController();
+  final FirestoreService _firestoreService = FirestoreService();
+  final List<InboxThreadItem> _threads = <InboxThreadItem>[];
+  cf.DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _initialLoading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+  String? _errorMessage;
+  late final String _currentUid;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentUid = FirebaseAuth.instance.currentUser!.uid;
+    _scrollController.addListener(_onScroll);
+    _loadPage(reset: true);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_hasMore || _loadingMore) return;
+    if (_scrollController.position.extentAfter < 320) {
+      _loadPage(reset: false);
+    }
+  }
+
+  Future<void> _loadPage({required bool reset}) async {
+    if (_loadingMore) return;
+    if (reset) {
+      setState(() {
+        _initialLoading = true;
+        _loadingMore = true;
+        _errorMessage = null;
+        _hasMore = true;
+        _lastDoc = null;
+        _threads.clear();
+      });
+    } else {
+      setState(() {
+        _loadingMore = true;
+      });
+    }
+
+    final result = await _firestoreService.fetchInboxThreads(
+      currentUid: _currentUid,
+      startAfter: reset ? null : _lastDoc,
+      limit: 30,
+    );
+    if (!mounted) return;
+
+    if (result is SafeSuccess<InboxThreadsPage>) {
+      setState(() {
+        _threads.addAll(result.value.threads);
+        _lastDoc = result.value.lastDocument;
+        _hasMore = result.value.hasMore;
+        _errorMessage = null;
+        _initialLoading = false;
+        _loadingMore = false;
+      });
+    } else if (result is SafeFailure<InboxThreadsPage>) {
+      setState(() {
+        _errorMessage = result.message;
+        _initialLoading = false;
+        _loadingMore = false;
+      });
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    await _loadPage(reset: true);
+  }
+
+  Widget _buildList() {
+    if (_initialLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_errorMessage != null) {
+      return Center(
+        child: TextButton(
+          onPressed: () => _loadPage(reset: true),
+          child: const Text('حدث خطأ، حاول مرة أخرى'),
+        ),
+      );
+    }
+    if (_threads.isEmpty) {
+      return Center(
+        child: TextButton.icon(
+          onPressed: () => navigatorKey.currentState?.pushNamed('/people'),
+          icon: const Icon(Icons.person_add_alt_1_rounded),
+          label: const Text('ابدأ محادثة'),
+        ),
+      );
+    }
+    return ListView.separated(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(12),
+      itemCount: _threads.length + (_hasMore ? 1 : 0),
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (_, i) {
+        if (i >= _threads.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final thread = _threads[i];
+        final other = thread.members.firstWhere((x) => x != _currentUid, orElse: () => _currentUid);
+        final last = thread.lastMessage ?? '';
+        final lastAt = thread.updatedAt;
+        final unread = thread.unread[_currentUid] ?? 0;
+
+        return Card(
+          child: ListTile(
+            leading: Stack(
+              children: [
+                const CircleAvatar(child: Icon(Icons.person)),
+                if (unread > 0)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(5),
+                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                      child: Text('$unread', style: const TextStyle(color: Colors.white, fontSize: 10)),
+                    ),
+                  ),
+              ],
+            ),
+            title: Text(other, maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text(last, maxLines: 1, overflow: TextOverflow.ellipsis),
+            trailing: Text(shortTime(lastAt), style: const TextStyle(fontSize: 11, color: kGray)),
+            onTap: () => navigatorKey.currentState?.pushNamed('/dm', arguments: thread.id),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    final q = cf.FirebaseFirestore.instance.collection('dmThreads')
-      .where('participants', arrayContains: me)
-      .orderBy('lastMsgAt', descending: true)
-      .limit(50)
-      .snapshots();
-
+    final content = _buildList();
     return Scaffold(
       appBar: AppBar(title: const Text('Inbox')),
-      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
-        stream: q,
-        builder: (c, s) {
-          if (!s.hasData) return const Center(child: CircularProgressIndicator());
-          final docs = s.data!.docs;
-          if (docs.isEmpty) {
-            return Center(
-              child: TextButton.icon(
-                onPressed: ()=> navigatorKey.currentState?.pushNamed('/people'),
-                icon: const Icon(Icons.person_add_alt_1_rounded),
-                label: const Text('ابدأ محادثة'),
-              ),
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: docs.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (_, i) {
-              final d = docs[i].data();
-              final id = docs[i].id;
-              final parts = List<String>.from((d['participants'] ?? []).cast<String>());
-              final other = parts.firstWhere((x) => x != me, orElse: () => me);
-              final last = (d['last'] ?? '') as String;
-              final lastAt = d['lastMsgAt'] as cf.Timestamp?;
-              final unread = ((d['unread'] ?? {}) as Map)[me] ?? 0;
-
-              return Card(
-                child: ListTile(
-                  leading: Stack(
-                    children: [
-                      const CircleAvatar(child: Icon(Icons.person)),
-                      if (unread is int && unread > 0)
-                        Positioned(
-                          right: -2, top: -2,
-                          child: Container(
-                            padding: const EdgeInsets.all(5),
-                            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                            child: Text('$unread', style: const TextStyle(color: Colors.white, fontSize: 10)),
-                          ),
-                        ),
-                    ],
+      body: RefreshIndicator(
+        onRefresh: _onRefresh,
+        child: content is ListView
+            ? content
+            : ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.5,
+                    child: content,
                   ),
-                  title: Text(other, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(last, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: Text(shortTime(lastAt), style: const TextStyle(fontSize: 11, color: kGray)),
-                  onTap: ()=> navigatorKey.currentState?.pushNamed('/dm', arguments: id),
-                ),
-              );
-            },
-          );
-        },
+                ],
+              ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: ()=> navigatorKey.currentState?.pushNamed('/people'),
+        onPressed: () => navigatorKey.currentState?.pushNamed('/people'),
         child: const Icon(Icons.person_search_rounded),
       ),
     );
   }
 }
+// CODEX-END:INBOX_PAGE
 
 // ---------------------- DM Thread Page ----------------------
 class DMPage extends StatefulWidget {
@@ -4852,13 +5047,13 @@ class _DMPageState extends State<DMPage> {
   }
 
   Stream<cf.QuerySnapshot<Map<String, dynamic>>> _messages() {
-    return cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId)
+    return cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId)
       .collection('messages').orderBy('createdAt', descending: true).limit(50).snapshots();
   }
 
   Future<void> _resolveOtherUid() async {
-    final th = await cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId).get();
-    final parts = List<String>.from((th.data()?['participants'] ?? []).cast<String>());
+    final th = await cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId).get();
+    final parts = List<String>.from((th.data()?['members'] ?? []).cast<String>());
     final me = FirebaseAuth.instance.currentUser!.uid;
     otherUid = parts.firstWhere((x) => x != me, orElse: ()=> me);
     setState((){});
@@ -4868,15 +5063,15 @@ class _DMPageState extends State<DMPage> {
     final me = FirebaseAuth.instance.currentUser!.uid;
     final txt = c.text.trim();
     if (txt.isEmpty) return;
-    final ref = cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId);
+    final ref = cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId);
     await ref.collection('messages').add({
       'from': me,
       'text': txt,
       'createdAt': cf.FieldValue.serverTimestamp(),
     });
     await ref.set({
-      'last': txt,
-      'lastMsgAt': cf.FieldValue.serverTimestamp(),
+      'lastMessage': txt,
+      'updatedAt': cf.FieldValue.serverTimestamp(),
       'unread': { otherUid: cf.FieldValue.increment(1), me: 0 },
     }, cf.SetOptions(merge: true));
     c.clear();
@@ -4902,7 +5097,7 @@ class _DMPageState extends State<DMPage> {
                 if (!s.hasData) return const Center(child: CircularProgressIndicator());
                 final docs = s.data!.docs;
                 // عند فتح الشاشة اعتبر الرسائل مقروءة
-                cf.FirebaseFirestore.instance.collection('dmThreads').doc(threadId)
+                cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId)
                   .set({'unread': {me: 0}}, cf.SetOptions(merge: true));
                 return ListView.builder(
                   reverse: true,
