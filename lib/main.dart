@@ -2746,6 +2746,14 @@ class _MessageBubble extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final bg = mine ? cs.primaryContainer : cs.surfaceVariant;
     final BoxBorder? border = mine ? Border.all(color: kTeal.withOpacity(0.35)) : null;
+    // CODEX-BEGIN:COMPILE_FIX::messagebubble-roomId
+    final String roomId = (() {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is String && args.isNotEmpty) return args;
+      if (args is Map && args['roomId'] is String) return args['roomId'] as String;
+      return 'room_demo';
+    })();
+    // CODEX-END:COMPILE_FIX::messagebubble-roomId
     // CODEX-BEGIN:TRANSLATOR_RENDER
     final tr = context.watch<TranslatorService>();
     final baseText = message.text ?? '';
@@ -2844,17 +2852,6 @@ class _MessageBubble extends StatelessWidget {
                   if (_hasUrl(baseText)) _LinkPreview(text: baseText),
                 ],
               );
-    }
-
-    // نحتاج roomId لعرض الاقتباس بدقّة
-    final args = ModalRoute.of(context)?.settings.arguments;
-    String roomId;
-    if (args is String && args.isNotEmpty) {
-      roomId = args;
-    } else if (args is Map && args['roomId'] is String) {
-      roomId = args['roomId'] as String;
-    } else {
-      roomId = 'room_demo';
     }
 
     return Align(
@@ -5161,7 +5158,9 @@ class PublicProfilePage extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
-                        onPressed: () => _openDM(userId),
+                        // CODEX-BEGIN:COMPILE_FIX::publicprofile-snackbar
+                        onPressed: () => _openDM(c2, userId),
+                        // CODEX-END:COMPILE_FIX::publicprofile-snackbar
                         icon: const Icon(Icons.chat_bubble_rounded),
                         label: const Text('رسالة'),
                       ),
@@ -5176,7 +5175,8 @@ class PublicProfilePage extends StatelessWidget {
     );
   }
 
-  Future<void> _openDM(String uid2) async {
+  // CODEX-BEGIN:COMPILE_FIX::publicprofile-snackbar
+  Future<void> _openDM(BuildContext ctx, String uid2) async {
     final me = FirebaseAuth.instance.currentUser!.uid;
     // CODEX-BEGIN:PROFILE_DM
     final service = FirestoreService();
@@ -5187,12 +5187,13 @@ class PublicProfilePage extends StatelessWidget {
     if (result is SafeSuccess<String>) {
       navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
     } else if (result is SafeFailure<String>) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(ctx).showSnackBar(
         SnackBar(content: Text(result.message)),
       );
     }
     // CODEX-END:PROFILE_DM
   }
+  // CODEX-END:COMPILE_FIX::publicprofile-snackbar
 }
 
 // ---------------------- Inbox (Threads list) ----------------------

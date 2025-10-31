@@ -1065,9 +1065,11 @@ class FirestoreService {
           .count()
           .get();
       return AdminDashboardData(
-        activeUsers24h: usersCountSnapshot.count,
-        stories24h: storiesCountSnapshot.count,
-        pendingReports: reportsCountSnapshot.count,
+        // CODEX-BEGIN:COMPILE_FIX::counts-nullable
+        activeUsers24h: usersCountSnapshot.count ?? 0,
+        stories24h: storiesCountSnapshot.count ?? 0,
+        pendingReports: reportsCountSnapshot.count ?? 0,
+        // CODEX-END:COMPILE_FIX::counts-nullable
         fetchedAt: now,
       );
     }, debugLabel: 'fetchAdminDashboard');
