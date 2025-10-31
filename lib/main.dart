@@ -58,6 +58,7 @@ import 'modules/admin/admin_dashboard_page.dart';
 // CODEX-END:ADMIN_IMPORT
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
+import 'ui/auth/sign_in_page.dart';
 
 // CODEX-BEGIN:BOOT_GUARD_TYPES
 class _BootStatus {
@@ -475,13 +476,50 @@ void main() async {
   await runZonedGuarded(() async {
     // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
     cf.FirebaseFirestore.instance.settings = const cf.Settings(persistenceEnabled: true);
-    runApp(const ChatUltraApp());
+    runApp(const MyApp());
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error');
     FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
   });
 }
 // CODEX-END:BOOT_GUARD_INIT
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Chat Ultra',
+      theme: ThemeData(useMaterial3: true),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snap.data == null) {
+          return const SignInPage();
+        }
+        // Replace Placeholder() with your app’s main home page widget.
+        return const ChatUltraApp();
+      },
+    );
+  }
+}
 
 class ChatUltraApp extends StatefulWidget {
   const ChatUltraApp({super.key});
