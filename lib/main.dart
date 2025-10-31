@@ -42,6 +42,22 @@ import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
+// CODEX-BEGIN:BOOT_GUARD_TYPES
+class _BootStatus {
+  static bool firebaseReady = false;
+  static Object? lastError;
+}
+
+void _bootLog(Object msg) {
+  // Centralized debug logging for boot path
+  // Use debugPrint to avoid truncation of long lines.
+  // Safe to leave in release; it no-ops if not connected.
+  // Example entries appear as: [BOOT] ...
+  // (No external dependencies).
+  // ignore: avoid_print
+  debugPrint('[BOOT] $msg');
+}
+// CODEX-END:BOOT_GUARD_TYPES
 // CODEX-BEGIN:TRANSLATOR_IMPORT
 import 'modules/translator/translator_service.dart';
 // CODEX-END:TRANSLATOR_IMPORT
@@ -61,43 +77,45 @@ import 'modules/admin/admin_dashboard_page.dart';
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
 
-// CODEX-BEGIN:BOOT_AUTH_PING
-/// Ensures Firebase is initialized, the user is signed in (anonymous if needed),
-/// and Firestore is reachable. Also upserts a tiny boot config doc so the app
-/// doesn't hang waiting for a missing document.
+// CODEX-BEGIN:BOOT_GUARD_PING
 Future<void> ensureBootAuthAndPing() async {
-  // Initialize Firebase once
   try {
-    // If already initialized, this is a no-op in recent SDKs.
-    await Firebase.initializeApp();
-  } catch (_) {
-    // Some environments may already be initialized; ignore.
+    final cfgRef = FirebaseFirestore.instance
+        .collection('store_config')
+        .doc('app');
+    // Prefer server but allow cached fallback; never hang > 5s.
+    final snapshot = await cfgRef
+        .get(const GetOptions(source: Source.serverAndCache))
+        .timeout(const Duration(seconds: 5));
+    _bootLog('Config loaded: ${snapshot.exists}');
+  } on Object catch (e) {
+    _bootLog('Config load FAILED (continuing): $e');
   }
 
-  // Ensure we have an authenticated user (anonymous is fine for boot).
-  final auth = FirebaseAuth.instance;
-  if (auth.currentUser == null) {
-    await auth.signInAnonymously();
+  // If you sign-in anonymously or refresh tokens here, guard them too:
+  try {
+    final auth = FirebaseAuth.instance;
+    if (auth.currentUser == null) {
+      await auth
+          .signInAnonymously()
+          .timeout(const Duration(seconds: 8));
+      _bootLog('Anonymous auth ready.');
+    }
+  } on Object catch (e) {
+    _bootLog('Auth warmup FAILED (continuing): $e');
   }
-
-  // Tiny ping to a known config doc to prevent "missing doc" hangs.
-  final fs = FirebaseFirestore.instance;
-  final cfgRef = fs.collection('store_config').doc('app');
-
-  // Merge so we never overwrite real settings if they already exist.
-  await cfgRef.set(<String, dynamic>{
-    'bootPing': FieldValue.serverTimestamp(),
-    // Safe defaults if the doc was missing
-    'signupsEnabled': FieldValue.delete(), // keep minimal; do not force values
-    'messagingEnabled': FieldValue.delete(),
-  }, SetOptions(merge: true));
-
-  // Read once to ensure permissions/connectivity are OK; fail fast if not.
-  await cfgRef.get();
-  // If we reached here, Firestore is reachable and auth is valid.
-  // (We rely on existing app UI for navigation; no UI changes here.)
 }
-// CODEX-END:BOOT_AUTH_PING
+// CODEX-END:BOOT_GUARD_PING
+
+// CODEX-BEGIN:BOOT_GUARD_DEFER_CALL
+void _kickBootWarmups() {
+  // Run after first frame so UI never blocks on slow network.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    // ignore: discarded_futures
+    ensureBootAuthAndPing();
+  });
+}
+// CODEX-END:BOOT_GUARD_DEFER_CALL
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
@@ -436,14 +454,26 @@ extension NotificationsDeepLinks on NotificationsService {
 final navigatorKey = GlobalKey<NavigatorState>();
 
 // ---------- Entry ----------
-// CODEX-BEGIN:BOOT_AUTH_CALL
+// CODEX-BEGIN:BOOT_GUARD_INIT
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await ensureBootAuthAndPing(); // ensure auth + config before UI
+
+  try {
+    // Never hang here; continue after 10s max.
+    await Firebase.initializeApp()
+        .timeout(const Duration(seconds: 10));
+    _BootStatus.firebaseReady = true;
+    _bootLog('Firebase initialized.');
+  } on Object catch (e) {
+    _BootStatus.lastError = e;
+    _bootLog('Firebase init FAILED (continuing offline): $e');
+  }
+
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
     debugPrint('FlutterError: ${details.exceptionAsString()}');
   };
+
   await runZonedGuarded(() async {
     // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
     cf.FirebaseFirestore.instance.settings = const cf.Settings(persistenceEnabled: true);
@@ -453,7 +483,7 @@ void main() async {
     FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
   });
 }
-// CODEX-END:BOOT_AUTH_CALL
+// CODEX-END:BOOT_GUARD_INIT
 
 class ChatUltraApp extends StatefulWidget {
   const ChatUltraApp({super.key});
@@ -469,7 +499,13 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
   // CODEX-END:PRIVACY_PRESENCE_STATE
 
   @override
-  void initState() { super.initState(); WidgetsBinding.instance.addObserver(this); }
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // CODEX-BEGIN:BOOT_GUARD_DEFER_CALL
+    _kickBootWarmups();
+    // CODEX-END:BOOT_GUARD_DEFER_CALL
+  }
   @override
   void dispose() { WidgetsBinding.instance.removeObserver(this); super.dispose(); }
 
