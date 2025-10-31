@@ -19,42 +19,6 @@ import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-/// Ensures Firebase is initialized, the user is signed in (anonymous if needed),
-/// and Firestore is reachable. Also upserts a tiny boot config doc so the app
-/// doesn't hang waiting for a missing document.
-Future<void> ensureBootAuthAndPing() async {
-  // Initialize Firebase once
-  try {
-    // If already initialized, this is a no-op in recent SDKs.
-    await Firebase.initializeApp();
-  } catch (_) {
-    // Some environments may already be initialized; ignore.
-  }
-
-  // Ensure we have an authenticated user (anonymous is fine for boot).
-  final auth = FirebaseAuth.instance;
-  if (auth.currentUser == null) {
-    await auth.signInAnonymously();
-  }
-
-  // Tiny ping to a known config doc to prevent "missing doc" hangs.
-  final fs = FirebaseFirestore.instance;
-  final cfgRef = fs.collection('store_config').doc('app');
-
-  // Merge so we never overwrite real settings if they already exist.
-  await cfgRef.set(<String, dynamic>{
-    'bootPing': FieldValue.serverTimestamp(),
-    // Safe defaults if the doc was missing
-    'signupsEnabled': FieldValue.delete(), // keep minimal; do not force values
-    'messagingEnabled': FieldValue.delete(),
-  }, SetOptions(merge: true));
-
-  // Read once to ensure permissions/connectivity are OK; fail fast if not.
-  await cfgRef.get();
-  // If we reached here, Firestore is reachable and auth is valid.
-  // (We rely on existing app UI for navigation; no UI changes here.)
-}
 // CODEX-END:BOOT_AUTH_PING
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -96,6 +60,44 @@ import 'modules/admin/admin_dashboard_page.dart';
 // CODEX-END:ADMIN_IMPORT
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
+
+// CODEX-BEGIN:BOOT_AUTH_PING
+/// Ensures Firebase is initialized, the user is signed in (anonymous if needed),
+/// and Firestore is reachable. Also upserts a tiny boot config doc so the app
+/// doesn't hang waiting for a missing document.
+Future<void> ensureBootAuthAndPing() async {
+  // Initialize Firebase once
+  try {
+    // If already initialized, this is a no-op in recent SDKs.
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Some environments may already be initialized; ignore.
+  }
+
+  // Ensure we have an authenticated user (anonymous is fine for boot).
+  final auth = FirebaseAuth.instance;
+  if (auth.currentUser == null) {
+    await auth.signInAnonymously();
+  }
+
+  // Tiny ping to a known config doc to prevent "missing doc" hangs.
+  final fs = FirebaseFirestore.instance;
+  final cfgRef = fs.collection('store_config').doc('app');
+
+  // Merge so we never overwrite real settings if they already exist.
+  await cfgRef.set(<String, dynamic>{
+    'bootPing': FieldValue.serverTimestamp(),
+    // Safe defaults if the doc was missing
+    'signupsEnabled': FieldValue.delete(), // keep minimal; do not force values
+    'messagingEnabled': FieldValue.delete(),
+  }, SetOptions(merge: true));
+
+  // Read once to ensure permissions/connectivity are OK; fail fast if not.
+  await cfgRef.get();
+  // If we reached here, Firestore is reachable and auth is valid.
+  // (We rely on existing app UI for navigation; no UI changes here.)
+}
+// CODEX-END:BOOT_AUTH_PING
 
 // ---------- ألوان وهوية ----------
 const kTeal = Color(0xFF00796B);      // الأساسي: أخضر مُزرّق
