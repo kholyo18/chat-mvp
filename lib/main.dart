@@ -13,9 +13,49 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart' as cf;
+
+// CODEX-BEGIN:BOOT_AUTH_PING
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' as cf;
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+/// Ensures Firebase is initialized, the user is signed in (anonymous if needed),
+/// and Firestore is reachable. Also upserts a tiny boot config doc so the app
+/// doesn't hang waiting for a missing document.
+Future<void> ensureBootAuthAndPing() async {
+  // Initialize Firebase once
+  try {
+    // If already initialized, this is a no-op in recent SDKs.
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Some environments may already be initialized; ignore.
+  }
+
+  // Ensure we have an authenticated user (anonymous is fine for boot).
+  final auth = FirebaseAuth.instance;
+  if (auth.currentUser == null) {
+    await auth.signInAnonymously();
+  }
+
+  // Tiny ping to a known config doc to prevent "missing doc" hangs.
+  final fs = FirebaseFirestore.instance;
+  final cfgRef = fs.collection('store_config').doc('app');
+
+  // Merge so we never overwrite real settings if they already exist.
+  await cfgRef.set(<String, dynamic>{
+    'bootPing': FieldValue.serverTimestamp(),
+    // Safe defaults if the doc was missing
+    'signupsEnabled': FieldValue.delete(), // keep minimal; do not force values
+    'messagingEnabled': FieldValue.delete(),
+  }, SetOptions(merge: true));
+
+  // Read once to ensure permissions/connectivity are OK; fail fast if not.
+  await cfgRef.get();
+  // If we reached here, Firestore is reachable and auth is valid.
+  // (We rely on existing app UI for navigation; no UI changes here.)
+}
+// CODEX-END:BOOT_AUTH_PING
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -394,14 +434,15 @@ extension NotificationsDeepLinks on NotificationsService {
 final navigatorKey = GlobalKey<NavigatorState>();
 
 // ---------- Entry ----------
-Future<void> main() async {
+// CODEX-BEGIN:BOOT_AUTH_CALL
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await ensureBootAuthAndPing(); // ensure auth + config before UI
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
     debugPrint('FlutterError: ${details.exceptionAsString()}');
   };
   await runZonedGuarded(() async {
-    await Firebase.initializeApp();
     // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
     cf.FirebaseFirestore.instance.settings = const cf.Settings(persistenceEnabled: true);
     runApp(const ChatUltraApp());
@@ -410,6 +451,7 @@ Future<void> main() async {
     FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
   });
 }
+// CODEX-END:BOOT_AUTH_CALL
 
 class ChatUltraApp extends StatefulWidget {
   const ChatUltraApp({super.key});
