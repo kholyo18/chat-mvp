@@ -13,12 +13,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:cloud_firestore/cloud_firestore.dart' as cf;
-
 // CODEX-BEGIN:BOOT_AUTH_PING
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 // CODEX-END:BOOT_AUTH_PING
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -42,22 +40,6 @@ import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
-// CODEX-BEGIN:BOOT_GUARD_TYPES
-class _BootStatus {
-  static bool firebaseReady = false;
-  static Object? lastError;
-}
-
-void _bootLog(Object msg) {
-  // Centralized debug logging for boot path
-  // Use debugPrint to avoid truncation of long lines.
-  // Safe to leave in release; it no-ops if not connected.
-  // Example entries appear as: [BOOT] ...
-  // (No external dependencies).
-  // ignore: avoid_print
-  debugPrint('[BOOT] $msg');
-}
-// CODEX-END:BOOT_GUARD_TYPES
 // CODEX-BEGIN:TRANSLATOR_IMPORT
 import 'modules/translator/translator_service.dart';
 // CODEX-END:TRANSLATOR_IMPORT
@@ -77,15 +59,31 @@ import 'modules/admin/admin_dashboard_page.dart';
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
 
+// CODEX-BEGIN:BOOT_GUARD_TYPES
+class _BootStatus {
+  static bool firebaseReady = false;
+  static Object? lastError;
+}
+
+void _bootLog(Object msg) {
+  // Centralized debug logging for boot path
+  // Use debugPrint to avoid truncation of long lines.
+  // Safe to leave in release; it no-ops if not connected.
+  // Example entries appear as: [BOOT] ...
+  // (No external dependencies).
+  // ignore: avoid_print
+  debugPrint('[BOOT] $msg');
+}
+// CODEX-END:BOOT_GUARD_TYPES
 // CODEX-BEGIN:BOOT_GUARD_PING
 Future<void> ensureBootAuthAndPing() async {
   try {
-    final cfgRef = FirebaseFirestore.instance
+    final cfgRef = cf.FirebaseFirestore.instance
         .collection('store_config')
         .doc('app');
     // Prefer server but allow cached fallback; never hang > 5s.
     final snapshot = await cfgRef
-        .get(const GetOptions(source: Source.serverAndCache))
+        .get(const cf.GetOptions(source: cf.Source.serverAndCache))
         .timeout(const Duration(seconds: 5));
     _bootLog('Config loaded: ${snapshot.exists}');
   } on Object catch (e) {
