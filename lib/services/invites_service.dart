@@ -56,11 +56,15 @@ class InvitesService {
       final response = await callable.call(payload).timeout(timeout);
       final data = response.data as Map<String, dynamic>?;
       if (data == null || data['code'] is! String) {
-        throw const FirebaseFunctionsException(code: 'invalid-response', message: 'Missing code in response');
+        // CODEX-BEGIN:COMPILE_FIX::invites-func-ex
+        throw FirebaseFunctionsException(code: 'invalid-response', message: 'Missing code in response');
+        // CODEX-END:COMPILE_FIX::invites-func-ex
       }
       return data['code'] as String;
     } on TimeoutException {
-      throw const FirebaseFunctionsException(code: 'deadline-exceeded', message: 'Invite creation timed out');
+      // CODEX-BEGIN:COMPILE_FIX::invites-func-ex
+      throw FirebaseFunctionsException(code: 'deadline-exceeded', message: 'Invite creation timed out');
+      // CODEX-END:COMPILE_FIX::invites-func-ex
     }
   }
 
@@ -93,7 +97,9 @@ class InvitesService {
         );
       }).where((invite) => invite.code.isNotEmpty).toList();
     } on TimeoutException {
-      throw const FirebaseFunctionsException(code: 'deadline-exceeded', message: 'Invite list timed out');
+      // CODEX-BEGIN:COMPILE_FIX::invites-func-ex
+      throw FirebaseFunctionsException(code: 'deadline-exceeded', message: 'Invite list timed out');
+      // CODEX-END:COMPILE_FIX::invites-func-ex
     }
   }
 
@@ -113,7 +119,9 @@ class InvitesService {
       final roomId = data?['roomId'] as String?;
       return InviteRedeemResult(joined: joined, alreadyMember: alreadyMember, roomId: roomId);
     } on TimeoutException {
-      throw const FirebaseFunctionsException(code: 'deadline-exceeded', message: 'Invite redemption timed out');
+      // CODEX-BEGIN:COMPILE_FIX::invites-func-ex
+      throw FirebaseFunctionsException(code: 'deadline-exceeded', message: 'Invite redemption timed out');
+      // CODEX-END:COMPILE_FIX::invites-func-ex
     }
   }
 
