@@ -51,6 +51,9 @@ import 'modules/wallet/wallet_controller.dart';
 // CODEX-BEGIN:PRIVACY_IMPORTS
 import 'modules/privacy/privacy_controller.dart';
 import 'modules/privacy/privacy_settings_page.dart';
+// CODEX-BEGIN:ADMIN_IMPORT
+import 'modules/admin/admin_dashboard_page.dart';
+// CODEX-END:ADMIN_IMPORT
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
 
@@ -669,6 +672,15 @@ class _HomePageState extends State<HomePage> {
   int idx = 0;
   @override
   Widget build(BuildContext context) {
+    // CODEX-BEGIN:ADMIN_BLOCK_HOME
+    final appUser = context.watch<AppUser>();
+    final bool blocked = appUser.profile['blocked'] == true;
+    void showBlockedSnack() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تقييد نشر القصص مؤقتاً من قبل الإدارة.')),
+      );
+    }
+    // CODEX-END:ADMIN_BLOCK_HOME
     final tabs = const [
       RoomsTab(),        // مجتمع وغرف
       StorePage(),       // اقتصاد
@@ -699,7 +711,11 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: ()=> navigatorKey.currentState?.pushNamed('/story_create'),
+        // CODEX-BEGIN:ADMIN_BLOCK_HOME_FAB
+        onPressed: blocked
+            ? showBlockedSnack
+            : () => navigatorKey.currentState?.pushNamed('/story_create'),
+        // CODEX-END:ADMIN_BLOCK_HOME_FAB
         icon: const Icon(Icons.brightness_5_rounded),
         label: const Text('Add Story'),
       ),
@@ -4682,6 +4698,16 @@ class _StoryCreatePageState extends State<StoryCreatePage> {
   Future<void> _publish() async {
     final me = FirebaseAuth.instance.currentUser?.uid;
     if (me == null) return;
+    // CODEX-BEGIN:ADMIN_BLOCK_STORY_UI
+    final bool blocked = context.read<AppUser>().profile['blocked'] == true;
+    if (blocked) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تقييد نشر القصص مؤقتاً من قبل الإدارة.')),
+      );
+      return;
+    }
+    // CODEX-END:ADMIN_BLOCK_STORY_UI
     final storiesRef = cf.FirebaseFirestore.instance.collection('stories').doc(me).collection('items');
     late final cf.DocumentReference<Map<String, dynamic>> docRef;
     if (_type == StoryType.text) {
@@ -5326,6 +5352,15 @@ class _InboxPageState extends State<InboxPage> {
   @override
   Widget build(BuildContext context) {
     final content = _buildList();
+    // CODEX-BEGIN:ADMIN_BLOCK_INBOX
+    final appUser = context.watch<AppUser>();
+    final bool blocked = appUser.profile['blocked'] == true;
+    void showBlockedSnack() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تقييد الرسائل الخاصة مؤقتاً من قبل الإدارة.')),
+      );
+    }
+    // CODEX-END:ADMIN_BLOCK_INBOX
     return Scaffold(
       appBar: AppBar(title: const Text('Inbox')),
       body: RefreshIndicator(
@@ -5338,12 +5373,16 @@ class _InboxPageState extends State<InboxPage> {
                   SizedBox(
                     height: MediaQuery.of(context).size.height * 0.5,
                     child: content,
-                  ),
-                ],
               ),
+            ],
+          ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => navigatorKey.currentState?.pushNamed('/people'),
+        // CODEX-BEGIN:ADMIN_BLOCK_INBOX_FAB
+        onPressed: blocked
+            ? showBlockedSnack
+            : () => navigatorKey.currentState?.pushNamed('/people'),
+        // CODEX-END:ADMIN_BLOCK_INBOX_FAB
         child: const Icon(Icons.person_search_rounded),
       ),
     );
@@ -5995,49 +6034,12 @@ class AdminPortalPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rooms = cf.FirebaseFirestore.instance.collection('rooms')
-      .orderBy('createdAt', descending: true).limit(100).snapshots();
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('لوحة الإدارة')),
-      body: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
-        stream: rooms,
-        builder: (c, s) {
-          if (!s.hasData) return const Center(child: CircularProgressIndicator());
-          if (s.data!.docs.isEmpty) {
-            return Center(
-              child: TextButton.icon(
-                onPressed: ()=> ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('لا توجد غرف بعد'))
-                ),
-                icon: const Icon(Icons.info_outline),
-                label: const Text('لا توجد غرف'),
-              ),
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: s.data!.docs.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (_, i) {
-              final d = s.data!.docs[i].data();
-              final id = s.data!.docs[i].id;
-              return Card(
-                child: ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.forum_rounded)),
-                  title: Text(d['name'] ?? id),
-                  subtitle: Text(d['about'] ?? ''),
-                  trailing: FilledButton(
-                    onPressed: ()=> navigatorKey.currentState?.pushNamed('/admin/room', arguments: id),
-                    child: const Text('إدارة'),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
+    // CODEX-BEGIN:ADMIN_PORTAL
+    final appUser = context.watch<AppUser>();
+    final uid = appUser.firebaseUser?.uid;
+    final bool isAdmin = appUser.profile['isAdmin'] == true;
+    return AdminDashboardPage(uid: uid, isAdmin: isAdmin);
+    // CODEX-END:ADMIN_PORTAL
   }
 }
 

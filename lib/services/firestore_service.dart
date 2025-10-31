@@ -181,6 +181,91 @@ class StorePagePayload {
   final bool hasMore;
 }
 
+// CODEX-BEGIN:ADMIN_FIRESTORE_MODELS
+class AdminDashboardData {
+  const AdminDashboardData({
+    required this.activeUsers24h,
+    required this.stories24h,
+    required this.pendingReports,
+    required this.fetchedAt,
+  });
+
+  final int activeUsers24h;
+  final int stories24h;
+  final int pendingReports;
+  final DateTime fetchedAt;
+
+  AdminDashboardData copyWith({
+    int? activeUsers24h,
+    int? stories24h,
+    int? pendingReports,
+    DateTime? fetchedAt,
+  }) {
+    return AdminDashboardData(
+      activeUsers24h: activeUsers24h ?? this.activeUsers24h,
+      stories24h: stories24h ?? this.stories24h,
+      pendingReports: pendingReports ?? this.pendingReports,
+      fetchedAt: fetchedAt ?? this.fetchedAt,
+    );
+  }
+}
+
+class AdminReportItem {
+  AdminReportItem({
+    required this.id,
+    required this.reason,
+    required this.status,
+    required this.createdAt,
+    this.targetId,
+    this.targetType,
+    this.reportedBy,
+    this.payload,
+    this.storyId,
+  });
+
+  final String id;
+  final String reason;
+  final String status;
+  final DateTime? createdAt;
+  final String? targetId;
+  final String? targetType;
+  final String? reportedBy;
+  final Map<String, dynamic>? payload;
+  final String? storyId;
+
+  factory AdminReportItem.fromSnapshot(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = _cloneMap(doc.data());
+    final target = data['targetId']?.toString();
+    final storyRef = data['storyId']?.toString();
+    return AdminReportItem(
+      id: doc.id,
+      reason: (data['reason'] as String?) ?? '',
+      status: (data['status'] as String?) ?? 'pending',
+      createdAt: _parseDateTime(data['createdAt']),
+      targetId: target?.isEmpty == true ? null : target,
+      targetType: (data['targetType'] as String?) ?? data['type']?.toString(),
+      reportedBy: (data['createdBy'] as String?) ?? data['reporter']?.toString(),
+      payload: Map<String, dynamic>.unmodifiable(data),
+      storyId: storyRef?.isEmpty == true ? null : storyRef,
+    );
+  }
+}
+
+class AdminReportsPage {
+  const AdminReportsPage({
+    required this.reports,
+    required this.lastDocument,
+    required this.hasMore,
+  });
+
+  final List<AdminReportItem> reports;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+  final bool hasMore;
+}
+// CODEX-END:ADMIN_FIRESTORE_MODELS
+
 // CODEX-BEGIN:WALLET_FIRESTORE_MODELS
 class WalletSummary {
   const WalletSummary({
@@ -580,6 +665,30 @@ class FirestoreService {
 
   final FirebaseFirestore _firestore;
 
+  // CODEX-BEGIN:ADMIN_FIRESTORE_HELPERS
+  Future<void> _assertAdmin(String? uid) async {
+    if (uid == null || uid.isEmpty) {
+      throw Exception('لا يوجد مستخدم لتأكيد الصلاحيات.');
+    }
+    final snap = await _firestore.collection('users').doc(uid).get();
+    final data = snap.data();
+    if (data == null || data['isAdmin'] != true) {
+      throw Exception('ليس لديك صلاحية الوصول الإدارية.');
+    }
+  }
+
+  Future<void> _ensureUserNotBlocked(String uid) async {
+    if (uid.isEmpty) {
+      throw Exception('تعذر التحقق من صلاحية الحساب.');
+    }
+    final snap = await _firestore.collection('users').doc(uid).get();
+    final data = snap.data();
+    if (data != null && data['blocked'] == true) {
+      throw Exception('تم تقييد هذا الحساب مؤقتاً من قبل المشرفين.');
+    }
+  }
+  // CODEX-END:ADMIN_FIRESTORE_HELPERS
+
   Future<StorePagePayload> fetchStorePage({
     DocumentSnapshot<Map<String, dynamic>>? startAfter,
     int limit = 20,
@@ -697,6 +806,9 @@ class FirestoreService {
     List<String>? allowedUids,
   }) {
     return safeRequest<Story>(() async {
+      // CODEX-BEGIN:ADMIN_BLOCK_STORY
+      await _ensureUserNotBlocked(uid);
+      // CODEX-END:ADMIN_BLOCK_STORY
       final docRef = _storiesCollection.doc();
       final Map<String, dynamic> payload = <String, dynamic>{
         'id': docRef.id,
@@ -866,6 +978,9 @@ class FirestoreService {
       if (currentUid == otherUid) {
         throw ArgumentError('Cannot start DM with yourself');
       }
+      // CODEX-BEGIN:ADMIN_BLOCK_DM
+      await _ensureUserNotBlocked(currentUid);
+      // CODEX-END:ADMIN_BLOCK_DM
       final List<String> participants = <String>[currentUid, otherUid]..sort();
       final String threadId = participants.join('_');
       final DocumentReference<Map<String, dynamic>> docRef =
@@ -925,5 +1040,109 @@ class FirestoreService {
     }, debugLabel: 'openOrCreateDirectThread');
   }
   // CODEX-END:CHAT_FIRESTORE_METHODS
+
+  // CODEX-BEGIN:ADMIN_FIRESTORE_METHODS
+  Future<SafeResult<AdminDashboardData>> fetchAdminDashboard({
+    required String uid,
+  }) {
+    return safeRequest<AdminDashboardData>(() async {
+      await _assertAdmin(uid);
+      final now = DateTime.now();
+      final cutoff = Timestamp.fromDate(now.subtract(const Duration(hours: 24)));
+      final usersCountSnapshot = await _firestore
+          .collection('users')
+          .where('lastActive', isGreaterThanOrEqualTo: cutoff)
+          .count()
+          .get();
+      final storiesQuery = _firestore
+          .collection('stories')
+          .where('createdAt', isGreaterThanOrEqualTo: cutoff)
+          .where('deleted', isEqualTo: false);
+      final storiesCountSnapshot = await storiesQuery.count().get();
+      final reportsCountSnapshot = await _firestore
+          .collection('reports')
+          .where('status', isEqualTo: 'pending')
+          .count()
+          .get();
+      return AdminDashboardData(
+        activeUsers24h: usersCountSnapshot.count,
+        stories24h: storiesCountSnapshot.count,
+        pendingReports: reportsCountSnapshot.count,
+        fetchedAt: now,
+      );
+    }, debugLabel: 'fetchAdminDashboard');
+  }
+
+  Future<SafeResult<AdminReportsPage>> fetchPendingReportsPage({
+    required String uid,
+    DocumentSnapshot<Map<String, dynamic>>? startAfter,
+    int limit = 20,
+  }) {
+    return safeRequest<AdminReportsPage>(() async {
+      await _assertAdmin(uid);
+      Query<Map<String, dynamic>> query = _firestore
+          .collection('reports')
+          .where('status', isEqualTo: 'pending')
+          .orderBy('createdAt', descending: true)
+          .limit(limit);
+      if (startAfter != null) {
+        query = query.startAfterDocument(startAfter);
+      }
+      final snapshot = await query.get();
+      final docs = snapshot.docs;
+      final reports = docs.map(AdminReportItem.fromSnapshot).toList();
+      final hasMore = docs.length == limit;
+      final lastDoc = docs.isNotEmpty ? docs.last : startAfter;
+      return AdminReportsPage(
+        reports: reports,
+        lastDocument: lastDoc,
+        hasMore: hasMore,
+      );
+    }, debugLabel: 'fetchPendingReportsPage');
+  }
+
+  Future<SafeResult<void>> resolveReport({
+    required String uid,
+    required String reportId,
+  }) {
+    return safeRequest<void>(() async {
+      await _assertAdmin(uid);
+      final doc = _firestore.collection('reports').doc(reportId);
+      await doc.update({
+        'status': 'resolved',
+        'resolvedAt': FieldValue.serverTimestamp(),
+        'resolvedBy': uid,
+      });
+    }, debugLabel: 'resolveReport');
+  }
+
+  Future<SafeResult<void>> softBlockUser({
+    required String uid,
+    required String targetUid,
+  }) {
+    return safeRequest<void>(() async {
+      await _assertAdmin(uid);
+      final userDoc = _firestore.collection('users').doc(targetUid);
+      await userDoc.set({
+        'blocked': true,
+        'blockedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }, debugLabel: 'softBlockUser');
+  }
+
+  Future<SafeResult<void>> deleteStory({
+    required String uid,
+    required String storyId,
+  }) {
+    return safeRequest<void>(() async {
+      await _assertAdmin(uid);
+      final storyDoc = _firestore.collection('stories').doc(storyId);
+      await storyDoc.set({
+        'deleted': true,
+        'deletedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }, debugLabel: 'deleteStory');
+  }
+  // CODEX-END:ADMIN_FIRESTORE_METHODS
 }
 // CODEX-END:STORE_FIRESTORE_SERVICE
