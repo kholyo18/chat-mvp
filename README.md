@@ -96,3 +96,46 @@ The Android client forwards purchase tokens to
 `https://<REGION>-<PROJECT_ID>.cloudfunctions.net/verifyPlayPurchase`. The cloud
 function validates the purchase with the Android Publisher API, enforces the
 daily limit, acknowledges the purchase, and updates the Firestore wallet.
+
+## Profile Edit
+
+The profile editor allows members to update their avatar, cover photo, display
+name, unique @username, bio, website, location, and birthday. Images are
+uploaded to Firebase Storage at:
+
+- `users/{uid}/profile.jpg` for the avatar
+- `users/{uid}/cover.jpg` for the cover image
+
+Profile metadata is stored under `users/{uid}` in Cloud Firestore using the
+following shape:
+
+```json
+{
+  "displayName": "string",
+  "username": "lowercase string",
+  "bio": "string | null",
+  "website": "https://... | null",
+  "location": "string | null",
+  "birthdate": "Timestamp | null",
+  "photoURL": "string | null",
+  "coverURL": "string | null",
+  "privacy": {
+    "showEmail": false,
+    "dmPermission": "all" | "followers"
+  },
+  "updatedAt": "Timestamp"
+}
+```
+
+Enable the Firestore security rule that only allows a signed-in user to create
+or update their own document:
+
+```text
+match /users/{uid} {
+  allow read: if isSignedIn() && request.auth.uid == uid;
+  allow write: if isSignedIn() && request.auth.uid == uid;
+}
+```
+
+Grant the authenticated user the Storage permissions required for `users/{uid}`
+paths so avatars and covers can be uploaded.

@@ -63,6 +63,7 @@ import 'auth/forgot_password_page.dart';
 import 'services/auth_service.dart';
 import 'screens/auth/email_verification_screen.dart';
 import 'screens/auth/register_screen.dart';
+import 'screens/profile_edit.dart';
 import 'ui/auth/sign_in_page.dart';
 
 // CODEX-BEGIN:BOOT_GUARD_TYPES
@@ -2091,7 +2092,6 @@ class VIPHubPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => const Scaffold(body: Center(child: Text('VIP Hub (part 8)')));
 }
-class ProfileEditPage extends StatelessWidget { const ProfileEditPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Profile Edit (part 7)'))); }
 class SettingsHubPage extends StatelessWidget { const SettingsHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Settings (part 9)'))); }
 class AdminPanelPage extends StatelessWidget { const AdminPanelPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Admin (part 9)'))); }
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 2/12] =====================
@@ -5790,6 +5790,18 @@ class ProfilePage extends StatelessWidget {
     final doc = cf.FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
     final coinsService = CoinsService();
 
+    Future<void> openEditor() async {
+      final changed = await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ProfileEditPage()),
+      );
+      if (changed == true && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تم تحديث الملف الشخصي بنجاح')),
+        );
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
@@ -5801,7 +5813,7 @@ class ProfilePage extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'تحرير',
-            onPressed: ()=> Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfilePage())),
+            onPressed: openEditor,
             icon: const Icon(Icons.edit_rounded),
           ),
         ],
@@ -5847,7 +5859,7 @@ class ProfilePage extends StatelessWidget {
                   Positioned(
                     right: 12, bottom: 12,
                     child: FilledButton.icon(
-                      onPressed: ()=> Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfilePage())),
+                      onPressed: openEditor,
                       icon: const Icon(Icons.edit_rounded),
                       label: const Text('تعديل'),
                     ),
@@ -5982,308 +5994,6 @@ class ProfilePage extends StatelessWidget {
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-// =============== Edit Profile ===============
-class EditProfilePage extends StatefulWidget {
-  const EditProfilePage({super.key});
-  @override
-  State<EditProfilePage> createState() => _EditProfilePageState();
-}
-
-class _EditProfilePageState extends State<EditProfilePage> {
-  final _name   = TextEditingController();
-  final _bio    = TextEditingController();
-  final _link   = TextEditingController();
-  final _location = TextEditingController();
-  DateTime? _birthday;
-
-  final _imagePicker = ImagePicker();
-  bool _saving = false;
-
-  String _avatarUrl = '';
-  String _coverUrl  = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final d = await cf.FirebaseFirestore.instance.collection('users').doc(uid).get();
-    final data = d.data() ?? {};
-    _name.text = (data['displayName'] ?? '') as String;
-    _bio.text  = (data['bio'] ?? '') as String;
-    _link.text = (data['link'] ?? '') as String;
-    _location.text = (data['location'] ?? '') as String;
-    _avatarUrl = (data['avatarUrl'] ?? '') as String;
-    _coverUrl  = (data['coverUrl'] ?? '') as String;
-    final ts = data['birthday'];
-    if (ts is cf.Timestamp) _birthday = ts.toDate();
-    if (mounted) setState((){});
-  }
-
-  Future<void> _pickAvatar() async {
-    final x = await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 90);
-    if (x == null) return;
-    setState(()=> _saving = true);
-    try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      final ref = FirebaseStorage.instance.ref('users/$uid/avatar_${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await ref.putFile(File(x.path), SettableMetadata(contentType: 'image/jpeg'));
-      final url = await ref.getDownloadURL();
-      await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({'avatarUrl': url}, cf.SetOptions(merge: true));
-      _avatarUrl = url;
-    } finally {
-      if (mounted) setState(()=> _saving = false);
-    }
-  }
-
-  Future<void> _pickCover() async {
-    final x = await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 90);
-    if (x == null) return;
-    setState(()=> _saving = true);
-    try {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-      final ref = FirebaseStorage.instance.ref('users/$uid/cover_${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await ref.putFile(File(x.path), SettableMetadata(contentType: 'image/jpeg'));
-      final url = await ref.getDownloadURL();
-      await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({'coverUrl': url}, cf.SetOptions(merge: true));
-      _coverUrl = url;
-    } finally {
-      if (mounted) setState(()=> _saving = false);
-    }
-  }
-
-  Future<void> _save() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    setState(()=> _saving = true);
-    try {
-      await cf.FirebaseFirestore.instance.collection('users').doc(uid).set({
-        'displayName': _name.text.trim().isEmpty ? 'User' : _name.text.trim(),
-        'bio'        : _bio.text.trim(),
-        'link'       : _link.text.trim(),
-        'location'   : _location.text.trim(),
-        if (_birthday != null) 'birthday': cf.Timestamp.fromDate(_birthday!),
-        'updatedAt'  : cf.FieldValue.serverTimestamp(),
-      }, cf.SetOptions(merge: true));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم حفظ التغييرات ✅')));
-        Navigator.pop(context);
-      }
-    } finally {
-      if (mounted) setState(()=> _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('تعديل البروفايل'),
-        actions: [
-          TextButton(
-            onPressed: _saving ? null : _save,
-            child: _saving
-                ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('حفظ'),
-          )
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // Cover + Avatar pickers
-          Stack(
-            children: [
-              AspectRatio(
-                aspectRatio: 16/9,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black12,
-                    image: _coverUrl.isNotEmpty ? DecorationImage(image: NetworkImage(_coverUrl), fit: BoxFit.cover) : null,
-                  ),
-                ),
-              ),
-              Positioned(
-                right: 12, bottom: 12,
-                child: ElevatedButton.icon(
-                  onPressed: _saving ? null : _pickCover,
-                  icon: const Icon(Icons.photo_camera_back_outlined),
-                  label: const Text('تغيير الغلاف'),
-                ),
-              ),
-              Positioned(
-                left: 16, bottom: -22,
-                child: GestureDetector(
-                  onTap: _saving ? null : _pickAvatar,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white, borderRadius: BorderRadius.circular(999),
-                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8)],
-                    ),
-                    padding: const EdgeInsets.all(3),
-                    child: CircleAvatar(
-                      radius: 40,
-                      backgroundColor: Colors.grey.shade200,
-                      backgroundImage: _avatarUrl.isNotEmpty ? NetworkImage(_avatarUrl) : null,
-                      child: _avatarUrl.isEmpty ? const Icon(Icons.person, size: 36, color: kTeal) : null,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 36),
-          TextField(
-            controller: _name,
-            decoration: const InputDecoration(
-              labelText: 'الاسم المعروض',
-              prefixIcon: Icon(Icons.person_outline),
-            ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _bio,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'نبذة',
-              prefixIcon: Icon(Icons.notes_rounded),
-            ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _link,
-            decoration: const InputDecoration(
-              labelText: 'رابط (Website / Social)',
-              prefixIcon: Icon(Icons.link_rounded),
-            ),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _location,
-            decoration: const InputDecoration(
-              labelText: 'الموقع',
-              prefixIcon: Icon(Icons.location_on_outlined),
-            ),
-          ),
-          const SizedBox(height: 10),
-          ListTile(
-            leading: const Icon(Icons.cake_outlined),
-            title: Text(_birthday == null ? 'تاريخ الميلاد' : _birthday!.toString().substring(0,10)),
-            trailing: const Icon(Icons.edit_calendar_rounded),
-            onTap: () async {
-              final now = DateTime.now();
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _birthday ?? DateTime(now.year - 18, now.month, now.day),
-                firstDate: DateTime(1900),
-                lastDate: now,
-              );
-              if (picked != null) setState(()=> _birthday = picked);
-            },
-          ),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: const Icon(Icons.save_rounded),
-            label: const Text('حفظ'),
-          ),
-          const SizedBox(height: 8),
-          TextButton.icon(
-            onPressed: ()=> navigatorKey.currentState?.pushNamed('/privacy'),
-            icon: const Icon(Icons.lock_person_rounded),
-            label: const Text('إعدادات الخصوصية'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-// ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 8/12] =====================
-// Advanced Admin & Moderation: Reports dashboard, actions (ban/mute/kick), filters, action logs, room selector
-
-// ---------------------- Admin Portal (rooms picker) ----------------------
-class AdminPortalPage extends StatelessWidget {
-  const AdminPortalPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    // CODEX-BEGIN:ADMIN_PORTAL
-    final appUser = context.watch<AppUser>();
-    final uid = appUser.firebaseUser?.uid;
-    final bool isAdmin = appUser.profile['isAdmin'] == true;
-    return AdminDashboardPage(uid: uid, isAdmin: isAdmin);
-    // CODEX-END:ADMIN_PORTAL
-  }
-}
-
-// ---------------------- Admin Room Panel (tabs) ----------------------
-class AdminRoomPanelPage extends StatefulWidget {
-  const AdminRoomPanelPage({super.key});
-  @override
-  State<AdminRoomPanelPage> createState() => _AdminRoomPanelPageState();
-}
-
-class _AdminRoomPanelPageState extends State<AdminRoomPanelPage> with SingleTickerProviderStateMixin {
-  late String roomId;
-  late TabController tc;
-  bool _initialized = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_initialized) {
-      final args = ModalRoute.of(context)?.settings.arguments;
-      if (args is String && args.isNotEmpty) {
-        roomId = args;
-      } else if (args is Map && args['roomId'] is String) {
-        roomId = args['roomId'] as String;
-      } else {
-        roomId = 'room_demo';
-      }
-      tc = TabController(length: 3, vsync: this);
-      _initialized = true;
-    }
-  }
-
-  @override
-  void dispose() {
-    tc.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('إدارة الغرفة — $roomId'),
-        bottom: TabBar(
-          controller: tc,
-          tabs: const [
-            Tab(text: 'البلاغات', icon: Icon(Icons.report)),
-            Tab(text: 'الأعضاء', icon: Icon(Icons.group)),
-            Tab(text: 'السجل', icon: Icon(Icons.receipt_long)),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: tc,
-        children: [
-          _ReportsTab(roomId: roomId),
-          _MembersTab(roomId: roomId),
-          _ActionsLogTab(roomId: roomId),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: ()=> _showQuickActions(context, roomId),
-        icon: const Icon(Icons.shield_moon_rounded),
-        label: const Text('إجراء سريع'),
       ),
     );
   }
