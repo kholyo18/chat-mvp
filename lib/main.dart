@@ -51,7 +51,10 @@ import 'services/firestore_service.dart';
 // CODEX-END:STORE_IMPORTS
 import 'services/wallet_service.dart';
 import 'screens/coins_shop_page.dart';
-import 'screens/store_page.dart';
+import 'models/store_product.dart';
+import 'screens/store/purchase_history_page.dart';
+import 'screens/store/product_detail_page.dart';
+import 'screens/store/store_page.dart';
 import 'screens/vip_page.dart';
 import 'screens/wallet_page.dart';
 // CODEX-BEGIN:PRIVACY_IMPORTS
@@ -732,6 +735,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
 
                 // متجر/محفظة/VIP
                 '/store': (_) => const StorePage(),
+                '/store/purchases': (_) => const PurchaseHistoryPage(),
                 '/coins/shop': (_) => CoinsShopPage(),
                 '/coins-shop': (_) => CoinsShopPage(),
                 '/wallet': (_) => const WalletPage(),
@@ -759,6 +763,37 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/post': (_) => const PostDetailPage(),
                 '/room/settings': (_) => const RoomSettingsPage(),
                 '/room/board': (_) => const RoomBoardPage(),
+              },
+              onGenerateRoute: (settings) {
+                final name = settings.name ?? '';
+                final uri = Uri.tryParse(name);
+                if (uri != null &&
+                    uri.pathSegments.length == 3 &&
+                    uri.pathSegments[0] == 'store' &&
+                    uri.pathSegments[1] == 'product') {
+                  final productId = uri.pathSegments[2];
+                  StoreProduct? initial;
+                  final args = settings.arguments;
+                  if (args is StoreProduct) {
+                    initial = args;
+                  } else if (args is Map<String, dynamic>) {
+                    initial = StoreProduct.fromJson(productId, args);
+                  } else if (args is Map) {
+                    initial = StoreProduct.fromJson(
+                      productId,
+                      Map<String, dynamic>.from(
+                          args as Map<dynamic, dynamic>),
+                    );
+                  }
+                  return MaterialPageRoute<dynamic>(
+                    builder: (_) => ProductDetailPage(
+                      productId: productId,
+                      initialProduct: initial,
+                    ),
+                    settings: settings,
+                  );
+                }
+                return null;
               },
             ),
           );
@@ -960,15 +995,15 @@ class _LangChip extends StatelessWidget {
   }
 }
 
-class StorePage extends StatefulWidget {
-  const StorePage({super.key});
+class LegacyStorePage extends StatefulWidget {
+  const LegacyStorePage({super.key});
 
   @override
-  State<StorePage> createState() => _StorePageState();
+  State<LegacyStorePage> createState() => _LegacyStorePageState();
 }
 
-class _StorePageState extends State<StorePage> {
-  _StorePageState();
+class _LegacyStorePageState extends State<LegacyStorePage> {
+  _LegacyStorePageState();
 
   final CoinsService _coinsService = CoinsService();
   final PaymentsService _paymentsService = PaymentsService();
