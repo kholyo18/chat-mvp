@@ -36,6 +36,8 @@ import 'package:flutter/services.dart'; // للروابط العميقة/الح�
 // (للمعاينة لاحقًا قد نستخدم url_launcher/file_picker/cached_network_image إن أضفتها في pubspec)
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:chat_mvp/admin/admin_portal_page.dart';
+import 'package:chat_mvp/admin/admin_room_panel_page.dart';
 
 import 'coins_purchase.dart';
 import 'services/coins_service.dart';
@@ -741,8 +743,8 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/notify/prefs': (_) => const NotificationPrefsPage(),
 
                 // إدارة
-                '/admin': (_) => const AdminPortalPage(),
-                '/admin/room': (_) => const AdminRoomPanelPage(),
+                '/admin': (_) => AdminPortalPage(),
+                '/admin/room': (_) => AdminRoomPanelPage(),
 
                 // منشورات وغرف
                 '/post': (_) => const PostDetailPage(),
