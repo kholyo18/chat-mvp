@@ -1859,10 +1859,6 @@ class _CoinPackage {
 }
 
 
-);
-  @override
-  Widget build(BuildContext context) => const Scaffold(body: Center(child: Text('VIP Hub (part 8)')));
-}
 class SettingsHubPage extends StatelessWidget { const SettingsHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Settings (part 9)'))); }
 class AdminPanelPage extends StatelessWidget { const AdminPanelPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Admin (part 9)'))); }
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 2/12] =====================
