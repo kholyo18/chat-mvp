@@ -11,6 +11,14 @@ class AuthService {
   static User? get currentUser => _auth.currentUser;
   static bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
 
+  static Future<void> sendPasswordResetEmail(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email.trim());
+    } on FirebaseAuthException catch (e) {
+      throw _mapAuthError(e);
+    }
+  }
+
   static Future<UserCredential> signUpWithEmail({
     required String fullName,
     required String email,
@@ -112,6 +120,13 @@ class AuthService {
     ]);
   }
 
+  static Future<void> signOutAll() async {
+    try {
+      await GoogleSignIn().signOut();
+    } catch (_) {}
+    await _auth.signOut();
+  }
+
   static Future<void> linkWithGoogle() async {
     final user = _auth.currentUser;
     if (user == null) {
@@ -147,5 +162,28 @@ class AuthService {
         SetOptions(merge: true),
       );
     }
+  }
+
+  static Exception _mapAuthError(FirebaseAuthException e) {
+    final code = e.code;
+    String ar;
+    switch (code) {
+      case 'invalid-email':
+        ar = 'بريد إلكتروني غير صالح.';
+        break;
+      case 'user-not-found':
+        ar = 'لا يوجد حساب بهذا البريد.';
+        break;
+      case 'too-many-requests':
+        ar = 'طلبات كثيرة جدًا. جرّب لاحقًا.';
+        break;
+      case 'network-request-failed':
+        ar = 'مشكلة في الاتصال. تأكد من الإنترنت.';
+        break;
+      default:
+        ar = 'حدث خطأ غير متوقع. حاول لاحقًا.';
+        break;
+    }
+    return Exception(ar);
   }
 }
