@@ -21,6 +21,11 @@ class WalletInsufficientBalanceException extends WalletServiceException {
       : super('Insufficient balance', code: 'insufficient-balance');
 }
 
+class WalletException extends WalletServiceException {
+  WalletException(String message, {String? code, Object? cause})
+      : super(message, code: code, cause: cause);
+}
+
 class WalletService {
   WalletService({
     FirebaseFirestore? firestore,
@@ -155,24 +160,32 @@ class WalletService {
         if (balanceRaw is num) return balanceRaw.toInt();
       }
     } on FirebaseFunctionsException catch (error) {
-      if (error.code == FunctionsErrorCode.failedPrecondition) {
-        throw WalletInsufficientBalanceException();
-      }
-      if (error.code == FunctionsErrorCode.permissionDenied) {
-        throw WalletServiceException(
-          error.message ?? 'Permission denied',
-          code: 'permission-denied',
+      final code = error.code;
+      if (code == 'failed-precondition') {
+        throw WalletException(
+          'Precondition failed',
+          code: code,
+          cause: error,
+        );
+      } else if (code == 'permission-denied') {
+        throw WalletException(
+          'Permission denied',
+          code: code,
+          cause: error,
+        );
+      } else if (code == 'unauthenticated') {
+        throw WalletException(
+          'Please sign in',
+          code: code,
+          cause: error,
+        );
+      } else {
+        throw WalletException(
+          'Wallet error: $code',
+          code: code,
           cause: error,
         );
       }
-      if (error.code == FunctionsErrorCode.unauthenticated) {
-        throw WalletServiceException(
-          error.message ?? 'Unauthenticated',
-          code: 'unauthenticated',
-          cause: error,
-        );
-      }
-      // For other failures fall back to client transaction below.
     } on Object {
       // Fall back to client transaction.
     }

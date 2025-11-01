@@ -355,7 +355,7 @@ class _WalletHeader extends StatelessWidget {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: docStream,
       builder: (context, snapshot) {
-        final data = snapshot.data()?.data() ?? <String, dynamic>{};
+        final data = (snapshot.data?.data() ?? <String, dynamic>{});
         final coins = (data['coins'] is int)
             ? data['coins'] as int
             : data['coins'] is num

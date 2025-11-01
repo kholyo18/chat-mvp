@@ -82,7 +82,7 @@ class _VipPageState extends State<VipPage> {
                   .doc(user.uid)
                   .snapshots(),
               builder: (context, snapshot) {
-                final data = snapshot.data()?.data() ?? <String, dynamic>{};
+                final data = (snapshot.data?.data() ?? <String, dynamic>{});
                 final coins = data['coins'] is int
                     ? data['coins'] as int
                     : data['coins'] is num
