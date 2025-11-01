@@ -255,6 +255,19 @@ class _SignInPageState extends State<SignInPage> {
                                 ),
                                 validator: _validatePassword,
                               ),
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () {
+                                    Navigator.of(context)
+                                        .pushNamed('/forgot-password');
+                                  },
+                                  child: const Text(
+                                    'نسيت كلمة السر؟ / Forgot password?'
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),

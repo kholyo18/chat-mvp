@@ -58,6 +58,7 @@ import 'modules/admin/admin_dashboard_page.dart';
 // CODEX-END:ADMIN_IMPORT
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
+import 'auth/forgot_password_page.dart';
 import 'services/auth_service.dart';
 import 'screens/auth/email_verification_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -499,8 +500,10 @@ class MyApp extends StatelessWidget {
       initialRoute: '/',
       routes: {
         '/': (_) => const AuthGate(),
+        '/auth': (_) => const SignInPage(),
         '/auth/register': (_) => const RegisterScreen(),
         '/auth/verify-email': (_) => const EmailVerificationScreen(),
+        '/forgot-password': (_) => const ForgotPasswordPage(),
       },
     );
   }
@@ -5934,8 +5937,44 @@ class ProfilePage extends StatelessWidget {
                 title: const Text('تسجيل الخروج'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () async {
-                  await AuthService.signOut();
-                  navigatorKey.currentState?.popUntil((route) => route.isFirst);
+                  final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) {
+                          return Directionality(
+                            textDirection: TextDirection.rtl,
+                            child: AlertDialog(
+                              title: const Text('تأكيد تسجيل الخروج'),
+                              content: const Text(
+                                'هل ترغب حقًا في تسجيل الخروج الآن؟\nAre you sure you want to log out?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                                  child: const Text('إلغاء / Cancel'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                                  child: const Text('تسجيل الخروج / Logout'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ) ??
+                      false;
+                  if (!confirmed) return;
+                  await AuthService.signOutAll();
+                  final navigator = Navigator.of(context);
+                  navigator.pushNamedAndRemoveUntil('/auth', (_) => false);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    final messengerContext =
+                        navigatorKey.currentContext ?? context;
+                    ScaffoldMessenger.of(messengerContext).showSnackBar(
+                      const SnackBar(
+                        content: Text('تم تسجيل الخروج بنجاح ✅'),
+                      ),
+                    );
+                  });
                 },
               ),
               const SizedBox(height: 24),
