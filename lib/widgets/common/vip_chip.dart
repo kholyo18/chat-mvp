@@ -6,11 +6,13 @@ class VipChip extends StatelessWidget {
     required this.tier,
     this.label = 'VIP',
     this.noneLabel = 'None',
+    this.onTap,
   });
 
   final String tier;
   final String label;
   final String noneLabel;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -54,11 +56,24 @@ class VipChip extends StatelessWidget {
       ),
     );
 
+    Widget result = chip;
+    if (onTap != null) {
+      result = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onTap,
+          child: chip,
+        ),
+      );
+    }
+
     return Tooltip(
       message: labelText,
       child: Semantics(
         label: labelText,
-        child: chip,
+        button: onTap != null,
+        child: result,
       ),
     );
   }

@@ -39,7 +39,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:chat_mvp/admin/admin_portal_page.dart';
 import 'package:chat_mvp/admin/admin_room_panel_page.dart';
 
-import 'coins_purchase.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
@@ -50,9 +49,10 @@ import 'modules/translator/translator_service.dart';
 import 'services/cache_service.dart';
 import 'services/firestore_service.dart';
 // CODEX-END:STORE_IMPORTS
-// CODEX-BEGIN:WALLET_IMPORT
-import 'modules/wallet/wallet_controller.dart';
-// CODEX-END:WALLET_IMPORT
+import 'services/wallet_service.dart';
+import 'screens/coins_shop_page.dart';
+import 'screens/vip_page.dart';
+import 'screens/wallet_page.dart';
 // CODEX-BEGIN:PRIVACY_IMPORTS
 import 'modules/privacy/privacy_controller.dart';
 import 'modules/privacy/privacy_settings_page.dart';
@@ -730,9 +730,10 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/story_create': (_) => const StoryCreatePage(),
 
                 // متجر/محفظة/VIP
-                '/store': (_) => const StorePage(),
+                '/store': (_) => const CoinsShopPage(),
+                '/coins-shop': (_) => const CoinsShopPage(),
                 '/wallet': (_) => const WalletPage(),
-                '/vip': (_) => const VIPHubPage(),
+                '/vip': (_) => const VipPage(),
 
                 // متابعة وبروفايل
                 '/profile': (_) => const ProfilePage(),
@@ -826,7 +827,7 @@ class _HomePageState extends State<HomePage> {
     // CODEX-END:ADMIN_BLOCK_HOME
     final tabs = const [
       RoomsTab(),        // مجتمع وغرف
-      StorePage(),       // اقتصاد
+      WalletPage(),      // اقتصاد / محفظة
       ProfilePage(),     // بروفايل
     ];
     return Scaffold(
@@ -847,11 +848,14 @@ class _HomePageState extends State<HomePage> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: idx,
         onDestinationSelected: (v)=> setState(()=> idx=v),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum), label: 'Rooms'),
-          NavigationDestination(icon: Icon(Icons.store_outlined), selectedIcon: Icon(Icons.store), label: 'Store'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
-        ],
+          destinations: const [
+            NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum), label: 'Rooms'),
+            NavigationDestination(
+                icon: Icon(Icons.account_balance_wallet_outlined),
+                selectedIcon: Icon(Icons.account_balance_wallet),
+                label: 'Wallet'),
+            NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
+          ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         // CODEX-BEGIN:ADMIN_BLOCK_HOME_FAB
@@ -1854,249 +1858,8 @@ class _CoinPackage {
       (label != null && label!.isNotEmpty) ? label! : '${coins} coins';
 }
 
-// CODEX-BEGIN:WALLET_PAGE
-class WalletPage extends StatelessWidget {
-  const WalletPage({super.key});
 
-  IconData _iconForType(String? type) {
-    switch (type) {
-      case 'purchase':
-        return Icons.arrow_downward_rounded;
-      case 'grant':
-        return Icons.card_giftcard_rounded;
-      case 'spend':
-        return Icons.arrow_upward_rounded;
-      default:
-        return Icons.monetization_on_rounded;
-    }
-  }
-
-  Future<void> _showAddBalanceSheet(
-    BuildContext context,
-    WalletController controller,
-  ) async {
-    if (controller.addingBalance) return;
-    const packages = <_CoinPackage>[
-      _CoinPackage(id: 'pack_100', coins: 100, label: '100 coins'),
-      _CoinPackage(id: 'pack_500', coins: 500, label: '500 coins'),
-      _CoinPackage(id: 'pack_1000', coins: 1000, label: '1000 coins'),
-    ];
-
-    final selected = await showModalBottomSheet<_CoinPackage>(
-      context: context,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final pack in packages)
-                ListTile(
-                  leading: const Icon(Icons.add_circle_outline),
-                  title: Text(pack.displayLabel),
-                  subtitle: Text('${pack.coins} coins'),
-                  onTap: controller.addingBalance
-                      ? null
-                      : () => Navigator.of(sheetContext).pop(pack),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (selected == null) {
-      return;
-    }
-
-    final success = await controller.addBalance(
-      packId: selected.id,
-      amount: selected.coins,
-    );
-
-    if (!context.mounted) {
-      return;
-    }
-
-    final messenger = ScaffoldMessenger.of(context);
-    if (success) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Balance updated successfully')),
-      );
-    } else {
-      messenger.showSnackBar(
-        SnackBar(content: Text(controller.errorMessage ?? 'Failed to add balance')),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      return const Scaffold(
-        body: Center(child: Text('Please login to view wallet.')),
-      );
-    }
-
-    return ChangeNotifierProvider<WalletController>(
-      create: (_) {
-        final controller = WalletController(
-          firestoreService: FirestoreService(),
-          cacheService: CacheService.instance,
-        );
-        unawaited(controller.init(uid));
-        return controller;
-      },
-      child: Builder(
-        builder: (context) {
-          final controller = context.watch<WalletController>();
-          final summary = controller.summary;
-          final balance = summary?.balance ?? 0;
-          final vipTier = summary?.vipTier ?? 'Bronze';
-          final transactions = controller.transactions;
-          final dateFormat = DateFormat.yMMMd().add_jm();
-
-          return Scaffold(
-            appBar: AppBar(title: const Text('Wallet')),
-            body: Column(
-              children: [
-                Card(
-                  margin: const EdgeInsets.all(16),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.account_balance_wallet_rounded, color: kTeal),
-                            const SizedBox(width: 12),
-                            if (summary == null && controller.loading)
-                              const Expanded(
-                                child: Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    ),
-                                    SizedBox(width: 12),
-                                    Text('Loading balance...'),
-                                  ],
-                                ),
-                              )
-                            else
-                              Expanded(
-                                child: Text('Balance: $balance coins'),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text('VIP Tier: $vipTier'),
-                        const SizedBox(height: 12),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: ElevatedButton(
-                            onPressed: controller.addingBalance
-                                ? null
-                                : () => _showAddBalanceSheet(context, controller),
-                            child: controller.addingBalance
-                                ? const SizedBox(
-                                    height: 16,
-                                    width: 16,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Text('Add Balance'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                if (controller.errorMessage != null && transactions.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      controller.errorMessage!,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
-                    ),
-                  ),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: controller.refresh,
-                    child: controller.loading && transactions.isEmpty
-                        ? const Center(child: CircularProgressIndicator())
-                        : transactions.isEmpty
-                            ? ListView(
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                children: const [
-                                  SizedBox(height: 160),
-                                  Center(child: Text('No transactions yet')),
-                                ],
-                              )
-                            : NotificationListener<ScrollNotification>(
-                                onNotification: (notification) {
-                                  if (notification.metrics.pixels >=
-                                          notification.metrics.maxScrollExtent - 120 &&
-                                      controller.hasMore &&
-                                      !controller.loadingMore) {
-                                    controller.loadMore();
-                                  }
-                                  return false;
-                                },
-                                child: ListView.separated(
-                                  physics: const AlwaysScrollableScrollPhysics(),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 16, vertical: 8),
-                                  itemCount: transactions.length +
-                                      (controller.loadingMore ? 1 : 0),
-                                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                                  itemBuilder: (context, index) {
-                                    if (index >= transactions.length) {
-                                      return const Padding(
-                                        padding:
-                                            EdgeInsets.symmetric(vertical: 16),
-                                        child: Center(
-                                            child: CircularProgressIndicator()),
-                                      );
-                                    }
-                                    final tx = transactions[index];
-                                    final sign = tx.amount > 0 ? '+' : '';
-                                    final dateStr = dateFormat.format(tx.createdAt.toLocal());
-                                    return Card(
-                                      child: ListTile(
-                                        leading: CircleAvatar(
-                                          backgroundColor: Theme.of(context)
-                                              .colorScheme
-                                              .primaryContainer,
-                                          child: Icon(
-                                            _iconForType(tx.type),
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .primary,
-                                          ),
-                                        ),
-                                        title: Text('$sign${tx.amount}'),
-                                        subtitle: Text('${tx.type} • $dateStr'),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-// CODEX-END:WALLET_PAGE
-
-class VIPHubPage extends StatelessWidget {
-  const VIPHubPage({super.key});
+);
   @override
   Widget build(BuildContext context) => const Scaffold(body: Center(child: Text('VIP Hub (part 8)')));
 }
@@ -5858,7 +5621,7 @@ class ProfilePage extends StatelessWidget {
       return const Scaffold(body: Center(child: Text('غير مسجّل')));
     }
     final doc = cf.FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
-    final coinsService = CoinsService();
+    final walletService = WalletService();
 
     Future<void> openEditor() async {
       final changed = await Navigator.push(
@@ -6009,9 +5772,10 @@ class ProfilePage extends StatelessWidget {
                           tier: vipTier,
                           label: _profileText('vip'),
                           noneLabel: _profileText('vip_none'),
+                          onTap: () => navigatorKey.currentState?.pushNamed('/vip'),
                         ),
                         StreamBuilder<int>(
-                          stream: coinsService.coinsStream(uid),
+                          stream: walletService.coinsStream(uid),
                           initialData: coinsInitial,
                           builder: (context, snap) {
                             final coins = snap.data ?? coinsInitial;
@@ -6019,7 +5783,7 @@ class ProfilePage extends StatelessWidget {
                               coins: coins,
                               semanticsLabel:
                                   '${_profileText('coins')}: ${numberFormatter.format(coins)}',
-                              onTap: () => navigatorKey.currentState?.pushNamed('/store'),
+                              onTap: () => navigatorKey.currentState?.pushNamed('/wallet'),
                             );
                           },
                         ),
@@ -6083,7 +5847,7 @@ class ProfilePage extends StatelessWidget {
                 leading: const Icon(Icons.wallet_rounded),
                 title: const Text('Wallet / VIP'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: ()=> navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => const WalletPage())),
+                onTap: ()=> navigatorKey.currentState?.pushNamed('/wallet'),
               ),
               ListTile(
                 leading: const Icon(Icons.logout_rounded),
