@@ -51,6 +51,7 @@ import 'services/firestore_service.dart';
 // CODEX-END:STORE_IMPORTS
 import 'services/wallet_service.dart';
 import 'screens/coins_shop_page.dart';
+import 'screens/store_page.dart';
 import 'screens/vip_page.dart';
 import 'screens/wallet_page.dart';
 // CODEX-BEGIN:PRIVACY_IMPORTS
@@ -730,8 +731,9 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/story_create': (_) => const StoryCreatePage(),
 
                 // متجر/محفظة/VIP
-                '/store': (_) => const CoinsShopPage(),
-                '/coins-shop': (_) => const CoinsShopPage(),
+                '/store': (_) => const StorePage(),
+                '/coins/shop': (_) => CoinsShopPage(),
+                '/coins-shop': (_) => CoinsShopPage(),
                 '/wallet': (_) => const WalletPage(),
                 '/vip': (_) => const VipPage(),
 
@@ -827,7 +829,7 @@ class _HomePageState extends State<HomePage> {
     // CODEX-END:ADMIN_BLOCK_HOME
     final tabs = const [
       RoomsTab(),        // مجتمع وغرف
-      WalletPage(),      // اقتصاد / محفظة
+      StorePage(),       // متجر
       ProfilePage(),     // بروفايل
     ];
     return Scaffold(
@@ -851,9 +853,9 @@ class _HomePageState extends State<HomePage> {
           destinations: const [
             NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum), label: 'Rooms'),
             NavigationDestination(
-                icon: Icon(Icons.account_balance_wallet_outlined),
-                selectedIcon: Icon(Icons.account_balance_wallet),
-                label: 'Wallet'),
+                icon: Icon(Icons.storefront),
+                selectedIcon: Icon(Icons.storefront),
+                label: 'Store'),
             NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
           ],
       ),
@@ -5843,7 +5845,7 @@ class ProfilePage extends StatelessWidget {
                 leading: const Icon(Icons.wallet_rounded),
                 title: const Text('Wallet / VIP'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: ()=> navigatorKey.currentState?.pushNamed('/wallet'),
+                onTap: () => Navigator.of(context).pushNamed('/wallet'),
               ),
               ListTile(
                 leading: const Icon(Icons.logout_rounded),
