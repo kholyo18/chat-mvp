@@ -58,6 +58,9 @@ import 'modules/admin/admin_dashboard_page.dart';
 // CODEX-END:ADMIN_IMPORT
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
+import 'services/auth_service.dart';
+import 'screens/auth/email_verification_screen.dart';
+import 'screens/auth/register_screen.dart';
 import 'ui/auth/sign_in_page.dart';
 
 // CODEX-BEGIN:BOOT_GUARD_TYPES
@@ -264,7 +267,7 @@ class AppUser extends ChangeNotifier {
 
   Future<void> signOut() async {
     try {
-      await FirebaseAuth.instance.signOut();
+      await AuthService.signOut();
     } catch (err, stack) {
       debugPrint('AppUser.signOut error: $err');
       FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
@@ -493,7 +496,12 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Chat Ultra',
       theme: ThemeData(useMaterial3: true),
-      home: const AuthGate(),
+      initialRoute: '/',
+      routes: {
+        '/': (_) => const AuthGate(),
+        '/auth/register': (_) => const RegisterScreen(),
+        '/auth/verify-email': (_) => const EmailVerificationScreen(),
+      },
     );
   }
 }
@@ -504,15 +512,21 @@ class AuthGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+      stream: AuthService.authStateChanges,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        if (snap.data == null) {
+        final user = snap.data;
+        if (user == null) {
           return const SignInPage();
+        }
+        final hasPasswordProvider = user.providerData
+            .any((info) => info.providerId == 'password');
+        if (!user.emailVerified && hasPasswordProvider) {
+          return EmailVerificationScreen(email: user.email);
         }
         // Replace Placeholder() with your app’s main home page widget.
         return const ChatUltraApp();
@@ -5914,6 +5928,15 @@ class ProfilePage extends StatelessWidget {
                 title: const Text('Wallet / VIP'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: ()=> navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => const WalletPage())),
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout_rounded),
+                title: const Text('تسجيل الخروج'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () async {
+                  await AuthService.signOut();
+                  navigatorKey.currentState?.popUntil((route) => route.isFirst);
+                },
               ),
               const SizedBox(height: 24),
             ],
