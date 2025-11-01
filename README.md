@@ -1,8 +1,9 @@
 # Chat MVP
 
 This repository contains the Flutter client and Firebase resources for the chat
-MVP application. The app now ships with server-verified coin purchases through
-Google Play Billing and Stripe Checkout.
+MVP application. The app ships with a server-backed wallet (coins, VIP tiers,
+and transaction history) plus verified coin purchases through Google Play
+Billing and Stripe Checkout.
 
 ## Prerequisites
 
@@ -35,6 +36,59 @@ Google Play Billing and Stripe Checkout.
 
    The rules lock coin mutations to server-side functions and restrict wallet
    and payment collections to read-only access from the client.
+
+## Wallet & VIP data model
+
+The in-app wallet stores balances on the user document and keeps a full
+transaction ledger under the same user. The shape is:
+
+```text
+users/{uid} {
+  coins: number,
+  vipTier: "none" | "bronze" | "silver" | "gold" | "platinum",
+  vipSince: Timestamp | null,
+  ...other profile fields
+}
+
+users/{uid}/wallet_transactions/{tid} {
+  type: "earn" | "spend" | "vip_upgrade" | "bonus",
+  amount: number,            // positive for earns, negative for spends
+  balanceAfter: number,      // post-transaction balance snapshot
+  note: string,
+  createdAt: server timestamp,
+  actor: "user" | "system"
+}
+```
+
+Clients may only read these documents. All mutations flow through the callable
+Cloud Function described below or through privileged server tooling.
+
+### Callable Function: `walletTxn`
+
+`functions/src/index.ts` exposes a `walletTxn` callable. It atomically:
+
+1. Validates the request payload `{ uid, delta, type, note, vipTier? }`.
+2. Reads the user's current balance.
+3. Aborts if the resulting balance would be negative.
+4. Appends a transaction document under `users/{uid}/wallet_transactions`.
+5. Updates `users/{uid}` with the new `coins` value and, for `vip_upgrade`, the
+   new `vipTier` and `vipSince` timestamp.
+
+The function returns `{ balance: <nextBalance> }`. Clients should prefer this
+callable, but the Flutter `WalletService` automatically falls back to a Firestore
+transaction when the function is unavailable (for example on emulators).
+
+### Seeding demo coins
+
+During development you can credit coins by invoking the callable from the
+Firebase CLI:
+
+```bash
+firebase functions:call walletTxn --data '{"uid":"<USER_ID>","delta":500,"type":"earn","note":"dev seed"}'
+```
+
+Alternatively, run the Flutter app and use the Wallet page's "Earn coins"
+shortcuts to trigger the same flow.
 
 ## Cloud Functions
 
@@ -127,9 +181,9 @@ following shape:
 }
 ```
 
-> **Note:** The `coins`, `vip`, and `verified` fields are server-managed. The
-> client only reads and displays them; updates must flow through Cloud Functions
-> or administrative tooling to prevent tampering.
+> **Note:** The `coins`, `vipTier`, `vipSince`, and `verified` fields are
+> server-managed. The client only reads and displays them; updates must flow
+> through Cloud Functions or administrative tooling to prevent tampering.
 
 Enable the Firestore security rule that only allows a signed-in user to create
 or update their own document:
