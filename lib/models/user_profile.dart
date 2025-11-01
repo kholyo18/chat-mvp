@@ -1,5 +1,83 @@
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 
+const Set<String> _kKnownVipTiers = <String>{
+  'none',
+  'bronze',
+  'silver',
+  'gold',
+  'platinum',
+};
+
+String _normaliseVipTier(String? value) {
+  final lower = (value ?? '').trim().toLowerCase();
+  if (_kKnownVipTiers.contains(lower)) {
+    return lower;
+  }
+  if (lower == 'basic') {
+    return 'none';
+  }
+  return 'none';
+}
+
+/// Representation of the VIP membership state for a user.
+class VipStatus {
+  const VipStatus({
+    required this.tier,
+    this.expiresAt,
+  });
+
+  final String tier;
+  final DateTime? expiresAt;
+
+  bool get isActive => expiresAt == null || expiresAt!.isAfter(DateTime.now());
+
+  VipStatus copyWith({
+    String? tier,
+    DateTime? expiresAt,
+  }) {
+    return VipStatus(
+      tier: tier ?? this.tier,
+      expiresAt: expiresAt ?? this.expiresAt,
+    );
+  }
+
+  static VipStatus fromRaw(
+    dynamic rawVip, {
+    String? fallbackTier,
+    DateTime? fallbackExpiry,
+  }) {
+    String tier = _normaliseVipTier(fallbackTier);
+    DateTime? expiresAt = fallbackExpiry;
+
+    if (rawVip is Map<String, dynamic>) {
+      tier = _normaliseVipTier(rawVip['tier'] as String? ?? tier);
+      final rawExpires = rawVip['expiresAt'];
+      if (rawExpires is cf.Timestamp) {
+        expiresAt = rawExpires.toDate();
+      } else if (rawExpires is DateTime) {
+        expiresAt = rawExpires;
+      } else if (rawExpires is num) {
+        expiresAt =
+            DateTime.fromMillisecondsSinceEpoch(rawExpires.toInt(), isUtc: true)
+                .toLocal();
+      } else if (rawExpires is String) {
+        expiresAt = DateTime.tryParse(rawExpires);
+      }
+    } else if (rawVip is String) {
+      tier = _normaliseVipTier(rawVip);
+    }
+
+    if (expiresAt != null && expiresAt.isUtc) {
+      expiresAt = expiresAt.toLocal();
+    }
+
+    return VipStatus(
+      tier: tier,
+      expiresAt: expiresAt,
+    );
+  }
+}
+
 /// Immutable representation of a user's public profile data.
 ///
 /// The model keeps the shape in sync with the Firestore document stored
@@ -18,6 +96,10 @@ class UserProfile {
     this.showEmail = false,
     this.dmPermission = 'all',
     this.updatedAt,
+    this.verified = false,
+    this.vip = const VipStatus(tier: 'none'),
+    this.coins = 0,
+    this.badges = const <String>[],
   });
 
   final String displayName;
@@ -31,6 +113,10 @@ class UserProfile {
   final bool showEmail;
   final String dmPermission;
   final DateTime? updatedAt;
+  final bool verified;
+  final VipStatus vip;
+  final int coins;
+  final List<String> badges;
 
   /// Creates a profile instance from Firestore data.
   factory UserProfile.fromJson(Map<String, dynamic> json) {
@@ -56,6 +142,28 @@ class UserProfile {
       return null;
     }
 
+    int readInt(dynamic raw, [int fallback = 0]) {
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+      if (raw is String) {
+        final parsed = int.tryParse(raw);
+        if (parsed != null) return parsed;
+      }
+      return fallback;
+    }
+
+    DateTime? parseVipExpiry(Map<String, dynamic> json) {
+      final vipRaw = json['vip'];
+      if (vipRaw is Map<String, dynamic>) {
+        final value = vipRaw['expiresAt'];
+        return parseTimestamp(value);
+      }
+      final fallback = json['vipExpiresAt'];
+      return parseTimestamp(fallback);
+    }
+
+    final fallbackVipTier = readString(json['vipTier']) ?? readString(json['vipLevel']);
+
     return UserProfile(
       displayName: (json['displayName'] as String?)?.trim() ?? '',
       username: (json['username'] as String?)?.trim() ?? '',
@@ -69,6 +177,21 @@ class UserProfile {
       dmPermission:
           (privacy['dmPermission'] as String?) == 'followers' ? 'followers' : 'all',
       updatedAt: parseTimestamp(json['updatedAt']),
+      verified: json['verified'] == true,
+      vip: VipStatus.fromRaw(
+        json['vip'],
+        fallbackTier: fallbackVipTier,
+        fallbackExpiry: parseVipExpiry(json),
+      ),
+      coins: readInt(json['coins']),
+      badges: (json['badges'] is Iterable)
+          ? List<String>.from(
+              (json['badges'] as Iterable)
+                  .whereType<String>()
+                  .map((s) => s.trim())
+                  .where((s) => s.isNotEmpty),
+            )
+          : const <String>[],
     );
   }
 
@@ -94,6 +217,8 @@ class UserProfile {
         'dmPermission': dmPermission,
       },
       if (updatedAt != null) 'updatedAt': cf.Timestamp.fromDate(updatedAt!),
+      // The following fields are server-managed and intentionally omitted from
+      // client writes: coins, vip, verified, badges.
     });
   }
 
@@ -109,6 +234,10 @@ class UserProfile {
     bool? showEmail,
     String? dmPermission,
     DateTime? updatedAt,
+    bool? verified,
+    VipStatus? vip,
+    int? coins,
+    List<String>? badges,
   }) {
     return UserProfile(
       displayName: displayName ?? this.displayName,
@@ -122,6 +251,10 @@ class UserProfile {
       showEmail: showEmail ?? this.showEmail,
       dmPermission: dmPermission ?? this.dmPermission,
       updatedAt: updatedAt ?? this.updatedAt,
+      verified: verified ?? this.verified,
+      vip: vip ?? this.vip,
+      coins: coins ?? this.coins,
+      badges: badges ?? this.badges,
     );
   }
 

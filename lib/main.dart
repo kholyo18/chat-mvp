@@ -67,6 +67,10 @@ import 'screens/auth/email_verification_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/profile_edit.dart';
 import 'ui/auth/sign_in_page.dart';
+import 'models/user_profile.dart';
+import 'widgets/common/coins_pill.dart';
+import 'widgets/common/vip_chip.dart';
+import 'widgets/common/verified_badge.dart';
 
 // CODEX-BEGIN:BOOT_GUARD_TYPES
 class _BootStatus {
@@ -294,8 +298,10 @@ class AppUser extends ChangeNotifier {
           'link': '',
           'avatar': null,
           'cover': null,
-          'vipLevel': 'Bronze',
+          'vip': {'tier': 'none', 'expiresAt': null},
+          'verified': false,
           'coins': 0,
+          'badges': <String>[],
           'spentLifetime': 0,
           'followers': 0,
           'following': 0,
@@ -5259,21 +5265,73 @@ class PublicProfilePage extends StatelessWidget {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
           final d = s.data!;
           if (!d.exists) return const Center(child: Text('المستخدم غير موجود'));
+          DateTime? parseTimestamp(dynamic raw) {
+            if (raw is cf.Timestamp) return raw.toDate();
+            if (raw is DateTime) return raw;
+            if (raw is num) {
+              return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+            }
+            if (raw is String) return DateTime.tryParse(raw);
+            return null;
+          }
+
+          int parseInt(dynamic raw, [int fallback = 0]) {
+            if (raw is int) return raw;
+            if (raw is num) return raw.toInt();
+            if (raw is String) {
+              final parsed = int.tryParse(raw);
+              if (parsed != null) return parsed;
+            }
+            return fallback;
+          }
+
+          String? readString(dynamic raw) {
+            if (raw is String && raw.trim().isNotEmpty) {
+              return raw.trim();
+            }
+            return null;
+          }
+
+          String formatTier(String tier) {
+            final normalised = tier.trim().toLowerCase();
+            if (normalised.isEmpty || normalised == 'none') {
+              return _profileText('vip_none');
+            }
+            return normalised[0].toUpperCase() + normalised.substring(1);
+          }
+
           final data = d.data()!;
           final name = (data['displayName'] ?? 'User') as String;
           final bio = (data['bio'] ?? '') as String;
           final link = (data['link'] ?? '') as String;
-          final followers = (data['followers'] ?? 0) as int;
-          final following = (data['following'] ?? 0) as int;
-          final vip = (data['vipLevel'] ?? 'Bronze') as String;
+          final followers = parseInt(data['followers']);
+          final following = parseInt(data['following']);
+          final vipStatus = VipStatus.fromRaw(
+            data['vip'],
+            fallbackTier: readString(data['vipTier']) ?? readString(data['vipLevel']),
+            fallbackExpiry: parseTimestamp(data['vipExpiresAt']),
+          );
+          final vipLabel = formatTier(vipStatus.tier);
+          final verified = data['verified'] == true;
 
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
               ListTile(
                 leading: const CircleAvatar(radius: 28, child: Icon(Icons.person)),
-                title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text('VIP: $vip • $followers متابع • $following يتابع'),
+                title: Row(
+                  children: [
+                    Expanded(
+                      child: Text(name,
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                    if (verified) const SizedBox(width: 6),
+                    if (verified) const VerifiedBadge(),
+                  ],
+                ),
+                subtitle: Text(
+                  '${_profileText('vip')}: $vipLabel • $followers متابع • $following يتابع',
+                ),
               ),
               if (bio.isNotEmpty) Padding(
                 padding: const EdgeInsets.only(top: 8.0),
@@ -5331,6 +5389,16 @@ class PublicProfilePage extends StatelessWidget {
   }
   // CODEX-END:COMPILE_FIX::publicprofile-snackbar
 }
+
+const Map<String, String> _profilePageStrings = <String, String>{
+  'verified': 'Verified',
+  'vip': 'VIP',
+  'vip_none': 'None',
+  'coins': 'Coins',
+  'expires': 'Expires',
+};
+
+String _profileText(String key) => _profilePageStrings[key] ?? key;
 
 // ---------------------- Inbox (Threads list) ----------------------
 // CODEX-BEGIN:INBOX_PAGE
@@ -5825,16 +5893,54 @@ class ProfilePage extends StatelessWidget {
         builder: (c, s) {
           if (!s.hasData) return const Center(child: CircularProgressIndicator());
           final d = s.data!;
+          DateTime? parseTimestamp(dynamic raw) {
+            if (raw is cf.Timestamp) return raw.toDate();
+            if (raw is DateTime) return raw;
+            if (raw is num) {
+              return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+            }
+            if (raw is String) {
+              return DateTime.tryParse(raw);
+            }
+            return null;
+          }
+
+          int parseInt(dynamic raw, [int fallback = 0]) {
+            if (raw is int) return raw;
+            if (raw is num) return raw.toInt();
+            if (raw is String) {
+              final parsed = int.tryParse(raw);
+              if (parsed != null) return parsed;
+            }
+            return fallback;
+          }
+
+          String? readString(dynamic raw) {
+            if (raw is String && raw.trim().isNotEmpty) {
+              return raw.trim();
+            }
+            return null;
+          }
+
           final data = d.data() ?? {};
           final name = (data['displayName'] ?? 'Guest') as String;
-          final vip = (data['vipLevel'] ?? 'Bronze') as String;
-          final coinsInitial = (data['coins'] ?? 0) as int;
-          final followers = (data['followers'] ?? 0) as int;
-          final following = (data['following'] ?? 0) as int;
+          final vipStatus = VipStatus.fromRaw(
+            data['vip'],
+            fallbackTier: readString(data['vipTier']) ?? readString(data['vipLevel']),
+            fallbackExpiry: parseTimestamp(data['vipExpiresAt']),
+          );
+          final vipTier = vipStatus.tier;
+          final vipExpiresAt = vipStatus.expiresAt;
+          final coinsInitial = parseInt(data['coins']);
+          final followers = parseInt(data['followers']);
+          final following = parseInt(data['following']);
           final bio = (data['bio'] ?? '') as String;
           final link = (data['link'] ?? '') as String;
           final avatar = (data['avatarUrl'] ?? '') as String;
           final cover  = (data['coverUrl'] ?? '') as String;
+          final verified = data['verified'] == true;
+          final numberFormatter = NumberFormat.decimalPattern();
+          final expiryFormatter = DateFormat('dd MMM yyyy');
 
           return ListView(
             padding: EdgeInsets.zero,
@@ -5875,24 +5981,56 @@ class ProfilePage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 6),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const Icon(Icons.workspace_premium_rounded, color: kGold, size: 18),
-                        const SizedBox(width: 6),
-                        Text('VIP: $vip'),
-                        const SizedBox(width: 12),
-                        const Icon(Icons.monetization_on_rounded, color: kTeal, size: 18),
-                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            name,
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        if (verified) ...[
+                          const SizedBox(width: 8),
+                          const VerifiedBadge(),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        VipChip(
+                          tier: vipTier,
+                          label: _profileText('vip'),
+                          noneLabel: _profileText('vip_none'),
+                        ),
                         StreamBuilder<int>(
                           stream: coinsService.coinsStream(uid),
                           initialData: coinsInitial,
                           builder: (context, snap) {
                             final coins = snap.data ?? coinsInitial;
-                            return Text('$coins Coins');
+                            return CoinsPill(
+                              coins: coins,
+                              semanticsLabel:
+                                  '${_profileText('coins')}: ${numberFormatter.format(coins)}',
+                              onTap: () => navigatorKey.currentState?.pushNamed('/store'),
+                            );
                           },
                         ),
+                        if (vipExpiresAt != null && vipExpiresAt.isAfter(DateTime.now()))
+                          Text(
+                            '${_profileText('expires')}: ${expiryFormatter.format(vipExpiresAt)}',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: Theme.of(context).colorScheme.outline),
+                          ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -8079,6 +8217,21 @@ class _PeopleResults extends StatelessWidget {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
         final docs = s.data!.docs;
         if (docs.isEmpty) return const _EmptyHint(text: 'لا نتائج للأشخاص.');
+        String? readString(dynamic raw) {
+          if (raw is String && raw.trim().isNotEmpty) {
+            return raw.trim();
+          }
+          return null;
+        }
+
+        String formatTier(String tier) {
+          final normalized = tier.trim().toLowerCase();
+          if (normalized.isEmpty || normalized == 'none') {
+            return _profileText('vip_none');
+          }
+          return normalized[0].toUpperCase() + normalized.substring(1);
+        }
+
         return ListView.separated(
           padding: const EdgeInsets.all(12),
           itemCount: docs.length,
@@ -8087,7 +8240,11 @@ class _PeopleResults extends StatelessWidget {
             final d = docs[i].data();
             final uid = docs[i].id;
             final name = (d['displayName'] ?? uid) as String;
-            final vip = (d['vipLevel'] ?? 'Bronze') as String;
+            final vipStatus = VipStatus.fromRaw(
+              d['vip'],
+              fallbackTier: readString(d['vipTier']) ?? readString(d['vipLevel']),
+            );
+            final vip = formatTier(vipStatus.tier);
             final followers = (d['followers'] ?? 0) as int;
             final avatar = (d['avatarUrl'] ?? '') as String;
             final verified = d['verified'] == true;
@@ -8102,11 +8259,13 @@ class _PeopleResults extends StatelessWidget {
                     Text(name),
                     if (verified) ...[
                       const SizedBox(width: 6),
-                      const Icon(Icons.verified_rounded, color: kGold, size: 16),
+                      const VerifiedBadge(size: 18),
                     ],
                   ],
                 ),
-                subtitle: Text('VIP: $vip • متابعون: ${compactNumber(followers)}'),
+                subtitle: Text(
+                  '${_profileText('vip')}: $vip • متابعون: ${compactNumber(followers)}',
+                ),
                 trailing: FilledButton(
                   onPressed: ()=> showGiftDialog(context, toUserId: uid),
                   child: const Text('إهداء'),

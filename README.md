@@ -127,6 +127,10 @@ following shape:
 }
 ```
 
+> **Note:** The `coins`, `vip`, and `verified` fields are server-managed. The
+> client only reads and displays them; updates must flow through Cloud Functions
+> or administrative tooling to prevent tampering.
+
 Enable the Firestore security rule that only allows a signed-in user to create
 or update their own document:
 
