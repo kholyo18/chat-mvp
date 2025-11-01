@@ -263,15 +263,16 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                           const SizedBox(height: 24),
                           Builder(
                             builder: (context) {
-                              final NumberFormat formatter;
-                              try {
-                                formatter = NumberFormat.simpleCurrency(
-                                  name: product.currency,
-                                );
-                              } catch (_) {
-                                formatter = NumberFormat.simpleCurrency();
-                              }
-                              final price = formatter.format(product.price);
+                              final NumberFormat currencyFmt = (() {
+                                try {
+                                  return NumberFormat.simpleCurrency(
+                                    name: product.currency,
+                                  );
+                                } catch (_) {
+                                  return NumberFormat.simpleCurrency();
+                                }
+                              })();
+                              final price = currencyFmt.format(product.price);
                               return Text(
                                 '${storeTr(context, 'price')}: $price',
                                 style: theme.textTheme.titleLarge?.copyWith(

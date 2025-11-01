@@ -205,13 +205,15 @@ class _PurchaseTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final NumberFormat formatter;
-    try {
-      formatter = NumberFormat.simpleCurrency(name: purchase.currency);
-    } catch (_) {
-      formatter = NumberFormat.simpleCurrency();
-    }
-    final priceLabel = formatter.format(purchase.amountCents / 100.0);
+    final NumberFormat currencyFmt = (() {
+      try {
+        return NumberFormat.simpleCurrency(name: purchase.currency);
+      } catch (_) {
+        return NumberFormat.simpleCurrency();
+      }
+    })();
+    final priceLabel =
+        currencyFmt.format(purchase.amountCents / 100.0);
     final createdAt = purchase.createdAt?.toDate();
     final dateLabel = createdAt != null
         ? DateFormat.yMMMd(Localizations.localeOf(context).toLanguageTag())
