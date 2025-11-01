@@ -1,0 +1,854 @@
+import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+
+import '../models/user_profile.dart';
+import '../services/auth_service.dart';
+import '../services/firestore_service.dart';
+import '../services/storage_service.dart';
+import '../services/user_service.dart';
+
+enum _UsernameStatus { idle, checking, available, taken, invalid }
+
+const Map<String, String> _profileEditStrings = {
+  'profile_edit_title': 'تعديل الملف الشخصي',
+  'change_cover': 'تغيير الغلاف',
+  'change_photo': 'تغيير الصورة',
+  'display_name': 'الاسم المعروض',
+  'username': 'اسم المستخدم',
+  'bio': 'النبذة',
+  'website': 'الموقع / الرابط',
+  'location': 'الموقع الجغرافي',
+  'birthday': 'تاريخ الميلاد',
+  'privacy_title': 'إعدادات الخصوصية',
+  'privacy_show_email': 'إظهار بريدي الإلكتروني',
+  'privacy_dm_anyone': 'أي شخص يمكنه مراسلتي',
+  'privacy_dm_followers': 'المتابعون فقط يمكنهم مراسلتي',
+  'save': 'حفظ',
+  'cancel': 'إلغاء',
+  'saved_success': 'تم تحديث الملف الشخصي بنجاح',
+  'username_taken': 'اسم المستخدم محجوز',
+  'username_ok': 'اسم المستخدم متاح ✅',
+  'invalid_website': 'يرجى إدخال رابط http أو https صالح',
+  'username_required': 'اسم المستخدم مطلوب',
+  'username_invalid': 'استخدم أحرفًا صغيرة أو أرقامًا أو شرطة سفلية (3-20).',
+  'display_name_required': 'الاسم مطلوب',
+  'display_name_too_long': 'الاسم يجب ألا يتجاوز 40 حرفًا',
+  'bio_limit': 'النبذة لا يجب أن تتجاوز 160 حرفًا',
+  'choose_source': 'اختر مصدر الصورة',
+  'camera': 'الكاميرا',
+  'gallery': 'المعرض',
+  'clear_birthday': 'إزالة التاريخ',
+  'pick_birthday': 'اختيار تاريخ',
+  'unexpected_error': 'حدث خطأ غير متوقع. حاول لاحقًا.',
+  'upload_failed': 'تعذر رفع الصورة. حاول مجددًا.',
+  'login_required': 'يرجى تسجيل الدخول لتعديل ملفك الشخصي.',
+};
+
+String _t(String key) => _profileEditStrings[key] ?? key;
+
+class ProfileEditPage extends StatefulWidget {
+  const ProfileEditPage({super.key});
+
+  @override
+  State<ProfileEditPage> createState() => _ProfileEditPageState();
+}
+
+class _ProfileEditPageState extends State<ProfileEditPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _displayNameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
+  final _bioCtrl = TextEditingController();
+  final _websiteCtrl = TextEditingController();
+  final _locationCtrl = TextEditingController();
+
+  final _picker = ImagePicker();
+  final _userService = UserService();
+  final _storageService = StorageService();
+
+  Uint8List? _avatarPreview;
+  Uint8List? _coverPreview;
+  XFile? _avatarFile;
+  XFile? _coverFile;
+
+  bool _loading = true;
+  bool _saving = false;
+  bool _checkingUsername = false;
+
+  String? _uid;
+  String? _initialUsername;
+  String? _usernameErrorKey;
+  String? _websiteErrorKey;
+  String? _loadError;
+
+  _UsernameStatus _usernameStatus = _UsernameStatus.idle;
+  DateTime? _birthdate;
+  bool _showEmail = false;
+  String _dmPermission = 'all';
+
+  String? _currentPhotoUrl;
+  String? _currentCoverUrl;
+
+  Timer? _usernameDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    _displayNameCtrl.dispose();
+    _usernameCtrl.dispose();
+    _bioCtrl.dispose();
+    _websiteCtrl.dispose();
+    _locationCtrl.dispose();
+    _usernameDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadProfile() async {
+    final user = AuthService.currentUser;
+    if (user == null) {
+      setState(() {
+        _loading = false;
+        _loadError = 'no-auth';
+      });
+      return;
+    }
+    _uid = user.uid;
+    try {
+      final profile = await _userService.getCurrentProfile(user.uid);
+      _displayNameCtrl.text = profile.displayName.isNotEmpty
+          ? profile.displayName
+          : (user.displayName ?? '');
+      final username = profile.username.toLowerCase();
+      _usernameCtrl.text = username;
+      _initialUsername = username;
+      _usernameStatus = username.isNotEmpty
+          ? _UsernameStatus.available
+          : _UsernameStatus.idle;
+      _bioCtrl.text = profile.bio ?? '';
+      _websiteCtrl.text = profile.website ?? '';
+      _locationCtrl.text = profile.location ?? '';
+      _birthdate = profile.birthdate;
+      _showEmail = profile.showEmail;
+      _dmPermission = profile.dmPermission;
+      _currentPhotoUrl = profile.photoURL ?? user.photoURL;
+      _currentCoverUrl = profile.coverURL;
+    } catch (err) {
+      _loadError = err.toString();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  void _setUsernameStatus(_UsernameStatus status, {String? errorKey}) {
+    _usernameDebounce?.cancel();
+    setState(() {
+      _usernameStatus = status;
+      _usernameErrorKey = errorKey;
+      _checkingUsername = status == _UsernameStatus.checking;
+    });
+    if (_formKey.currentState != null) {
+      _formKey.currentState!.validate();
+    }
+  }
+
+  void _onUsernameChanged(String value) {
+    final trimmed = value.trim();
+    if (_uid == null) return;
+    _usernameDebounce?.cancel();
+
+    if (trimmed.isEmpty) {
+      _setUsernameStatus(_UsernameStatus.invalid, errorKey: 'username_required');
+      return;
+    }
+
+    final validationError = UserProfile.validateUsername(trimmed);
+    if (validationError != null) {
+      _setUsernameStatus(_UsernameStatus.invalid, errorKey: validationError);
+      return;
+    }
+
+    if (_initialUsername != null && trimmed == _initialUsername) {
+      _setUsernameStatus(
+        trimmed.isEmpty ? _UsernameStatus.idle : _UsernameStatus.available,
+      );
+      return;
+    }
+
+    _setUsernameStatus(_UsernameStatus.checking);
+    _usernameDebounce = Timer(const Duration(milliseconds: 420), () async {
+      try {
+        final available = await _userService.isUsernameAvailable(
+          trimmed,
+          excludeUid: _uid,
+        );
+        if (!mounted) return;
+        if (available) {
+          _setUsernameStatus(_UsernameStatus.available);
+        } else {
+          _setUsernameStatus(_UsernameStatus.taken, errorKey: 'username_taken');
+        }
+      } catch (err) {
+        if (!mounted) return;
+        _setUsernameStatus(_UsernameStatus.invalid, errorKey: err.toString());
+      }
+    });
+  }
+
+  bool get _isSaveEnabled {
+    if (_loading || _saving || _checkingUsername) return false;
+    final name = _displayNameCtrl.text.trim();
+    final username = _usernameCtrl.text.trim();
+    if (name.isEmpty || name.length > 40) return false;
+    if (username.isEmpty) return false;
+    if (_usernameStatus == _UsernameStatus.invalid ||
+        _usernameStatus == _UsernameStatus.taken) {
+      return false;
+    }
+    if (_bioCtrl.text.trim().length > 160) return false;
+    if (_websiteErrorKey != null) return false;
+    return true;
+  }
+
+  Future<void> _pickAvatar() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) {
+        return Directionality(
+          textDirection: ui.TextDirection.rtl,
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    _t('choose_source'),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.camera_alt_rounded),
+                  title: Text(_t('camera')),
+                  onTap: () => Navigator.pop(context, ImageSource.camera),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.photo_library_rounded),
+                  title: Text(_t('gallery')),
+                  onTap: () => Navigator.pop(context, ImageSource.gallery),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (source == null) return;
+    try {
+      final picked = await _picker.pickImage(
+        source: source,
+        maxWidth: 1024,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      setState(() {
+        _avatarFile = picked;
+        _avatarPreview = bytes;
+      });
+    } on PlatformException catch (err) {
+      _showSnack(_t('unexpected_error') + '\n${err.message ?? err.code}');
+    }
+  }
+
+  Future<void> _pickCover() async {
+    try {
+      final picked = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      setState(() {
+        _coverFile = picked;
+        _coverPreview = bytes;
+      });
+    } on PlatformException catch (err) {
+      _showSnack(_t('unexpected_error') + '\n${err.message ?? err.code}');
+    }
+  }
+
+  Future<void> _pickBirthdate() async {
+    final initial = _birthdate ?? DateTime(DateTime.now().year - 18, 1, 1);
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(1900),
+      lastDate: now,
+      initialDate: initial.isAfter(now) ? now : initial,
+      textDirection: ui.TextDirection.rtl,
+    );
+    if (picked != null) {
+      setState(() => _birthdate = picked);
+    }
+  }
+
+  String? _formatBirthdate(DateTime? value) {
+    if (value == null) return null;
+    try {
+      return DateFormat.yMMMMd('ar').format(value);
+    } catch (_) {
+      return DateFormat.yMd().format(value);
+    }
+  }
+
+  Future<void> _handleSave() async {
+    if (!_isSaveEnabled) return;
+    final valid = _formKey.currentState?.validate() ?? false;
+    if (!valid) return;
+
+    final user = AuthService.currentUser;
+    if (user == null) return;
+
+    FocusScope.of(context).unfocus();
+
+    String? website;
+    try {
+      final sanitised = UserProfile.sanitizeWebsite(_websiteCtrl.text);
+      website = sanitised.isEmpty ? null : sanitised;
+      setState(() => _websiteErrorKey = null);
+    } on FormatException catch (err) {
+      setState(() => _websiteErrorKey = err.message);
+      _formKey.currentState?.validate();
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    Future<SafeResult<String>>? avatarFuture;
+    Future<SafeResult<String>>? coverFuture;
+    if (_avatarFile != null) {
+      avatarFuture = _storageService.uploadUserImage(
+        uid: user.uid,
+        file: _avatarFile!,
+        isCover: false,
+      );
+    }
+    if (_coverFile != null) {
+      coverFuture = _storageService.uploadUserImage(
+        uid: user.uid,
+        file: _coverFile!,
+        isCover: true,
+      );
+    }
+
+    try {
+      await Future.wait([
+        if (avatarFuture != null) avatarFuture,
+        if (coverFuture != null) coverFuture,
+      ]);
+    } catch (_) {
+      // SafeResult already captures errors; ignore.
+    }
+
+    String? photoUrl = _currentPhotoUrl;
+    String? coverUrl = _currentCoverUrl;
+
+    if (avatarFuture != null) {
+      final result = await avatarFuture;
+      if (result is SafeSuccess<String>) {
+        photoUrl = result.value;
+      } else if (result is SafeFailure<String>) {
+        _showRetrySnack(result.message);
+        setState(() => _saving = false);
+        return;
+      }
+    }
+
+    if (coverFuture != null) {
+      final result = await coverFuture;
+      if (result is SafeSuccess<String>) {
+        coverUrl = result.value;
+      } else if (result is SafeFailure<String>) {
+        _showRetrySnack(result.message);
+        setState(() => _saving = false);
+        return;
+      }
+    }
+
+    final profile = UserProfile(
+      displayName: _displayNameCtrl.text.trim(),
+      username: _usernameCtrl.text.trim(),
+      bio: _bioCtrl.text.trim().isNotEmpty ? _bioCtrl.text.trim() : null,
+      website: website,
+      location: _locationCtrl.text.trim().isNotEmpty
+          ? _locationCtrl.text.trim()
+          : null,
+      birthdate: _birthdate,
+      photoURL: photoUrl,
+      coverURL: coverUrl,
+      showEmail: _showEmail,
+      dmPermission: _dmPermission,
+    );
+
+    try {
+      await _userService.saveProfile(user.uid, profile);
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _currentPhotoUrl = photoUrl;
+        _currentCoverUrl = coverUrl;
+        _initialUsername = profile.username;
+        _avatarFile = null;
+        _coverFile = null;
+      });
+      _showSnack(_t('saved_success'));
+      Navigator.pop(context, true);
+    } catch (err) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _showRetrySnack(err.toString());
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _showRetrySnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message.isEmpty ? _t('upload_failed') : message),
+        action: SnackBarAction(
+          label: _t('save'),
+          onPressed: _handleSave,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAvailabilityBadge() {
+    Widget child;
+    switch (_usernameStatus) {
+      case _UsernameStatus.checking:
+        child = const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+        break;
+      case _UsernameStatus.available:
+        child = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.check_circle, color: Colors.green, size: 18),
+            const SizedBox(width: 4),
+            Text(
+              _t('username_ok'),
+              style: const TextStyle(color: Colors.green, fontSize: 12),
+            ),
+          ],
+        );
+        break;
+      case _UsernameStatus.taken:
+        child = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cancel, color: Colors.redAccent, size: 18),
+            const SizedBox(width: 4),
+            Text(
+              _t('username_taken'),
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            ),
+          ],
+        );
+        break;
+      case _UsernameStatus.invalid:
+      case _UsernameStatus.idle:
+      default:
+        child = const SizedBox.shrink();
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: child,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SizeTransition(sizeFactor: animation, child: child),
+      ),
+    );
+  }
+
+  Widget _buildAvatar() {
+    ImageProvider? image;
+    if (_avatarPreview != null) {
+      image = MemoryImage(_avatarPreview!);
+    } else if (_currentPhotoUrl != null && _currentPhotoUrl!.isNotEmpty) {
+      image = CachedNetworkImageProvider(_currentPhotoUrl!);
+    }
+    return SizedBox(
+      width: 104,
+      height: 104,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CircleAvatar(
+              radius: 52,
+              backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
+              backgroundImage: image,
+              child: image == null
+                  ? Icon(
+                      Icons.person,
+                      size: 48,
+                      color: Theme.of(context).colorScheme.primary,
+                    )
+                  : null,
+            ),
+          ),
+          PositionedDirectional(
+            bottom: 0,
+            end: 4,
+            child: Tooltip(
+              message: _t('change_photo'),
+              child: Material(
+                color: Theme.of(context).colorScheme.primary,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _saving ? null : _pickAvatar,
+                  child: const Padding(
+                    padding: EdgeInsets.all(6),
+                    child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCover() {
+    Widget child;
+    if (_coverPreview != null) {
+      child = Image.memory(
+        _coverPreview!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    } else if (_currentCoverUrl != null && _currentCoverUrl!.isNotEmpty) {
+      child = CachedNetworkImage(
+        imageUrl: _currentCoverUrl!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+      );
+    } else {
+      child = Container(
+        color: Theme.of(context).colorScheme.surfaceVariant,
+        alignment: Alignment.center,
+        child: Icon(
+          Icons.image,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          size: 48,
+        ),
+      );
+    }
+
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Stack(
+        children: [
+          Positioned.fill(child: child),
+          PositionedDirectional(
+            bottom: 12,
+            start: 12,
+            child: FilledButton.icon(
+              onPressed: _saving ? null : _pickCover,
+              icon: const Icon(Icons.photo_library_rounded),
+              label: Text(_t('change_cover')),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final missingAuth = !_loading && _uid == null;
+
+    final body = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : missingAuth
+            ? Center(child: Text(_t('login_required')))
+            : _loadError != null && _loadError != 'no-auth'
+                ? Center(child: Text(_t('unexpected_error')))
+                : SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    child: Card(
+                      elevation: 6,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              _buildCover(),
+                              PositionedDirectional(
+                                bottom: -52,
+                                end: 24,
+                                child: _buildAvatar(),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 64),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                            child: Form(
+                              key: _formKey,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  TextFormField(
+                                    controller: _displayNameCtrl,
+                                    enabled: !_saving,
+                                    decoration: InputDecoration(
+                                      labelText: _t('display_name'),
+                                    ),
+                                    validator: (value) {
+                                      final trimmed = value?.trim() ?? '';
+                                      if (trimmed.isEmpty) {
+                                        return _t('display_name_required');
+                                      }
+                                      if (trimmed.length > 40) {
+                                        return _t('display_name_too_long');
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      TextFormField(
+                                        controller: _usernameCtrl,
+                                        enabled: !_saving,
+                                        decoration: InputDecoration(
+                                          labelText: '@${_t('username')}',
+                                          suffixIcon: Padding(
+                                            padding: const EdgeInsetsDirectional.only(end: 8.0),
+                                            child: _buildAvailabilityBadge(),
+                                          ),
+                                          suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                                        ),
+                                        inputFormatters: [
+                                          FilteringTextInputFormatter.allow(RegExp('[a-z0-9_]')),
+                                        ],
+                                        onChanged: _onUsernameChanged,
+                                        validator: (value) {
+                                          final trimmed = value?.trim() ?? '';
+                                          if (trimmed.isEmpty) {
+                                            return _t('username_required');
+                                          }
+                                          if (_usernameStatus == _UsernameStatus.invalid &&
+                                              _usernameErrorKey != null) {
+                                            return _profileEditStrings[_usernameErrorKey!] ?? _usernameErrorKey;
+                                          }
+                                          if (_usernameStatus == _UsernameStatus.taken) {
+                                            return _t('username_taken');
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+                                  TextFormField(
+                                    controller: _bioCtrl,
+                                    enabled: !_saving,
+                                    decoration: InputDecoration(labelText: _t('bio')),
+                                    maxLines: 4,
+                                    maxLength: 160,
+                                    validator: (value) {
+                                      final length = value?.trim().length ?? 0;
+                                      if (length > 160) {
+                                        return _t('bio_limit');
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  TextFormField(
+                                    controller: _websiteCtrl,
+                                    enabled: !_saving,
+                                    decoration: InputDecoration(
+                                      labelText: _t('website'),
+                                      errorText: _websiteErrorKey == null
+                                          ? null
+                                          : _profileEditStrings[_websiteErrorKey!] ?? _websiteErrorKey,
+                                    ),
+                                    keyboardType: TextInputType.url,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  TextFormField(
+                                    controller: _locationCtrl,
+                                    enabled: !_saving,
+                                    decoration: InputDecoration(labelText: _t('location')),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: InputDecorator(
+                                          decoration: InputDecoration(
+                                            labelText: _t('birthday'),
+                                            border: const OutlineInputBorder(),
+                                          ),
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                _formatBirthdate(_birthdate) ?? '—',
+                                                style: theme.textTheme.bodyMedium,
+                                              ),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  IconButton(
+                                                    tooltip: _t('pick_birthday'),
+                                                    onPressed: _saving ? null : _pickBirthdate,
+                                                    icon: const Icon(Icons.calendar_today),
+                                                  ),
+                                                  IconButton(
+                                                    tooltip: _t('clear_birthday'),
+                                                    onPressed: _saving
+                                                        ? null
+                                                        : () => setState(() => _birthdate = null),
+                                                    icon: const Icon(Icons.clear),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Text(
+                                    _t('privacy_title'),
+                                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SwitchListTile.adaptive(
+                                    value: _showEmail,
+                                    onChanged: _saving ? null : (value) => setState(() => _showEmail = value),
+                                    title: Text(_t('privacy_show_email')),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    children: [
+                                      ChoiceChip(
+                                        label: Text(_t('privacy_dm_anyone')),
+                                        selected: _dmPermission == 'all',
+                                        onSelected: _saving
+                                            ? null
+                                            : (selected) {
+                                                if (selected) {
+                                                  setState(() => _dmPermission = 'all');
+                                                }
+                                              },
+                                      ),
+                                      ChoiceChip(
+                                        label: Text(_t('privacy_dm_followers')),
+                                        selected: _dmPermission == 'followers',
+                                        onSelected: _saving
+                                            ? null
+                                            : (selected) {
+                                                if (selected) {
+                                                  setState(() => _dmPermission = 'followers');
+                                                }
+                                              },
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: FilledButton(
+                                          onPressed: _isSaveEnabled ? _handleSave : null,
+                                          child: _saving
+                                              ? const SizedBox(
+                                                  height: 20,
+                                                  width: 20,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                  ),
+                                                )
+                                              : Text(_t('save')),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      TextButton(
+                                        onPressed: _saving
+                                            ? null
+                                            : () {
+                                                Navigator.pop(context, false);
+                                              },
+                                        child: Text(_t('cancel')),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+
+    return Directionality(
+      textDirection: ui.TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_t('profile_edit_title')),
+        ),
+        body: body,
+      ),
+    );
+  }
+}
