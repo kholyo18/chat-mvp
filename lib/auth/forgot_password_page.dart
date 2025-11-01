@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
@@ -72,7 +74,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: ui.TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('إعادة تعيين كلمة المرور / Reset Password'),
@@ -142,7 +144,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                           const SizedBox(height: 24),
                           TextFormField(
                             controller: _emailCtrl,
-                            textDirection: TextDirection.rtl,
+                            textDirection: ui.TextDirection.rtl,
                             textAlign: TextAlign.end,
                             keyboardType: TextInputType.emailAddress,
                             autovalidateMode:

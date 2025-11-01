@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -106,7 +107,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final email = widget.email ?? AuthService.currentUser?.email ?? '';
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: ui.TextDirection.rtl,
       child: Scaffold(
         body: Container(
           decoration: BoxDecoration(
