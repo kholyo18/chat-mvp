@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+
 import '../../services/auth_service.dart';
 
 class SignInPage extends StatefulWidget {
@@ -11,20 +12,122 @@ class SignInPage extends StatefulWidget {
 }
 
 class _SignInPageState extends State<SignInPage> {
-  bool _loading = false;
+  final _formKey = GlobalKey<FormState>();
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+
+  bool _loadingGoogle = false;
+  bool _loadingEmail = false;
+  bool _obscurePassword = true;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  String? _validateEmail(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'البريد الإلكتروني مطلوب';
+    }
+    final email = value.trim();
+    final valid = email.contains('@') && email.contains('.');
+    if (!valid) {
+      return 'الرجاء إدخال بريد إلكتروني صالح';
+    }
+    return null;
+  }
+
+  String? _validatePassword(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'كلمة المرور مطلوبة';
+    }
+    if (value.length < 8) {
+      return 'كلمة المرور يجب أن تكون 8 أحرف على الأقل';
+    }
+    return null;
+  }
+
+  String _mapAuthError(String code) {
+    switch (code) {
+      case 'invalid-email':
+        return 'صيغة البريد الإلكتروني غير صحيحة.';
+      case 'user-disabled':
+        return 'تم تعطيل هذا الحساب.';
+      case 'user-not-found':
+        return 'لا يوجد حساب بهذا البريد. أنشئ حسابًا جديدًا.';
+      case 'wrong-password':
+        return 'كلمة المرور غير صحيحة. حاول مرة أخرى.';
+      case 'too-many-requests':
+        return 'تم حظر المحاولات مؤقتًا بسبب العديد من المحاولات الفاشلة.';
+      default:
+        return 'تعذر تسجيل الدخول. حاول لاحقًا.';
+    }
+  }
+
+  Future<void> _handleEmailSignIn() async {
+    if (_loadingEmail) return;
+    final valid = _formKey.currentState?.validate() ?? false;
+    if (!valid) return;
+
+    setState(() {
+      _loadingEmail = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final credential = await AuthService.signInWithEmail(
+        _emailCtrl.text.trim(),
+        _passwordCtrl.text,
+      );
+      final user = credential.user;
+      if (!mounted) return;
+      if (user != null && !user.emailVerified) {
+        Navigator.of(context).pushReplacementNamed('/auth/verify-email');
+      } else {
+        Navigator.of(context).maybePop();
+      }
+    } on FirebaseAuthException catch (e) {
+      final friendly = _mapAuthError(e.code);
+      if (!mounted) return;
+      setState(() => _errorMessage = friendly);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(friendly)));
+    } catch (e, st) {
+      if (kDebugMode) {
+        print('Email sign-in error: $e\n$st');
+      }
+      if (!mounted) return;
+      const fallback = 'حدث خطأ غير متوقع. حاول لاحقًا.';
+      setState(() => _errorMessage = fallback);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text(fallback)));
+    } finally {
+      if (mounted) {
+        setState(() => _loadingEmail = false);
+      }
+    }
+  }
 
   Future<void> _handleGoogle() async {
-    setState(() => _loading = true);
+    if (_loadingGoogle) return;
+    setState(() => _loadingGoogle = true);
     try {
       final user = await AuthService.signInWithGoogle();
-      if (user != null && mounted) Navigator.of(context).maybePop();
+      if (user != null && mounted) {
+        Navigator.of(context).maybePop();
+      }
     } catch (e, st) {
-      if (kDebugMode) print('Google Sign-In error: $e\n$st');
+      if (kDebugMode) {
+        print('Google Sign-In error: $e\n$st');
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Sign-In failed: $e')));
+          .showSnackBar(SnackBar(content: Text('فشل تسجيل الدخول: $e')));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() => _loadingGoogle = false);
     }
   }
 
@@ -38,26 +141,25 @@ class _SignInPageState extends State<SignInPage> {
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: isDark
-                  ? [const Color(0xFF0f172a), const Color(0xFF1e293b)]
-                  : [const Color(0xFFe6f7f4), const Color(0xFFffffff)],
+                  ? const [Color(0xFF0f172a), Color(0xFF1e293b)]
+                  : const [Color(0xFFe6f7f4), Color(0xFFffffff)],
               begin: Alignment.topRight,
               end: Alignment.bottomLeft,
             ),
           ),
           child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24.0),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
                 child: Card(
                   elevation: 12,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(24),
                   ),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 280),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 28),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -74,7 +176,7 @@ class _SignInPageState extends State<SignInPage> {
                         ),
                         const SizedBox(height: 16),
                         Text(
-                          'Welcome 👋',
+                          'أهلاً بعودتك 👋',
                           style: Theme.of(context)
                               .textTheme
                               .headlineSmall
@@ -83,7 +185,7 @@ class _SignInPageState extends State<SignInPage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Sign in with your Google account to continue.',
+                          'سجّل دخولك للمتابعة إلى Chat Ultra.',
                           style: Theme.of(context)
                               .textTheme
                               .bodyMedium
@@ -91,6 +193,101 @@ class _SignInPageState extends State<SignInPage> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 24),
+                        if (_errorMessage != null) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(.08),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.error_outline,
+                                    color: Colors.redAccent),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _errorMessage!,
+                                    style: const TextStyle(
+                                        color: Colors.redAccent),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        Form(
+                          key: _formKey,
+                          child: Column(
+                            children: [
+                              TextFormField(
+                                controller: _emailCtrl,
+                                autovalidateMode:
+                                    AutovalidateMode.onUserInteraction,
+                                keyboardType: TextInputType.emailAddress,
+                                decoration: _inputDecoration(
+                                  label: 'البريد الإلكتروني',
+                                  icon: Icons.email_rounded,
+                                ),
+                                validator: _validateEmail,
+                              ),
+                              const SizedBox(height: 14),
+                              TextFormField(
+                                controller: _passwordCtrl,
+                                autovalidateMode:
+                                    AutovalidateMode.onUserInteraction,
+                                obscureText: _obscurePassword,
+                                decoration: _inputDecoration(
+                                  label: 'كلمة المرور',
+                                  icon: Icons.lock_rounded,
+                                  suffix: IconButton(
+                                    icon: Icon(_obscurePassword
+                                        ? Icons.visibility_off
+                                        : Icons.visibility),
+                                    onPressed: () {
+                                      setState(() {
+                                        _obscurePassword = !_obscurePassword;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                validator: _validatePassword,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 52,
+                          child: ElevatedButton(
+                            onPressed:
+                                _loadingEmail ? null : _handleEmailSignIn,
+                            child: _loadingEmail
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.6,
+                                    ),
+                                  )
+                                : const Text('تسجيل الدخول'),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: const [
+                            Expanded(child: Divider()),
+                            Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 8.0),
+                              child: Text('أو'),
+                            ),
+                            Expanded(child: Divider()),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
                         SizedBox(
                           width: double.infinity,
                           height: 52,
@@ -101,8 +298,8 @@ class _SignInPageState extends State<SignInPage> {
                               ),
                               elevation: 2,
                             ),
-                            onPressed: _loading ? null : _handleGoogle,
-                            icon: _loading
+                            onPressed: _loadingGoogle ? null : _handleGoogle,
+                            icon: _loadingGoogle
                                 ? const SizedBox(
                                     width: 22,
                                     height: 22,
@@ -112,16 +309,16 @@ class _SignInPageState extends State<SignInPage> {
                                   )
                                 : const Icon(Icons.login_rounded),
                             label: Text(
-                              _loading
-                                  ? 'Signing in...'
-                                  : 'Sign in with Google',
+                              _loadingGoogle
+                                  ? 'جاري تسجيل الدخول...'
+                                  : 'تسجيل الدخول عبر Google',
                               style: const TextStyle(fontSize: 16),
                             ),
                           ),
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'By signing in, you agree to the terms and privacy policy.',
+                          'بتسجيل الدخول، أنت توافق على الشروط وسياسة الخصوصية.',
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
@@ -129,12 +326,23 @@ class _SignInPageState extends State<SignInPage> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.center,
+                          child: TextButton(
+                            onPressed: () {
+                              Navigator.of(context)
+                                  .pushNamed('/auth/register');
+                            },
+                            child: const Text('إنشاء حساب جديد'),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
                         StreamBuilder<User?>(
                           stream: AuthService.authStateChanges,
                           builder: (context, snap) {
                             if (snap.data != null) {
                               return Text(
-                                'Logged in as ${snap.data!.email}',
+                                'تم تسجيل الدخول باسم ${snap.data!.email ?? snap.data!.displayName ?? ''}',
                                 style: Theme.of(context).textTheme.bodySmall,
                               );
                             }
@@ -149,6 +357,21 @@ class _SignInPageState extends State<SignInPage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  InputDecoration _inputDecoration({
+    required String label,
+    required IconData icon,
+    Widget? suffix,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon),
+      suffixIcon: suffix,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
       ),
     );
   }
