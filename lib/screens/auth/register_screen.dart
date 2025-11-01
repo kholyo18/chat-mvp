@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -189,7 +191,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: ui.TextDirection.rtl,
       child: Scaffold(
         body: Container(
           decoration: BoxDecoration(

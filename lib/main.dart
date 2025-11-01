@@ -8,6 +8,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -5941,7 +5942,7 @@ class ProfilePage extends StatelessWidget {
                         context: context,
                         builder: (dialogContext) {
                           return Directionality(
-                            textDirection: TextDirection.rtl,
+                            textDirection: ui.TextDirection.rtl,
                             child: AlertDialog(
                               title: const Text('تأكيد تسجيل الخروج'),
                               content: const Text(

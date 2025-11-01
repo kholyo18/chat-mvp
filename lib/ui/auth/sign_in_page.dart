@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -135,7 +137,7 @@ class _SignInPageState extends State<SignInPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: ui.TextDirection.rtl,
       child: Scaffold(
         body: Container(
           decoration: BoxDecoration(
