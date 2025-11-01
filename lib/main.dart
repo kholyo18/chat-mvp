@@ -694,7 +694,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                 '/login': (_) => const LoginPage(),
                 '/appearance': (_) => const AppearancePage(),
                 '/translator': (_) => const TranslatorSettingsPage(),
-                '/buy-coins': (_) => const CoinsPurchasePage(),
+                '/buy-coins': (_) => CoinsShopPage(),
 
                 // غرف ومجتمعات + دردشة
                 '/rooms': (_) => const RoomsTab(),
