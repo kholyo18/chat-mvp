@@ -33,6 +33,11 @@ const Map<String, String> _profileEditStrings = {
   'privacy_dm_followers': 'المتابعون فقط يمكنهم مراسلتي',
   'save': 'حفظ',
   'cancel': 'إلغاء',
+  'discard_changes_title': 'تجاهل التغييرات؟',
+  'discard_changes_message': 'لديك تغييرات غير محفوظة. هل تريد الخروج بدون حفظ؟',
+  'stay': 'البقاء',
+  'discard': 'تجاهل',
+  'unsaved_changes': 'غير محفوظ',
   'saved_success': 'تم تحديث الملف الشخصي بنجاح',
   'username_taken': 'اسم المستخدم محجوز',
   'username_ok': 'اسم المستخدم متاح ✅',
@@ -82,13 +87,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   final _userService = UserService();
   final _storageService = StorageService();
 
+  final ValueNotifier<bool> _isDirty = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isSaving = ValueNotifier<bool>(false);
+
   Uint8List? _avatarPreview;
   Uint8List? _coverPreview;
   XFile? _avatarFile;
   XFile? _coverFile;
 
   bool _loading = true;
-  bool _saving = false;
   bool _checkingUsername = false;
   bool _verified = false;
   VipStatus _vipStatus = const VipStatus(tier: 'none');
@@ -111,6 +118,14 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   String? _currentPhotoUrl;
   String? _currentCoverUrl;
 
+  String _initialDisplayName = '';
+  String? _initialBio;
+  String? _initialWebsite;
+  String? _initialLocation;
+  DateTime? _initialBirthdate;
+  bool _initialShowEmail = false;
+  String _initialDmPermission = 'all';
+
   Timer? _usernameDebounce;
 
   @override
@@ -127,6 +142,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     _websiteCtrl.dispose();
     _locationCtrl.dispose();
     _usernameDebounce?.cancel();
+    _isDirty.dispose();
+    _isSaving.dispose();
     super.dispose();
   }
 
@@ -168,6 +185,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
           .doc(user.uid)
           .get();
       _verificationRequested = requestDoc.exists;
+
+      _initialDisplayName = _displayNameCtrl.text.trim();
+      _initialBio = _bioCtrl.text.trim().isNotEmpty ? _bioCtrl.text.trim() : null;
+      _initialWebsite = _websiteCtrl.text.trim().isNotEmpty ? _websiteCtrl.text.trim() : null;
+      _initialLocation = _locationCtrl.text.trim().isNotEmpty ? _locationCtrl.text.trim() : null;
+      _initialBirthdate = _birthdate;
+      _initialShowEmail = _showEmail;
+      _initialDmPermission = _dmPermission;
+      _isDirty.value = false;
     } catch (err) {
       _loadError = err.toString();
     } finally {
@@ -188,6 +214,38 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     });
     if (_formKey.currentState != null) {
       _formKey.currentState!.validate();
+    }
+    _updateDirtyState();
+  }
+
+  void _updateDirtyState() {
+    final displayName = _displayNameCtrl.text.trim();
+    final username = _usernameCtrl.text.trim();
+    final bio = _bioCtrl.text.trim();
+    final website = _websiteCtrl.text.trim();
+    final location = _locationCtrl.text.trim();
+
+    final normalizedBio = bio.isEmpty ? null : bio;
+    final normalizedWebsite = website.isEmpty ? null : website;
+    final normalizedLocation = location.isEmpty ? null : location;
+
+    final dirty =
+        displayName != _initialDisplayName ||
+        username != (_initialUsername ?? '') ||
+        normalizedBio != _initialBio ||
+        normalizedWebsite != _initialWebsite ||
+        normalizedLocation != _initialLocation ||
+        _birthdate != _initialBirthdate ||
+        _showEmail != _initialShowEmail ||
+        _dmPermission != _initialDmPermission ||
+        _avatarFile != null ||
+        _coverFile != null;
+
+    if (_isDirty.value != dirty) {
+      _isDirty.value = dirty;
+      if (mounted) {
+        setState(() {});
+      }
     }
   }
 
@@ -232,10 +290,12 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         _setUsernameStatus(_UsernameStatus.invalid, errorKey: err.toString());
       }
     });
+    _updateDirtyState();
   }
 
   bool get _isSaveEnabled {
-    if (_loading || _saving || _checkingUsername) return false;
+    if (_loading || _isSaving.value || _checkingUsername) return false;
+    if (!_isDirty.value) return false;
     final name = _displayNameCtrl.text.trim();
     final username = _usernameCtrl.text.trim();
     if (name.isEmpty || name.length > 40) return false;
@@ -456,6 +516,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         _avatarFile = picked;
         _avatarPreview = bytes;
       });
+      _updateDirtyState();
     } on PlatformException catch (err) {
       _showSnack(_t('unexpected_error') + '\n${err.message ?? err.code}');
     }
@@ -474,6 +535,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         _coverFile = picked;
         _coverPreview = bytes;
       });
+      _updateDirtyState();
     } on PlatformException catch (err) {
       _showSnack(_t('unexpected_error') + '\n${err.message ?? err.code}');
     }
@@ -491,6 +553,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     );
     if (picked != null) {
       setState(() => _birthdate = picked);
+      _updateDirtyState();
     }
   }
 
@@ -503,6 +566,22 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     }
   }
 
+  String? _validateWebsite(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) {
+      return 'invalid_website';
+    }
+    final hasValidScheme = uri.scheme == 'http' || uri.scheme == 'https';
+    if (!hasValidScheme || (uri.host.isEmpty && uri.authority.isEmpty)) {
+      return 'invalid_website';
+    }
+    return null;
+  }
+
   Future<void> _handleSave() async {
     if (!_isSaveEnabled) return;
     final valid = _formKey.currentState?.validate() ?? false;
@@ -512,6 +591,13 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     if (user == null) return;
 
     FocusScope.of(context).unfocus();
+
+    final websiteError = _validateWebsite(_websiteCtrl.text);
+    if (websiteError != null) {
+      setState(() => _websiteErrorKey = websiteError);
+      _formKey.currentState?.validate();
+      return;
+    }
 
     String? website;
     try {
@@ -524,7 +610,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       return;
     }
 
-    setState(() => _saving = true);
+    _isSaving.value = true;
+    setState(() {});
 
     Future<SafeResult<String>>? avatarFuture;
     Future<SafeResult<String>>? coverFuture;
@@ -560,8 +647,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       if (result is SafeSuccess<String>) {
         photoUrl = result.value;
       } else if (result is SafeFailure<String>) {
-        _showRetrySnack(result.message);
-        setState(() => _saving = false);
+        _isSaving.value = false;
+        setState(() {});
+        _showErrorSnack(result.message);
         return;
       }
     }
@@ -571,8 +659,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       if (result is SafeSuccess<String>) {
         coverUrl = result.value;
       } else if (result is SafeFailure<String>) {
-        _showRetrySnack(result.message);
-        setState(() => _saving = false);
+        _isSaving.value = false;
+        setState(() {});
+        _showErrorSnack(result.message);
         return;
       }
     }
@@ -595,20 +684,29 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     try {
       await _userService.saveProfile(user.uid, profile);
       if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _currentPhotoUrl = photoUrl;
-        _currentCoverUrl = coverUrl;
-        _initialUsername = profile.username;
-        _avatarFile = null;
-        _coverFile = null;
-      });
-      _showSnack(_t('saved_success'));
-      Navigator.pop(context, true);
+      _currentPhotoUrl = photoUrl;
+      _currentCoverUrl = coverUrl;
+      _avatarFile = null;
+      _coverFile = null;
+      _avatarPreview = null;
+      _coverPreview = null;
+      _initialUsername = profile.username;
+      _initialDisplayName = profile.displayName;
+      _initialBio = profile.bio;
+      _initialWebsite = profile.website;
+      _initialLocation = profile.location;
+      _initialBirthdate = _birthdate;
+      _initialShowEmail = _showEmail;
+      _initialDmPermission = _dmPermission;
+      _isDirty.value = false;
+      _isSaving.value = false;
+      setState(() {});
+      _showSnack('Profile updated successfully ✅');
     } catch (err) {
       if (!mounted) return;
-      setState(() => _saving = false);
-      _showRetrySnack(err.toString());
+      _isSaving.value = false;
+      setState(() {});
+      _showErrorSnack(err.toString());
     }
   }
 
@@ -618,19 +716,68 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     );
   }
 
-  void _showRetrySnack(String message) {
+  void _showErrorSnack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message.isEmpty ? _t('upload_failed') : message),
-        action: SnackBarAction(
-          label: _t('save'),
-          onPressed: _handleSave,
+        content: Text(
+          message.isEmpty ? _t('unexpected_error') : message,
         ),
       ),
     );
   }
 
+  Future<bool> _confirmDiscardIfNeeded() async {
+    if (_isSaving.value) {
+      return false;
+    }
+    if (!_isDirty.value) {
+      return true;
+    }
+    FocusScope.of(context).unfocus();
+    final shouldDiscard = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(_t('discard_changes_title')),
+          content: Text(_t('discard_changes_message')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(_t('stay')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(_t('discard')),
+            ),
+          ],
+        );
+      },
+    );
+    return shouldDiscard ?? false;
+  }
+
+  Future<void> _handleCancel() async {
+    final shouldPop = await _confirmDiscardIfNeeded();
+    if (shouldPop && mounted) {
+      Navigator.of(context).pop(false);
+    }
+  }
+
+  Future<void> _handleBackNavigation() async {
+    final shouldPop = await _confirmDiscardIfNeeded();
+    if (shouldPop && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<bool> _onWillPop() async {
+    return _confirmDiscardIfNeeded();
+  }
+
   Widget _buildAvailabilityBadge() {
+    final theme = Theme.of(context);
+    final successColor = theme.colorScheme.tertiary;
+    final errorColor = theme.colorScheme.error;
     Widget child;
     switch (_usernameStatus) {
       case _UsernameStatus.checking:
@@ -644,11 +791,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         child = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.check_circle, color: Colors.green, size: 18),
+            Icon(Icons.check_circle, color: successColor, size: 18),
             const SizedBox(width: 4),
             Text(
               _t('username_ok'),
-              style: const TextStyle(color: Colors.green, fontSize: 12),
+              style: theme.textTheme.labelSmall?.copyWith(color: successColor),
             ),
           ],
         );
@@ -657,11 +804,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         child = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cancel, color: Colors.redAccent, size: 18),
+            Icon(Icons.cancel, color: errorColor, size: 18),
             const SizedBox(width: 4),
             Text(
               _t('username_taken'),
-              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+              style: theme.textTheme.labelSmall?.copyWith(color: errorColor),
             ),
           ],
         );
@@ -688,45 +835,76 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     } else if (_currentPhotoUrl != null && _currentPhotoUrl!.isNotEmpty) {
       image = CachedNetworkImageProvider(_currentPhotoUrl!);
     }
+    final theme = Theme.of(context);
+    final hasPendingAvatar = _avatarFile != null;
+    final chipColor = theme.colorScheme.secondaryContainer.withOpacity(0.9);
+    final chipTextColor = theme.colorScheme.onSecondaryContainer;
+
     return SizedBox(
       width: 104,
       height: 104,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: CircleAvatar(
-              radius: 52,
-              backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
-              backgroundImage: image,
-              child: image == null
-                  ? Icon(
-                      Icons.person,
-                      size: 48,
-                      color: Theme.of(context).colorScheme.primary,
-                    )
-                  : null,
-            ),
-          ),
-          PositionedDirectional(
-            bottom: 0,
-            end: 4,
-            child: Tooltip(
-              message: _t('change_photo'),
-              child: Material(
-                color: Theme.of(context).colorScheme.primary,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: _saving ? null : _pickAvatar,
-                  child: const Padding(
-                    padding: EdgeInsets.all(6),
-                    child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
+      child: AbsorbPointer(
+        absorbing: _isSaving.value,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 200),
+          opacity: _isSaving.value ? 0.6 : 1,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CircleAvatar(
+                  radius: 52,
+                  backgroundColor: theme.colorScheme.surfaceVariant,
+                  backgroundImage: image,
+                  child: image == null
+                      ? Icon(
+                          Icons.person,
+                          size: 48,
+                          color: theme.colorScheme.primary,
+                        )
+                      : null,
+                ),
+              ),
+              if (hasPendingAvatar)
+                PositionedDirectional(
+                  top: 4,
+                  start: 4,
+                  child: Chip(
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    label: Text(_t('unsaved_changes')),
+                    labelStyle: theme.textTheme.labelSmall?.copyWith(
+                      color: chipTextColor,
+                    ),
+                    backgroundColor: chipColor,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                ),
+              PositionedDirectional(
+                bottom: 0,
+                end: 4,
+                child: Tooltip(
+                  message: _t('change_photo'),
+                  child: Material(
+                    color: theme.colorScheme.primary,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _isSaving.value ? null : _pickAvatar,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.camera_alt,
+                          color: theme.colorScheme.onPrimary,
+                          size: 18,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -758,21 +936,48 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       );
     }
 
+    final theme = Theme.of(context);
+    final hasPendingCover = _coverFile != null;
+    final chipColor = theme.colorScheme.secondaryContainer.withOpacity(0.9);
+    final chipTextColor = theme.colorScheme.onSecondaryContainer;
+
     return AspectRatio(
       aspectRatio: 16 / 9,
-      child: Stack(
-        children: [
-          Positioned.fill(child: child),
-          PositionedDirectional(
-            bottom: 12,
-            start: 12,
-            child: FilledButton.icon(
-              onPressed: _saving ? null : _pickCover,
-              icon: const Icon(Icons.photo_library_rounded),
-              label: Text(_t('change_cover')),
-            ),
+      child: AbsorbPointer(
+        absorbing: _isSaving.value,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 200),
+          opacity: _isSaving.value ? 0.6 : 1,
+          child: Stack(
+            children: [
+              Positioned.fill(child: child),
+              if (hasPendingCover)
+                PositionedDirectional(
+                  top: 12,
+                  end: 12,
+                  child: Chip(
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    label: Text(_t('unsaved_changes')),
+                    labelStyle: theme.textTheme.labelSmall?.copyWith(
+                      color: chipTextColor,
+                    ),
+                    backgroundColor: chipColor,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                ),
+              PositionedDirectional(
+                bottom: 12,
+                start: 12,
+                child: FilledButton.icon(
+                  onPressed: _isSaving.value ? null : _pickCover,
+                  icon: const Icon(Icons.photo_library_rounded),
+                  label: Text(_t('change_cover')),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -824,10 +1029,13 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                   _buildAccountStatusSection(theme),
                                   TextFormField(
                                     controller: _displayNameCtrl,
-                                    enabled: !_saving,
+                                    enabled: !_isSaving.value,
                                     decoration: InputDecoration(
                                       labelText: _t('display_name'),
                                     ),
+                                    onChanged: (_) {
+                                      _updateDirtyState();
+                                    },
                                     validator: (value) {
                                       final trimmed = value?.trim() ?? '';
                                       if (trimmed.isEmpty) {
@@ -845,7 +1053,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                     children: [
                                       TextFormField(
                                         controller: _usernameCtrl,
-                                        enabled: !_saving,
+                                        enabled: !_isSaving.value,
                                         decoration: InputDecoration(
                                           labelText: '@${_t('username')}',
                                           suffixIcon: Padding(
@@ -878,10 +1086,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                   const SizedBox(height: 16),
                                   TextFormField(
                                     controller: _bioCtrl,
-                                    enabled: !_saving,
+                                    enabled: !_isSaving.value,
                                     decoration: InputDecoration(labelText: _t('bio')),
                                     maxLines: 4,
                                     maxLength: 160,
+                                    onChanged: (_) => _updateDirtyState(),
                                     validator: (value) {
                                       final length = value?.trim().length ?? 0;
                                       if (length > 160) {
@@ -893,7 +1102,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                   const SizedBox(height: 16),
                                   TextFormField(
                                     controller: _websiteCtrl,
-                                    enabled: !_saving,
+                                    enabled: !_isSaving.value,
                                     decoration: InputDecoration(
                                       labelText: _t('website'),
                                       errorText: _websiteErrorKey == null
@@ -901,12 +1110,19 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                           : _profileEditStrings[_websiteErrorKey!] ?? _websiteErrorKey,
                                     ),
                                     keyboardType: TextInputType.url,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        _websiteErrorKey = _validateWebsite(value);
+                                      });
+                                      _updateDirtyState();
+                                    },
                                   ),
                                   const SizedBox(height: 16),
                                   TextFormField(
                                     controller: _locationCtrl,
-                                    enabled: !_saving,
+                                    enabled: !_isSaving.value,
                                     decoration: InputDecoration(labelText: _t('location')),
+                                    onChanged: (_) => _updateDirtyState(),
                                   ),
                                   const SizedBox(height: 16),
                                   Row(
@@ -929,14 +1145,17 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                                 children: [
                                                   IconButton(
                                                     tooltip: _t('pick_birthday'),
-                                                    onPressed: _saving ? null : _pickBirthdate,
+                                                    onPressed: _isSaving.value ? null : _pickBirthdate,
                                                     icon: const Icon(Icons.calendar_today),
                                                   ),
                                                   IconButton(
                                                     tooltip: _t('clear_birthday'),
-                                                    onPressed: _saving
+                                                    onPressed: _isSaving.value
                                                         ? null
-                                                        : () => setState(() => _birthdate = null),
+                                                        : () {
+                                                            setState(() => _birthdate = null);
+                                                            _updateDirtyState();
+                                                          },
                                                     icon: const Icon(Icons.clear),
                                                   ),
                                                 ],
@@ -955,7 +1174,12 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                   const SizedBox(height: 12),
                                   SwitchListTile.adaptive(
                                     value: _showEmail,
-                                    onChanged: _saving ? null : (value) => setState(() => _showEmail = value),
+                                    onChanged: _isSaving.value
+                                        ? null
+                                        : (value) {
+                                            setState(() => _showEmail = value);
+                                            _updateDirtyState();
+                                          },
                                     title: Text(_t('privacy_show_email')),
                                     contentPadding: EdgeInsets.zero,
                                   ),
@@ -966,22 +1190,24 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                       ChoiceChip(
                                         label: Text(_t('privacy_dm_anyone')),
                                         selected: _dmPermission == 'all',
-                                        onSelected: _saving
+                                        onSelected: _isSaving.value
                                             ? null
                                             : (selected) {
                                                 if (selected) {
                                                   setState(() => _dmPermission = 'all');
+                                                  _updateDirtyState();
                                                 }
                                               },
                                       ),
                                       ChoiceChip(
                                         label: Text(_t('privacy_dm_followers')),
                                         selected: _dmPermission == 'followers',
-                                        onSelected: _saving
+                                        onSelected: _isSaving.value
                                             ? null
                                             : (selected) {
                                                 if (selected) {
                                                   setState(() => _dmPermission = 'followers');
+                                                  _updateDirtyState();
                                                 }
                                               },
                                       ),
@@ -993,13 +1219,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                       Expanded(
                                         child: FilledButton(
                                           onPressed: _isSaveEnabled ? _handleSave : null,
-                                          child: _saving
-                                              ? const SizedBox(
+                                          child: _isSaving.value
+                                              ? SizedBox(
                                                   height: 20,
                                                   width: 20,
                                                   child: CircularProgressIndicator(
                                                     strokeWidth: 2,
-                                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                                      Theme.of(context).colorScheme.onPrimary,
+                                                    ),
                                                   ),
                                                 )
                                               : Text(_t('save')),
@@ -1007,10 +1235,10 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                                       ),
                                       const SizedBox(width: 16),
                                       TextButton(
-                                        onPressed: _saving
+                                        onPressed: _isSaving.value
                                             ? null
                                             : () {
-                                                Navigator.pop(context, false);
+                                                _handleCancel();
                                               },
                                         child: Text(_t('cancel')),
                                       ),
@@ -1030,11 +1258,20 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
     return Directionality(
       textDirection: ui.TextDirection.rtl,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(_t('profile_edit_title')),
+      child: WillPopScope(
+        onWillPop: _onWillPop,
+        child: Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () {
+                _handleBackNavigation();
+              },
+            ),
+            title: Text(_t('profile_edit_title')),
+          ),
+          body: body,
         ),
-        body: body,
       ),
     );
   }
