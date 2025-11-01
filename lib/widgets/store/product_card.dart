@@ -38,14 +38,15 @@ class ProductCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textDirection = Directionality.of(context);
-    final NumberFormat formatter;
-    try {
-      formatter = NumberFormat.simpleCurrency(name: product.currency);
-    } catch (_) {
-      formatter = NumberFormat.simpleCurrency();
-    }
+    final NumberFormat currencyFmt = (() {
+      try {
+        return NumberFormat.simpleCurrency(name: product.currency);
+      } catch (_) {
+        return NumberFormat.simpleCurrency();
+      }
+    })();
 
-    final priceLabel = formatter.format(product.price);
+    final priceLabel = currencyFmt.format(product.price);
 
     return Material(
       color: Theme.of(context).colorScheme.surface,
