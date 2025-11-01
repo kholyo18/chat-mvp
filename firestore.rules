@@ -24,6 +24,11 @@ service cloud.firestore {
       }
     }
 
+    match /store_products/{id} {
+      allow read: if resource.data.active == true;
+      allow write: if false;
+    }
+
     match /users/{uid} {
       allow read: if true;
       allow create: if isOwner(uid);
@@ -34,6 +39,11 @@ service cloud.firestore {
                     && !( 'verified' in request.resource.data.diff(resource.data).changedKeys());
 
       match /wallet_transactions/{tid} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+
+      match /purchases/{pid} {
         allow read: if isOwner(uid);
         allow write: if false;
       }
