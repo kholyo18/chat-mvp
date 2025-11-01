@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import '../models/user_profile.dart';
 // CODEX-BEGIN:PRIVACY_SERVICE_IMPORT
 import 'user_settings_service.dart';
 // CODEX-END:PRIVACY_SERVICE_IMPORT
@@ -282,18 +283,21 @@ class WalletSummary {
       DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data() ?? <String, dynamic>{};
     final map = _cloneMap(Map<String, dynamic>.from(data));
+    final vipTier = _parseVipTierFromData(map);
     return WalletSummary(
       balance: _parseInt(map['balance']),
-      vipTier: (map['vipTier'] as String?) ?? 'Bronze',
+      vipTier: vipTier.isEmpty ? 'none' : vipTier,
       raw: Map<String, dynamic>.unmodifiable(map),
     );
   }
 
   factory WalletSummary.fromJson(Map<String, dynamic> json) {
+    final map = Map<String, dynamic>.from(json);
+    final vipTier = _parseVipTierFromData(map);
     return WalletSummary(
-      balance: _parseInt(json['balance']),
-      vipTier: (json['vipTier'] as String?) ?? 'Bronze',
-      raw: Map<String, dynamic>.unmodifiable(Map<String, dynamic>.from(json)),
+      balance: _parseInt(map['balance']),
+      vipTier: vipTier.isEmpty ? 'none' : vipTier,
+      raw: Map<String, dynamic>.unmodifiable(map),
     );
   }
 
@@ -396,7 +400,7 @@ class DiscoverUser {
       uid: doc.id,
       displayName: (data['displayName'] as String?) ?? 'User',
       photoUrl: data['photoUrl'] as String?,
-      vipTier: (data['vipTier'] as String?) ?? (data['vipLevel'] as String?) ?? 'Bronze',
+      vipTier: _parseVipTierFromData(data),
       followers: _parseInt(data['followers']),
       following: _parseInt(data['following']),
       raw: Map<String, dynamic>.unmodifiable(data),
@@ -1148,3 +1152,15 @@ class FirestoreService {
   // CODEX-END:ADMIN_FIRESTORE_METHODS
 }
 // CODEX-END:STORE_FIRESTORE_SERVICE
+String? _readString(dynamic raw) {
+  if (raw is String && raw.trim().isNotEmpty) {
+    return raw.trim();
+  }
+  return null;
+}
+
+String _parseVipTierFromData(Map<String, dynamic> data) {
+  final fallback = _readString(data['vipTier']) ?? _readString(data['vipLevel']);
+  return VipStatus.fromRaw(data['vip'], fallbackTier: fallback).tier;
+}
+

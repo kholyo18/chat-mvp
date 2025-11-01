@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -49,6 +50,15 @@ const Map<String, String> _profileEditStrings = {
   'unexpected_error': 'حدث خطأ غير متوقع. حاول لاحقًا.',
   'upload_failed': 'تعذر رفع الصورة. حاول مجددًا.',
   'login_required': 'يرجى تسجيل الدخول لتعديل ملفك الشخصي.',
+  'status': 'الحالة',
+  'verified': 'موثّق',
+  'vip': 'العضوية',
+  'vip_none': 'بدون',
+  'coins': 'العملات',
+  'expires': 'ينتهي',
+  'request_verification': 'طلب التحقق',
+  'verification_requested': 'تم إرسال طلب التحقق',
+  'request_verification_failed': 'تعذر إرسال الطلب. حاول لاحقًا.',
 };
 
 String _t(String key) => _profileEditStrings[key] ?? key;
@@ -80,6 +90,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   bool _loading = true;
   bool _saving = false;
   bool _checkingUsername = false;
+  bool _verified = false;
+  VipStatus _vipStatus = const VipStatus(tier: 'none');
+  int _coins = 0;
+  bool _verificationRequested = false;
+  bool _requestingVerification = false;
 
   String? _uid;
   String? _initialUsername;
@@ -91,6 +106,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   DateTime? _birthdate;
   bool _showEmail = false;
   String _dmPermission = 'all';
+  DateTime? _vipExpiry;
 
   String? _currentPhotoUrl;
   String? _currentCoverUrl;
@@ -143,6 +159,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       _dmPermission = profile.dmPermission;
       _currentPhotoUrl = profile.photoURL ?? user.photoURL;
       _currentCoverUrl = profile.coverURL;
+      _verified = profile.verified;
+      _vipStatus = profile.vip;
+      _vipExpiry = profile.vip.expiresAt;
+      _coins = profile.coins;
+      final requestDoc = await cf.FirebaseFirestore.instance
+          .collection('verification_requests')
+          .doc(user.uid)
+          .get();
+      _verificationRequested = requestDoc.exists;
     } catch (err) {
       _loadError = err.toString();
     } finally {
@@ -222,6 +247,167 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     if (_bioCtrl.text.trim().length > 160) return false;
     if (_websiteErrorKey != null) return false;
     return true;
+  }
+
+  String _formatVipTierLabel(String tier) {
+    final normalised = tier.trim().toLowerCase();
+    if (normalised.isEmpty || normalised == 'none') {
+      return _t('vip_none');
+    }
+    return normalised[0].toUpperCase() + normalised.substring(1);
+  }
+
+  String _formatCoins(int coins) {
+    final formatter = NumberFormat.decimalPattern();
+    return formatter.format(coins);
+  }
+
+  Widget _buildStatusRow({
+    required String label,
+    required Widget value,
+  }) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          value,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccountStatusSection(ThemeData theme) {
+    final vipLabel = _formatVipTierLabel(_vipStatus.tier);
+    final expiry = _vipExpiry;
+    final expiresText = expiry != null
+        ? '${_t('expires')}: ${DateFormat('dd MMM yyyy').format(expiry)}'
+        : null;
+
+    final surface = theme.colorScheme.surface;
+    final shadowColor = theme.colorScheme.shadow.withOpacity(0.1);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: shadowColor,
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _t('status'),
+            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            textDirection: Directionality.of(context),
+          ),
+          const SizedBox(height: 12),
+          _buildStatusRow(
+            label: _t('verified'),
+            value: Text(_verified ? '✅' : '❌'),
+          ),
+          _buildStatusRow(
+            label: _t('vip'),
+            value: Flexible(
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(vipLabel),
+                  if (expiresText != null)
+                    Text(
+                      expiresText,
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          _buildStatusRow(
+            label: _t('coins'),
+            value: Text(_formatCoins(_coins)),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: FilledButton.tonal(
+              onPressed: _verificationRequested || _requestingVerification
+                  ? null
+                  : _requestVerification,
+              child: _requestingVerification
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(_t('request_verification')),
+            ),
+          ),
+          if (_verificationRequested) ...[
+            const SizedBox(height: 8),
+            Text(
+              _t('verification_requested'),
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+              textAlign: TextAlign.start,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _requestVerification() async {
+    final uid = _uid;
+    if (uid == null || _verificationRequested) {
+      return;
+    }
+    setState(() {
+      _requestingVerification = true;
+    });
+    try {
+      final ref =
+          cf.FirebaseFirestore.instance.collection('verification_requests').doc(uid);
+      await ref.set({
+        'uid': uid,
+        'createdAt': cf.FieldValue.serverTimestamp(),
+        'displayName': _displayNameCtrl.text.trim(),
+        'username': _usernameCtrl.text.trim(),
+      });
+      if (!mounted) return;
+      setState(() {
+        _verificationRequested = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_t('verification_requested'))),
+      );
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_t('request_verification_failed'))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _requestingVerification = false;
+        });
+      }
+    }
   }
 
   Future<void> _pickAvatar() async {
@@ -635,6 +821,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
+                                  _buildAccountStatusSection(theme),
                                   TextFormField(
                                     controller: _displayNameCtrl,
                                     enabled: !_saving,
