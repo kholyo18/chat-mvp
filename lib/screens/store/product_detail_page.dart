@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/store_product.dart';
+import '../../services/checkout_service.dart';
 import 'store_strings.dart';
 
 class ProductDetailPage extends StatefulWidget {
@@ -27,12 +26,13 @@ class ProductDetailPage extends StatefulWidget {
 class _ProductDetailPageState extends State<ProductDetailPage>
     with WidgetsBindingObserver {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseFunctions _functions = FirebaseFunctions.instance;
+  final CheckoutService _checkoutService = CheckoutService();
 
   StoreProduct? _product;
   bool _loading = true;
   bool _processing = false;
   String? _error;
+  bool _pendingCheckoutResumeMessage = false;
 
   @override
   void initState() {
@@ -55,6 +55,10 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshPurchases());
+      if (_pendingCheckoutResumeMessage) {
+        _pendingCheckoutResumeMessage = false;
+        _showResumeSnackBar();
+      }
     }
   }
 
@@ -72,6 +76,26 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           .limit(1)
           .get();
     } catch (_) {}
+  }
+
+  void _showResumeSnackBar() {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..removeCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(storeTr(context, 'coins_resume_message')),
+          action: SnackBarAction(
+            label: storeTr(context, 'refresh'),
+            onPressed: () {
+              unawaited(_refreshPurchases());
+            },
+          ),
+        ),
+      );
   }
 
   Future<void> _load() async {
@@ -121,26 +145,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       _processing = true;
     });
     try {
-      final callable =
-          _functions.httpsCallable('createCheckoutSession');
-      final result = await callable.call(<String, dynamic>{
-        'productId': widget.productId,
-      });
-      final data = result.data;
-      final urlString = data is Map<String, dynamic>
-          ? data['url'] as String?
-          : data['url']?.toString();
-      if (urlString == null || urlString.isEmpty) {
-        throw Exception('Missing checkout url');
-      }
-      final uri = Uri.parse(urlString);
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        throw Exception('launch_failed');
-      }
+      await _checkoutService.buyCoins(widget.productId);
+      _pendingCheckoutResumeMessage = true;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(storeTr(context, 'complete_in_browser'))),

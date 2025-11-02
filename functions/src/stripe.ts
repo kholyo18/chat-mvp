@@ -177,11 +177,23 @@ async function handleCheckoutCompleted(args: {
   }
 
   const userRef = firestore.collection("users").doc(uid);
-  const purchaseRef = userRef.collection("purchases").doc(session.id);
+  const purchasesCollection = userRef.collection("purchases");
+  const defaultPurchaseRef = purchasesCollection.doc();
+  const sessionRef = firestore.collection("stripe_sessions").doc(session.id);
 
   await firestore.runTransaction(async (transaction) => {
-    const userSnap = await transaction.get(userRef);
+    const sessionSnap = await transaction.get(sessionRef);
+
+    if (sessionSnap.exists && sessionSnap.data()?.fulfilled) {
+      return;
+    }
+
     const timestamp = admin.firestore.FieldValue.serverTimestamp();
+    let purchaseRef = defaultPurchaseRef;
+    const existingPurchaseId = sessionSnap.data()?.purchaseId;
+    if (sessionSnap.exists && typeof existingPurchaseId === "string" && existingPurchaseId) {
+      purchaseRef = purchasesCollection.doc(existingPurchaseId);
+    }
     const purchaseData: FirebaseFirestore.DocumentData = {
       productId,
       amount_cents: product.price_cents ?? 0,
@@ -212,5 +224,20 @@ async function handleCheckoutCompleted(args: {
     if (Object.keys(userUpdate).length > 0) {
       transaction.set(userRef, userUpdate, { merge: true });
     }
+
+    const sessionData: FirebaseFirestore.DocumentData = {
+      fulfilled: true,
+      productId,
+      uid,
+      purchaseId: purchaseRef.id,
+      stripe_checkout_session: session.id,
+      updatedAt: timestamp,
+    };
+
+    if (!sessionSnap.exists) {
+      sessionData.createdAt = timestamp;
+    }
+
+    transaction.set(sessionRef, sessionData, { merge: true });
   });
 }

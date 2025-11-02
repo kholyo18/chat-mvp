@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/store_product.dart';
+import '../../services/checkout_service.dart';
 import '../../widgets/store/product_card.dart';
 import 'store_strings.dart';
 
@@ -20,7 +19,7 @@ class StorePage extends StatefulWidget {
 
 class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseFunctions _functions = FirebaseFunctions.instance;
+  final CheckoutService _checkoutService = CheckoutService();
 
   final List<StoreProduct> _products = <StoreProduct>[];
   final Set<String> _busyProductIds = <String>{};
@@ -28,6 +27,8 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
   bool _loading = true;
   bool _refreshing = false;
   String? _error;
+  String _selectedCategory = _StoreCategoryFilter.all.id;
+  bool _pendingCheckoutResumeMessage = false;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
       _userSubscription;
@@ -54,6 +55,10 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshPurchases());
+      if (_pendingCheckoutResumeMessage) {
+        _pendingCheckoutResumeMessage = false;
+        _showResumeSnackBar();
+      }
     }
   }
 
@@ -164,26 +169,8 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
       _busyProductIds.add(product.id);
     });
     try {
-      final callable =
-          _functions.httpsCallable('createCheckoutSession');
-      final result = await callable.call(<String, dynamic>{
-        'productId': product.id,
-      });
-      final data = result.data;
-      final urlString = data is Map<String, dynamic>
-          ? data['url'] as String?
-          : data['url']?.toString();
-      if (urlString == null || urlString.isEmpty) {
-        throw Exception('Missing checkout url');
-      }
-      final uri = Uri.parse(urlString);
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        throw Exception('launch_failed');
-      }
+      await _checkoutService.buyCoins(product.id);
+      _pendingCheckoutResumeMessage = true;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(storeTr(context, 'complete_in_browser'))),
@@ -204,6 +191,75 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
       }
       await _refreshPurchases();
     }
+  }
+
+  void _showResumeSnackBar() {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..removeCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(storeTr(context, 'coins_resume_message')),
+          action: SnackBarAction(
+            label: storeTr(context, 'refresh'),
+            onPressed: () {
+              unawaited(_refreshPurchases());
+            },
+          ),
+        ),
+      );
+  }
+
+  List<StoreProduct> get _filteredProducts {
+    if (_selectedCategory == _StoreCategoryFilter.all.id) {
+      return List<StoreProduct>.from(_products);
+    }
+    return _products.where(_matchesSelectedCategory).toList();
+  }
+
+  bool _matchesSelectedCategory(StoreProduct product) {
+    switch (_selectedCategory) {
+      case _StoreCategoryFilter.coinsId:
+        return product.type == 'coins';
+      case _StoreCategoryFilter.vipId:
+        return product.type == 'vip';
+      case _StoreCategoryFilter.themesId:
+        return product.type == 'theme' || product.type == 'feature';
+      case _StoreCategoryFilter.subscriptionsId:
+        return product.type == 'subscription' || product.type == 'subscriptions';
+      default:
+        return true;
+    }
+  }
+
+  Widget _buildCategoryChips() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 12),
+      child: Row(
+        children: _StoreCategoryFilter.values.map((category) {
+          final selected = _selectedCategory == category.id;
+          return Padding(
+            padding: const EdgeInsetsDirectional.only(end: 8),
+            child: ChoiceChip(
+              label: Text(storeTr(context, category.labelKey)),
+              selected: selected,
+              onSelected: (value) {
+                if (!value) {
+                  return;
+                }
+                setState(() {
+                  _selectedCategory = category.id;
+                });
+              },
+            ),
+          );
+        }).toList(),
+      ),
+    );
   }
 
   void _openProduct(StoreProduct product) {
@@ -232,6 +288,8 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
         child: Text(storeTr(context, 'no_products')),
       );
     }
+    final filteredProducts = _filteredProducts;
+
     return RefreshIndicator(
       onRefresh: _refresh,
       child: LayoutBuilder(
@@ -242,32 +300,46 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
                   ? 2
                   : 1;
           return CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
-              SliverPadding(
-                padding: const EdgeInsetsDirectional.fromSTEB(16, 16, 16, 24),
-                sliver: SliverGrid(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final product = _products[index];
-                      final busy = _busyProductIds.contains(product.id);
-                      return ProductCard(
-                        product: product,
-                        busy: busy,
-                        onBuy: () => _buy(product),
-                        onView: () => _openProduct(product),
-                      );
-                    },
-                    childCount: _products.length,
+              SliverToBoxAdapter(
+                child: _buildCategoryChips(),
+              ),
+              if (filteredProducts.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Text(storeTr(context, 'no_products')),
                   ),
-                  gridDelegate:
-                      SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: crossAxisCount,
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: crossAxisCount == 1 ? 1.4 : 0.95,
+                )
+              else
+                SliverPadding(
+                  padding:
+                      const EdgeInsetsDirectional.fromSTEB(16, 16, 16, 24),
+                  sliver: SliverGrid(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final product = filteredProducts[index];
+                        final busy = _busyProductIds.contains(product.id);
+                        return ProductCard(
+                          product: product,
+                          busy: busy,
+                          onBuy: () => _buy(product),
+                          onView: () => _openProduct(product),
+                        );
+                      },
+                      childCount: filteredProducts.length,
+                    ),
+                    gridDelegate:
+                        SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
+                      childAspectRatio:
+                          crossAxisCount == 1 ? 1.4 : 0.95,
+                    ),
                   ),
                 ),
-              ),
             ],
           );
         },
@@ -416,4 +488,35 @@ class _ErrorState extends StatelessWidget {
       ),
     );
   }
+}
+
+class _StoreCategoryFilter {
+  const _StoreCategoryFilter._(this.id, this.labelKey);
+
+  final String id;
+  final String labelKey;
+
+  static const _StoreCategoryFilter all =
+      _StoreCategoryFilter._('all', 'category_all');
+  static const _StoreCategoryFilter coins =
+      _StoreCategoryFilter._('coins', 'category_coins');
+  static const _StoreCategoryFilter vip =
+      _StoreCategoryFilter._('vip', 'category_vip');
+  static const _StoreCategoryFilter themes =
+      _StoreCategoryFilter._('themes', 'category_themes');
+  static const _StoreCategoryFilter subscriptions =
+      _StoreCategoryFilter._('subscriptions', 'category_subscriptions');
+
+  static const List<_StoreCategoryFilter> values = <_StoreCategoryFilter>[
+    all,
+    coins,
+    vip,
+    themes,
+    subscriptions,
+  ];
+
+  static String get coinsId => coins.id;
+  static String get vipId => vip.id;
+  static String get themesId => themes.id;
+  static String get subscriptionsId => subscriptions.id;
 }
