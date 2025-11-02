@@ -19,6 +19,13 @@ const Map<String, Map<String, String>> _kStoreStrings = <String, Map<String, Str
     'failed_to_load_purchases': 'Failed to load purchases. Please try again later.',
     'includes_vip': 'Includes VIP',
     'coins_amount': '{coins} coins',
+    'category_all': 'All',
+    'category_coins': 'Coins',
+    'category_vip': 'VIP',
+    'category_themes': 'Themes',
+    'category_subscriptions': 'Subscriptions',
+    'coins_resume_message': 'If payment completed, your coins will appear shortly.',
+    'refresh': 'Refresh',
   },
   'ar': <String, String>{
     'store_title': 'المتجر',
@@ -38,6 +45,13 @@ const Map<String, Map<String, String>> _kStoreStrings = <String, Map<String, Str
     'failed_to_load_purchases': 'تعذّر تحميل سجل المشتريات. حاول لاحقاً.',
     'includes_vip': 'يتضمن VIP',
     'coins_amount': '{coins} عملة',
+    'category_all': 'الكل',
+    'category_coins': 'العملات',
+    'category_vip': 'العضويات المميزة',
+    'category_themes': 'الثيمات',
+    'category_subscriptions': 'الاشتراكات',
+    'coins_resume_message': 'إذا اكتملت عملية الدفع، ستظهر العملات قريباً.',
+    'refresh': 'تحديث',
   },
 };
 
