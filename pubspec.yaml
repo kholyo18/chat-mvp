@@ -12,7 +12,7 @@ dependencies:
   # --- FlutterFire (جيل واحد متوافق) ---
   firebase_core: ^3.6.0
   firebase_auth: ^5.3.1
-  google_sign_in: ^6.2.1
+  google_sign_in: ^7.2.0
   cloud_firestore: ^4.17.5
   cloud_functions: ^5.0.5
   firebase_storage: ^13.0.3

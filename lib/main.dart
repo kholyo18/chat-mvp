@@ -485,6 +485,14 @@ void main() async {
         .timeout(const Duration(seconds: 10));
     _BootStatus.firebaseReady = true;
     _bootLog('Firebase initialized.');
+
+    try {
+      await AuthService.initializeGoogleSignIn()
+          .timeout(const Duration(seconds: 10));
+      _bootLog('Google Sign-In initialized.');
+    } on Object catch (e) {
+      _bootLog('Google Sign-In init FAILED (continuing): $e');
+    }
   } on Object catch (e) {
     _BootStatus.lastError = e;
     _bootLog('Firebase init FAILED (continuing offline): $e');
