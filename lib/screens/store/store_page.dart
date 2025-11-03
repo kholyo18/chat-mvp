@@ -10,6 +10,15 @@ import '../../services/checkout_service.dart';
 import '../../widgets/store/product_card.dart';
 import 'store_strings.dart';
 
+enum StoreCategory { vip, coins, themes, subscriptions }
+
+const _storeIds = <StoreCategory, String>{
+  StoreCategory.vip: 'vip',
+  StoreCategory.coins: 'coins',
+  StoreCategory.themes: 'themes',
+  StoreCategory.subscriptions: 'subscriptions',
+};
+
 class StorePage extends StatefulWidget {
   const StorePage({super.key});
 
@@ -221,17 +230,26 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
   }
 
   bool _matchesSelectedCategory(StoreProduct product) {
-    switch (_selectedCategory) {
-      case _StoreCategoryFilter.coinsId:
-        return product.type == 'coins';
-      case _StoreCategoryFilter.vipId:
-        return product.type == 'vip';
-      case _StoreCategoryFilter.themesId:
-        return product.type == 'theme' || product.type == 'feature';
-      case _StoreCategoryFilter.subscriptionsId:
-        return product.type == 'subscription' || product.type == 'subscriptions';
-      default:
-        return true;
+    final filter = _StoreCategoryFilter.byId(_selectedCategory);
+    final storeCategory = filter.storeCategory;
+    if (storeCategory == null) {
+      return true;
+    }
+    switch (storeCategory) {
+      case StoreCategory.coins:
+        final categoryId = _storeIds[StoreCategory.coins]!;
+        return product.type == categoryId;
+      case StoreCategory.vip:
+        final categoryId = _storeIds[StoreCategory.vip]!;
+        return product.type == categoryId;
+      case StoreCategory.themes:
+        final categoryId = _storeIds[StoreCategory.themes]!;
+        return product.type == categoryId ||
+            product.type == 'theme' ||
+            product.type == 'feature';
+      case StoreCategory.subscriptions:
+        final categoryId = _storeIds[StoreCategory.subscriptions]!;
+        return product.type == categoryId || product.type == 'subscription';
     }
   }
 
@@ -491,21 +509,34 @@ class _ErrorState extends StatelessWidget {
 }
 
 class _StoreCategoryFilter {
-  const _StoreCategoryFilter._(this.id, this.labelKey);
+  const _StoreCategoryFilter._(this.id, this.labelKey, this.storeCategory);
 
   final String id;
   final String labelKey;
+  final StoreCategory? storeCategory;
 
   static const _StoreCategoryFilter all =
-      _StoreCategoryFilter._('all', 'category_all');
-  static const _StoreCategoryFilter coins =
-      _StoreCategoryFilter._('coins', 'category_coins');
-  static const _StoreCategoryFilter vip =
-      _StoreCategoryFilter._('vip', 'category_vip');
-  static const _StoreCategoryFilter themes =
-      _StoreCategoryFilter._('themes', 'category_themes');
-  static const _StoreCategoryFilter subscriptions =
-      _StoreCategoryFilter._('subscriptions', 'category_subscriptions');
+      _StoreCategoryFilter._('all', 'category_all', null);
+  static const _StoreCategoryFilter coins = _StoreCategoryFilter._(
+    'coins',
+    'category_coins',
+    StoreCategory.coins,
+  );
+  static const _StoreCategoryFilter vip = _StoreCategoryFilter._(
+    'vip',
+    'category_vip',
+    StoreCategory.vip,
+  );
+  static const _StoreCategoryFilter themes = _StoreCategoryFilter._(
+    'themes',
+    'category_themes',
+    StoreCategory.themes,
+  );
+  static const _StoreCategoryFilter subscriptions = _StoreCategoryFilter._(
+    'subscriptions',
+    'category_subscriptions',
+    StoreCategory.subscriptions,
+  );
 
   static const List<_StoreCategoryFilter> values = <_StoreCategoryFilter>[
     all,
@@ -515,8 +546,10 @@ class _StoreCategoryFilter {
     subscriptions,
   ];
 
-  static String get coinsId => coins.id;
-  static String get vipId => vip.id;
-  static String get themesId => themes.id;
-  static String get subscriptionsId => subscriptions.id;
+  static _StoreCategoryFilter byId(String id) {
+    return values.firstWhere(
+      (filter) => filter.id == id,
+      orElse: () => all,
+    );
+  }
 }
