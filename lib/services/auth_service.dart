@@ -4,14 +4,29 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
-  static final GoogleSignIn _google = GoogleSignIn(
-    scopes: <String>['email', 'profile'],
-  );
+  static final GoogleSignIn _google = GoogleSignIn.instance;
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  static const List<String> _googleScopeHint = <String>['email', 'profile'];
+  static Future<void>? _googleInitialization;
 
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
   static User? get currentUser => _auth.currentUser;
   static bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
+
+  static Future<void> initializeGoogleSignIn() {
+    _googleInitialization ??= _google.initialize();
+    return _googleInitialization!;
+  }
+
+  static Future<void> _ensureGoogleInitialized() async {
+    final Future<void>? initialization = _googleInitialization;
+    if (initialization != null) {
+      await initialization;
+      return;
+    }
+    await initializeGoogleSignIn();
+  }
 
   static Future<void> sendPasswordResetEmail(String email) async {
     try {
@@ -80,14 +95,52 @@ class AuthService {
   }
 
   static Future<User?> signInWithGoogle() async {
-    final GoogleSignInAccount? gUser =
-        await _google.signInSilently() ?? await _google.signIn();
-    if (gUser == null) return null;
-    final GoogleSignInAuthentication gAuth = await gUser.authentication;
+    await _ensureGoogleInitialized();
+
+    GoogleSignInAccount? account;
+    try {
+      final Future<GoogleSignInAccount?>? lightweightAttempt =
+          _google.attemptLightweightAuthentication();
+      if (lightweightAttempt != null) {
+        account = await lightweightAttempt;
+      }
+    } on GoogleSignInException catch (e) {
+      if (!_isUserCancellationError(e)) {
+        rethrow;
+      }
+    }
+
+    if (account == null) {
+      try {
+        account = await _google.authenticate(scopeHint: _googleScopeHint);
+      } on GoogleSignInException catch (e) {
+        if (_isUserCancellationError(e)) {
+          return null;
+        }
+        rethrow;
+      }
+    }
+
+    if (account == null) {
+      return null;
+    }
+
+    final GoogleSignInAuthentication authentication =
+        await account.authentication;
+    final String? idToken = authentication.idToken;
+
+    if (idToken == null) {
+      throw FirebaseAuthException(
+        code: 'missing-id-token',
+        message: 'Unable to retrieve Google ID token.',
+      );
+    }
+
+    final String? accessToken = await _fetchAccessToken(account);
 
     final OAuthCredential credential = GoogleAuthProvider.credential(
-      accessToken: gAuth.accessToken,
-      idToken: gAuth.idToken,
+      idToken: idToken,
+      accessToken: accessToken,
     );
 
     final UserCredential userCred = await _auth.signInWithCredential(credential);
@@ -117,11 +170,13 @@ class AuthService {
   }
 
   static Future<void> signOut() async {
+    await _ensureGoogleInitialized();
     await _auth.signOut();
     await _google.signOut();
   }
 
   static Future<void> signOutAll() async {
+    await _ensureGoogleInitialized();
     await _auth.signOut();
     await _google.disconnect();
   }
@@ -135,14 +190,51 @@ class AuthService {
       );
     }
 
-    final GoogleSignInAccount? gUser =
-        await _google.signInSilently() ?? await _google.signIn();
-    if (gUser == null) return;
-    final GoogleSignInAuthentication gAuth = await gUser.authentication;
+    await _ensureGoogleInitialized();
+
+    GoogleSignInAccount? account;
+    try {
+      final Future<GoogleSignInAccount?>? lightweightAttempt =
+          _google.attemptLightweightAuthentication();
+      if (lightweightAttempt != null) {
+        account = await lightweightAttempt;
+      }
+    } on GoogleSignInException catch (e) {
+      if (!_isUserCancellationError(e)) {
+        rethrow;
+      }
+    }
+
+    if (account == null) {
+      try {
+        account = await _google.authenticate(scopeHint: _googleScopeHint);
+      } on GoogleSignInException catch (e) {
+        if (_isUserCancellationError(e)) {
+          return;
+        }
+        rethrow;
+      }
+    }
+
+    if (account == null) {
+      return;
+    }
+
+    final GoogleSignInAuthentication authentication =
+        await account.authentication;
+    final String? idToken = authentication.idToken;
+    if (idToken == null) {
+      throw FirebaseAuthException(
+        code: 'missing-id-token',
+        message: 'Unable to retrieve Google ID token for linking.',
+      );
+    }
+
+    final String? accessToken = await _fetchAccessToken(account);
 
     final OAuthCredential credential = GoogleAuthProvider.credential(
-      accessToken: gAuth.accessToken,
-      idToken: gAuth.idToken,
+      idToken: idToken,
+      accessToken: accessToken,
     );
 
     final linked = await user.linkWithCredential(credential);
@@ -185,5 +277,40 @@ class AuthService {
         break;
     }
     return Exception(ar);
+  }
+
+  static bool _isUserCancellationError(GoogleSignInException exception) {
+    const cancellationCodes = <String>{
+      GoogleSignInExceptionCode.canceled,
+      GoogleSignInExceptionCode.interrupted,
+      GoogleSignInExceptionCode.uiUnavailable,
+    };
+    return cancellationCodes.contains(exception.code);
+  }
+
+  static Future<String?> _fetchAccessToken(
+    GoogleSignInAccount account,
+  ) async {
+    if (_googleScopeHint.isEmpty) {
+      return null;
+    }
+
+    final GoogleSignInAuthorizationClient? client =
+        account.authorizationClient;
+    if (client == null) {
+      return null;
+    }
+
+    try {
+      GoogleSignInClientAuthorization? authorization =
+          await client.authorizationForScopes(_googleScopeHint);
+      authorization ??= await client.authorizeScopes(_googleScopeHint);
+      return authorization?.accessToken;
+    } on GoogleSignInException catch (e) {
+      if (_isUserCancellationError(e)) {
+        return null;
+      }
+      rethrow;
+    }
   }
 }
