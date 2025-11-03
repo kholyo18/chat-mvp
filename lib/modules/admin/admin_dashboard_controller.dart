@@ -80,7 +80,7 @@ class AdminDashboardController extends ChangeNotifier {
 
   Future<int> _countDocuments(Query<Map<String, dynamic>> query) async {
     final AggregateQuerySnapshot snapshot = await query.count().get();
-    return snapshot.count;
+    return snapshot.count ?? 0;
   }
 
   Future<Map<String, int>> _loadVipCounts(
@@ -168,7 +168,7 @@ class AdminDashboardController extends ChangeNotifier {
     } on FirebaseException catch (error) {
       if (error.code == 'failed-precondition') {
         snapshot = await usersCollection
-            .orderBy(FieldPath.documentId(), descending: true)
+            .orderBy(FieldPath.documentId, descending: true)
             .limit(recentUsersLimit)
             .get();
       } else {
