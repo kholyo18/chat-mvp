@@ -5,7 +5,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
   static final GoogleSignIn _google =
-      GoogleSignIn(scopes: <String>['email', 'profile']);
+      GoogleSignIn(scopes: const <String>['email', 'profile']);
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -116,17 +116,13 @@ class AuthService {
   }
 
   static Future<void> signOut() async {
-    await Future.wait([
-      _google.signOut().catchError((_) {}),
-      _auth.signOut(),
-    ]);
+    await _auth.signOut();
+    await _google.signOut();
   }
 
   static Future<void> signOutAll() async {
-    try {
-      await _google.signOut();
-    } catch (_) {}
     await _auth.signOut();
+    await _google.disconnect();
   }
 
   static Future<void> linkWithGoogle() async {
