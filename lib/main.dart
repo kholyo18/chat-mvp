@@ -5192,6 +5192,7 @@ const Map<String, String> _profilePageStrings = <String, String>{
   'vip_none': 'None',
   'coins': 'Coins',
   'expires': 'Expires',
+  'vip_notice_higher': 'Your account is already at a higher VIP level.',
 };
 
 String _profileText(String key) => _profilePageStrings[key] ?? key;
@@ -5735,6 +5736,7 @@ class ProfilePage extends StatelessWidget {
           final avatar = (data['avatarUrl'] ?? '') as String;
           final cover  = (data['coverUrl'] ?? '') as String;
           final verified = data['verified'] == true;
+          final vipNotice = readString(data['vipNotice']);
           final numberFormatter = NumberFormat.decimalPattern();
           final expiryFormatter = DateFormat('dd MMM yyyy');
 
@@ -5830,6 +5832,35 @@ class ProfilePage extends StatelessWidget {
                           ),
                       ],
                     ),
+                    if (vipNotice == 'higher-tier-exists') ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceVariant,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.info_outline_rounded,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _profileText('vip_notice_higher'),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Row(
                       children: [
