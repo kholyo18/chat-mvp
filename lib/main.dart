@@ -57,6 +57,8 @@ import 'screens/store/product_detail_page.dart';
 import 'screens/store/store_page.dart';
 import 'screens/vip_page.dart';
 import 'screens/wallet_page.dart';
+import 'screens/ai_assistant/ai_chat_page.dart';
+import 'modules/ai_assistant/ai_assistant_controller.dart';
 // CODEX-BEGIN:PRIVACY_IMPORTS
 import 'modules/privacy/privacy_controller.dart';
 import 'modules/privacy/privacy_settings_page.dart';
@@ -883,6 +885,26 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.admin_panel_settings_rounded)),
         ],
       ),
+      drawer: _MainAppDrawer(
+        displayName: (appUser.profile['displayName'] ?? 'Guest') as String,
+        email: FirebaseAuth.instance.currentUser?.email,
+        avatarUrl: (appUser.profile['avatarUrl'] ?? appUser.profile['avatar']) as String?,
+        onOpenAiChat: () {
+          final String? uid = FirebaseAuth.instance.currentUser?.uid;
+          if (uid == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('الرجاء تسجيل الدخول لاستخدام المساعد الذكي.')),
+            );
+            return;
+          }
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => AiChatPage(userId: uid),
+            ),
+          );
+        },
+        onOpenSettings: () => Navigator.of(context).pushNamed('/settings'),
+      ),
       body: tabs[idx],
       bottomNavigationBar: NavigationBar(
         selectedIndex: idx,
@@ -904,6 +926,70 @@ class _HomePageState extends State<HomePage> {
         // CODEX-END:ADMIN_BLOCK_HOME_FAB
         icon: const Icon(Icons.brightness_5_rounded),
         label: const Text('Add Story'),
+      ),
+    );
+  }
+}
+
+class _MainAppDrawer extends StatelessWidget {
+  const _MainAppDrawer({
+    required this.displayName,
+    this.email,
+    this.avatarUrl,
+    this.onOpenAiChat,
+    this.onOpenSettings,
+  });
+
+  final String displayName;
+  final String? email;
+  final String? avatarUrl;
+  final VoidCallback? onOpenAiChat;
+  final VoidCallback? onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final String initials = displayName.trim().isEmpty
+        ? 'U'
+        : displayName.trim().characters.first.toUpperCase();
+    final ImageProvider<Object>? avatarImage =
+        (avatarUrl != null && avatarUrl!.isNotEmpty)
+            ? NetworkImage(avatarUrl!)
+            : null;
+    return Drawer(
+      child: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            UserAccountsDrawerHeader(
+              currentAccountPicture: CircleAvatar(
+                backgroundImage: avatarImage,
+                child: avatarImage == null ? Text(initials) : null,
+              ),
+              accountName: Text(displayName),
+              accountEmail: email != null && email!.isNotEmpty
+                  ? Text(email!, style: theme.textTheme.bodySmall)
+                  : null,
+            ),
+            ListTile(
+              leading: const Icon(Icons.smart_toy_outlined),
+              title: const Text('Chat with AI'),
+              subtitle: const Text('تحدث مع المساعد الذكي'),
+              onTap: () {
+                Navigator.of(context).pop();
+                onOpenAiChat?.call();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_rounded),
+              title: const Text('Settings'),
+              onTap: () {
+                Navigator.of(context).pop();
+                onOpenSettings?.call();
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1898,7 +1984,138 @@ class _CoinPackage {
 }
 
 
-class SettingsHubPage extends StatelessWidget { const SettingsHubPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Settings (part 9)'))); }
+class SettingsHubPage extends StatefulWidget {
+  const SettingsHubPage({super.key});
+
+  @override
+  State<SettingsHubPage> createState() => _SettingsHubPageState();
+}
+
+class _SettingsHubPageState extends State<SettingsHubPage> {
+  String _selectedBot = 'general';
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPreferences();
+  }
+
+  Future<void> _loadPreferences() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectedBot = prefs.getString(kAiAssistantBotModeKey) ?? 'general';
+      _loading = false;
+    });
+  }
+
+  Future<void> _saveBotMode(String value) async {
+    if (_saving || value == _selectedBot) {
+      return;
+    }
+    setState(() {
+      _selectedBot = value;
+      _saving = true;
+    });
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString(kAiAssistantBotModeKey, value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _saving = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('تم اختيار وضع المساعد: ${AiAssistantController.readableBotLabel(value)}')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final appUser = context.watch<AppUser>();
+    final Map<String, dynamic> profile = appUser.profile;
+    final String planKey =
+        AiAssistantController.resolvePlanFromProfile(profile);
+    final int limit = AiAssistantController.dailyLimitForPlan(planKey);
+    final String planLabel = AiAssistantController.readablePlanLabel(planKey);
+
+    if (_loading) {
+      return const Scaffold(
+        appBar: AppBar(title: Text('Settings')),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: [
+          if (_saving)
+            const Padding(
+              padding: EdgeInsets.only(right: 16),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('مساعد الذكاء الاصطناعي', style: theme.textTheme.titleLarge),
+          const SizedBox(height: 8),
+          Text(
+            'اختر أسلوب الرد للمساعد الذكي. سيتم حفظ اختيارك في هذا الجهاز ويمكن تغييره في أي وقت.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 16),
+          ...kBotModeLabels.entries.map((entry) {
+            final String mode = entry.key;
+            final String label = entry.value;
+            final String description =
+                kBotModeDescriptions[mode] ?? kBotModeDescriptions['general']!;
+            return Card(
+              child: RadioListTile<String>(
+                value: mode,
+                groupValue: _selectedBot,
+                onChanged: (value) {
+                  if (value != null) {
+                    _saveBotMode(value);
+                  }
+                },
+                title: Text(label),
+                subtitle: Text(description),
+              ),
+            );
+          }),
+          const SizedBox(height: 24),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.bolt_rounded),
+              title: const Text('حد الرسائل اليومي للخطة'),
+              subtitle: Text('الخطة الحالية: $planLabel\nالحد اليومي: $limit رسالة'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.info_outline_rounded),
+              title: const Text('نصيحة'),
+              subtitle: const Text('يمكنك العودة إلى هذه الصفحة لتغيير وضع المساعد أو التحقق من الحد اليومي في أي وقت.'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class AdminPanelPage extends StatelessWidget { const AdminPanelPage({super.key}); @override Widget build(BuildContext c)=> const Scaffold(body: Center(child: Text('Admin (part 9)'))); }
 // ===================== main.dart — Chat-MVP (ULTRA FINAL) [Part 2/12] =====================
 // Rooms & Communities: list/join/leave/create + basic metadata
