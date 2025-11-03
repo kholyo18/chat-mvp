@@ -351,7 +351,8 @@ class _RecentUserTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final TextDirection textDirection = Directionality.of(context);
+    final TextDirection textDirection =
+        Directionality.of(context) ?? TextDirection.ltr;
     final DateFormat dateFormat = DateFormat.yMMMMd();
 
     final String subtitle = [

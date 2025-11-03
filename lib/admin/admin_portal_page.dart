@@ -7,9 +7,9 @@ class AdminPortalPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      appBar: AppBar(title: Text('Admin Portal')),
-      body: AdminDashboardView(),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Admin Portal')),
+      body: const AdminDashboardView(),
     );
   }
 }
