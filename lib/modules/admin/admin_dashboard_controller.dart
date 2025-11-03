@@ -1,194 +1,209 @@
-// CODEX-BEGIN:ADMIN_DASHBOARD_CONTROLLER
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
-import '../../services/firestore_service.dart';
-
-class AdminDashboardController extends ChangeNotifier {
-  AdminDashboardController({
-    required this.firestoreService,
-    required this.currentUid,
-    required this.isAdmin,
+class AdminUserSummary {
+  const AdminUserSummary({
+    required this.uid,
+    required this.displayName,
+    required this.email,
+    required this.vipTier,
+    required this.createdAt,
+    this.photoUrl,
   });
 
-  final FirestoreService firestoreService;
-  final String? currentUid;
-  final bool isAdmin;
+  final String uid;
+  final String displayName;
+  final String? email;
+  final String vipTier;
+  final DateTime? createdAt;
+  final String? photoUrl;
+}
+
+class AdminDashboardController extends ChangeNotifier {
+  AdminDashboardController({FirebaseFirestore? firestore})
+      : _firestore = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseFirestore _firestore;
 
   bool loading = false;
-  bool loadingMore = false;
-  bool hasMore = true;
   String? errorMessage;
-  String? loadMoreError;
-  AdminDashboardData? metrics;
-  final List<AdminReportItem> reports = <AdminReportItem>[];
+  int totalUsers = 0;
+  int pendingVerifications = 0;
+  int walletsWithBalance = 0;
+  Map<String, int> vipCounts = <String, int>{
+    'none': 0,
+    'bronze': 0,
+    'silver': 0,
+    'gold': 0,
+    'platinum': 0,
+  };
+  List<AdminUserSummary> recentUsers = <AdminUserSummary>[];
 
-  DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  static const int recentUsersLimit = 8;
+  static const int walletSampleLimit = 200;
 
-  bool get allowAccess => isAdmin && (currentUid?.isNotEmpty ?? false);
-
-  Future<void> guardedInit({bool force = false}) async {
-    if (!allowAccess) {
-      errorMessage = 'هذه الصفحة متاحة للمشرفين فقط.';
-      loading = false;
-      notifyListeners();
-      return;
-    }
-    if (loading && !force) {
+  Future<void> loadDashboard() async {
+    if (loading) {
       return;
     }
     loading = true;
     errorMessage = null;
     notifyListeners();
-    const int maxAttempts = 3;
-    int attempt = 0;
-    while (attempt < maxAttempts) {
-      attempt += 1;
-      try {
-        final SafeResult<AdminDashboardData> result = await firestoreService
-            .fetchAdminDashboard(uid: currentUid!)
-            .timeout(const Duration(seconds: 8));
-        if (result is SafeFailure<AdminDashboardData>) {
-          throw Exception(result.message);
-        }
-        metrics = (result as SafeSuccess<AdminDashboardData>).value;
-        final bool reportsLoaded = await _loadReports(reset: true);
-        if (!reportsLoaded && reports.isEmpty) {
-          errorMessage = loadMoreError;
-        }
-        loading = false;
-        notifyListeners();
-        return;
-      } on TimeoutException catch (_) {
-        if (attempt >= maxAttempts) {
-          errorMessage = 'انتهت مهلة تحميل لوحة الإدارة. حاول مرة أخرى.';
-          loading = false;
-          notifyListeners();
-        } else {
-          await Future<void>.delayed(const Duration(milliseconds: 400));
-        }
-      } catch (err) {
-        errorMessage = err.toString();
-        loading = false;
-        notifyListeners();
-        return;
-      }
-    }
-  }
 
-  Future<void> refresh() async {
-    await guardedInit(force: true);
-  }
+    try {
+      final CollectionReference<Map<String, dynamic>> usersCollection =
+          _firestore.collection('users');
+      final CollectionReference<Map<String, dynamic>> verificationCollection =
+          _firestore.collection('verification_requests');
+      final CollectionReference<Map<String, dynamic>> walletCollection =
+          _firestore.collection('wallet');
 
-  Future<bool> _loadReports({required bool reset}) async {
-    if (!allowAccess) {
-      return false;
-    }
-    if (loadingMore) {
-      return true;
-    }
-    if (reset) {
-      reports.clear();
-      _lastDoc = null;
-      hasMore = true;
-      loadMoreError = null;
-    }
-    loadingMore = true;
-    notifyListeners();
+      totalUsers = await _countDocuments(usersCollection);
 
-    final SafeResult<AdminReportsPage> result = await firestoreService
-        .fetchPendingReportsPage(
-      uid: currentUid!,
-      startAfter: reset ? null : _lastDoc,
-      limit: 20,
-    );
+      final Map<String, int> tierCounts = await _loadVipCounts(usersCollection);
+      vipCounts = tierCounts;
 
-    bool success = false;
-    if (result is SafeSuccess<AdminReportsPage>) {
-      final AdminReportsPage page = result.value;
-      if (reset) {
-        reports
-          ..clear()
-          ..addAll(page.reports);
-      } else {
-        reports.addAll(page.reports);
-      }
-      _lastDoc = page.lastDocument;
-      hasMore = page.hasMore;
-      loadMoreError = null;
-      success = true;
-    } else if (result is SafeFailure<AdminReportsPage>) {
-      loadMoreError = result.message;
-      if (reset) {
-        hasMore = false;
-      }
-    }
+      pendingVerifications = await _countDocuments(
+        verificationCollection.where('status', isEqualTo: 'pending'),
+      );
 
-    loadingMore = false;
-    notifyListeners();
-    return success;
-  }
+      walletsWithBalance = await _loadWalletsWithBalance(walletCollection);
 
-  Future<void> loadMore() async {
-    if (!allowAccess || !hasMore) {
-      return;
-    }
-    await _loadReports(reset: false);
-  }
-
-  Future<void> resolveReport(String reportId) async {
-    if (!allowAccess) {
-      throw Exception('ليس لديك صلاحية الوصول الإدارية.');
-    }
-    final SafeResult<void> result = await firestoreService.resolveReport(
-      uid: currentUid!,
-      reportId: reportId,
-    );
-    if (result is SafeFailure<void>) {
-      throw Exception(result.message);
-    }
-    reports.removeWhere((AdminReportItem item) => item.id == reportId);
-    if (metrics != null) {
-      final int pending = metrics!.pendingReports - 1;
-      metrics = metrics!.copyWith(pendingReports: pending < 0 ? 0 : pending);
-    }
-    notifyListeners();
-    if (reports.isEmpty && hasMore) {
-      await loadMore();
-    }
-  }
-
-  Future<void> softBlockUser(String targetUid) async {
-    if (!allowAccess) {
-      throw Exception('ليس لديك صلاحية الوصول الإدارية.');
-    }
-    final SafeResult<void> result = await firestoreService.softBlockUser(
-      uid: currentUid!,
-      targetUid: targetUid,
-    );
-    if (result is SafeFailure<void>) {
-      throw Exception(result.message);
-    }
-  }
-
-  Future<void> deleteStory(String storyId) async {
-    if (!allowAccess) {
-      throw Exception('ليس لديك صلاحية الوصول الإدارية.');
-    }
-    final SafeResult<void> result = await firestoreService.deleteStory(
-      uid: currentUid!,
-      storyId: storyId,
-    );
-    if (result is SafeFailure<void>) {
-      throw Exception(result.message);
-    }
-    if (metrics != null) {
-      final int stories = metrics!.stories24h - 1;
-      metrics = metrics!.copyWith(stories24h: stories < 0 ? 0 : stories);
+      recentUsers = await _loadRecentUsers(usersCollection);
+    } catch (error) {
+      errorMessage = error.toString();
+    } finally {
+      loading = false;
       notifyListeners();
     }
   }
+
+  Future<int> _countDocuments(Query<Map<String, dynamic>> query) async {
+    final AggregateQuerySnapshot snapshot = await query.count().get();
+    return snapshot.count;
+  }
+
+  Future<Map<String, int>> _loadVipCounts(
+    CollectionReference<Map<String, dynamic>> usersCollection,
+  ) async {
+    final Map<String, int> counts = <String, int>{
+      'none': 0,
+      'bronze': 0,
+      'silver': 0,
+      'gold': 0,
+      'platinum': 0,
+    };
+
+    final Map<String, List<String>> tierVariants = <String, List<String>>{
+      'none': <String>['none', 'None'],
+      'bronze': <String>['bronze', 'Bronze'],
+      'silver': <String>['silver', 'Silver'],
+      'gold': <String>['gold', 'Gold'],
+      'platinum': <String>['platinum', 'Platinum', 'diamond', 'Diamond', 'titanium', 'Titanium'],
+    };
+
+    for (final MapEntry<String, List<String>> entry in tierVariants.entries) {
+      final List<String> values = entry.value;
+      final Query<Map<String, dynamic>> query;
+      if (values.length == 1) {
+        query = usersCollection.where('vipTier', isEqualTo: values.first);
+      } else {
+        query = usersCollection.where('vipTier', whereIn: values);
+      }
+      try {
+        counts[entry.key] = await _countDocuments(query);
+      } on FirebaseException catch (_) {
+        if (values.length > 1) {
+          int fallbackTotal = 0;
+          for (final String value in values) {
+            try {
+              fallbackTotal += await _countDocuments(
+                usersCollection.where('vipTier', isEqualTo: value),
+              );
+            } on FirebaseException catch (_) {
+              // Ignore and continue aggregating known values.
+            }
+          }
+          counts[entry.key] = fallbackTotal;
+        } else {
+          counts[entry.key] = 0;
+        }
+      }
+    }
+
+    final int knownTotal = counts.values.fold<int>(0, (int sum, int value) => sum + value);
+    final int remainder = totalUsers - knownTotal;
+    if (remainder > 0) {
+      counts['none'] = (counts['none'] ?? 0) + remainder;
+    }
+
+    return counts;
+  }
+
+  Future<int> _loadWalletsWithBalance(
+    CollectionReference<Map<String, dynamic>> walletCollection,
+  ) async {
+    try {
+      // This intentionally limits the query to keep it lightweight. The UI
+      // clarifies that the metric is approximate.
+      final QuerySnapshot<Map<String, dynamic>> snapshot = await walletCollection
+          .where('balance', isGreaterThan: 0)
+          .limit(walletSampleLimit)
+          .get();
+      return snapshot.docs.length;
+    } on FirebaseException catch (_) {
+      return 0;
+    }
+  }
+
+  Future<List<AdminUserSummary>> _loadRecentUsers(
+    CollectionReference<Map<String, dynamic>> usersCollection,
+  ) async {
+    QuerySnapshot<Map<String, dynamic>> snapshot;
+    try {
+      snapshot = await usersCollection
+          .orderBy('createdAt', descending: true)
+          .limit(recentUsersLimit)
+          .get();
+    } on FirebaseException catch (error) {
+      if (error.code == 'failed-precondition') {
+        snapshot = await usersCollection
+            .orderBy(FieldPath.documentId(), descending: true)
+            .limit(recentUsersLimit)
+            .get();
+      } else {
+        rethrow;
+      }
+    }
+
+    return snapshot.docs.map((QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+      final Map<String, dynamic> data = doc.data();
+      final dynamic createdAtValue = data['createdAt'];
+      DateTime? createdAt;
+      if (createdAtValue is Timestamp) {
+        createdAt = createdAtValue.toDate();
+      } else if (createdAtValue is DateTime) {
+        createdAt = createdAtValue;
+      } else if (createdAtValue is String) {
+        createdAt = DateTime.tryParse(createdAtValue);
+      }
+
+      final String vipTier = (data['vipTier'] as String?)?.toLowerCase().trim() ?? 'none';
+
+      return AdminUserSummary(
+        uid: doc.id,
+        displayName: (data['displayName'] as String?)?.trim().isNotEmpty == true
+            ? (data['displayName'] as String).trim()
+            : 'Unknown user',
+        email: (data['email'] as String?)?.trim().isNotEmpty == true
+            ? (data['email'] as String).trim()
+            : null,
+        vipTier: vipTier.isEmpty ? 'none' : vipTier,
+        createdAt: createdAt,
+        photoUrl: (data['photoUrl'] as String?)?.isNotEmpty == true
+            ? (data['photoUrl'] as String)
+            : null,
+      );
+    }).toList();
+  }
 }
-// CODEX-END:ADMIN_DASHBOARD_CONTROLLER
