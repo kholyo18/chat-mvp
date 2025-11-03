@@ -32,7 +32,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   bool _loading = true;
   bool _processing = false;
   String? _error;
-  bool _pendingCheckoutResumeMessage = false;
+  String? _pendingCheckoutResumeMessageKey;
 
   @override
   void initState() {
@@ -55,8 +55,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshPurchases());
-      if (_pendingCheckoutResumeMessage) {
-        _pendingCheckoutResumeMessage = false;
+      if (_pendingCheckoutResumeMessageKey != null) {
         _showResumeSnackBar();
       }
     }
@@ -82,12 +81,17 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     if (!mounted) {
       return;
     }
+    final messageKey = _pendingCheckoutResumeMessageKey;
+    if (messageKey == null) {
+      return;
+    }
+    _pendingCheckoutResumeMessageKey = null;
     final messenger = ScaffoldMessenger.of(context);
     messenger
       ..removeCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(storeTr(context, 'coins_resume_message')),
+          content: Text(storeTr(context, messageKey)),
           action: SnackBarAction(
             label: storeTr(context, 'refresh'),
             onPressed: () {
@@ -145,8 +149,12 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       _processing = true;
     });
     try {
-      await _checkoutService.buyCoins(widget.productId);
-      _pendingCheckoutResumeMessage = true;
+      final product = _product;
+      await _checkoutService.startCheckout(widget.productId);
+      _pendingCheckoutResumeMessageKey =
+          product != null && product.isVipProduct
+              ? 'vip_resume_message'
+              : 'coins_resume_message';
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(storeTr(context, 'complete_in_browser'))),
@@ -252,6 +260,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                                 avatar: const Icon(Icons.workspace_premium_rounded),
                               ),
                             ),
+                          if (product.isVipProduct)
+                            _VipBenefitsSection(tier: product.vipTier),
                           if (product.type == 'coins' && product.coinsAmount > 0)
                             Padding(
                               padding: const EdgeInsetsDirectional.only(top: 12),
@@ -298,12 +308,87 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                                       width: 18,
                                       child: CircularProgressIndicator(strokeWidth: 2),
                                     )
-                                  : Text(storeTr(context, 'buy')),
+                                  : Text(product.isVipProduct
+                                      ? storeTr(context, 'buy_vip')
+                                      : storeTr(context, 'buy')),
                             ),
                           ),
+                          // TODO: Implement pro-rated upgrade pricing for future VIP upgrades.
                         ],
                       ),
                     ),
+    );
+  }
+}
+
+const Map<String, List<String>> _vipBenefitLookup = <String, List<String>>{
+  'bronze': <String>[
+    'Bronze badge on your profile',
+    'Daily reward boost (Bronze tier)',
+  ],
+  'silver': <String>[
+    'Silver badge on your profile',
+    'Increased daily reward boost',
+    'Access to VIP lounge chat',
+  ],
+  'gold': <String>[
+    'Gold badge with premium flair',
+    'Priority support from the Codex team',
+    'Early access to new drops',
+  ],
+  'platinum': <String>[
+    'Platinum badge and profile highlights',
+    'Top-tier support & concierge',
+    'Exclusive beta features and rooms',
+  ],
+};
+
+class _VipBenefitsSection extends StatelessWidget {
+  const _VipBenefitsSection({required this.tier});
+
+  final String? tier;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final normalizedTier = (tier ?? '').trim().toLowerCase();
+    final benefits = _vipBenefitLookup[normalizedTier] ??
+        <String>['Priority access to upcoming VIP perks.'];
+
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(top: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            storeTr(context, 'vip_benefits_title'),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...benefits.map(
+            (benefit) => Padding(
+              padding: const EdgeInsetsDirectional.only(top: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsetsDirectional.only(end: 8, top: 2),
+                    child: Icon(Icons.check_circle_outline_rounded, size: 18),
+                  ),
+                  Expanded(
+                    child: Text(
+                      benefit,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

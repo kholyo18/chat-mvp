@@ -7,7 +7,7 @@ class CheckoutService {
 
   final FirebaseFunctions _functions;
 
-  Future<void> buyCoins(String productId) async {
+  Future<void> startCheckout(String productId) async {
     final callable = _functions.httpsCallable('createCheckoutSession');
     final response = await callable.call(<String, dynamic>{
       'productId': productId,

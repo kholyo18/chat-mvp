@@ -9,6 +9,7 @@ class StoreProduct {
     required this.currency,
     required this.stripePriceId,
     required this.icon,
+    required this.badge,
     required this.active,
     required this.type,
     required this.vipTier,
@@ -26,6 +27,7 @@ class StoreProduct {
   final String currency;
   final String stripePriceId;
   final String icon;
+  final String badge;
   final bool active;
   final String type;
   final String? vipTier;
@@ -36,6 +38,8 @@ class StoreProduct {
   final Timestamp? updatedAt;
 
   bool get includesVip => type == 'vip' && (vipTier != null && vipTier!.isNotEmpty);
+
+  bool get isVipProduct => type == 'vip';
 
   double get price => priceCents / 100.0;
 
@@ -48,6 +52,7 @@ class StoreProduct {
       'currency': currency,
       'stripe_price_id': stripePriceId,
       'icon': icon,
+      'badge': badge,
       'active': active,
       'type': type,
       'vip_tier': vipTier,
@@ -73,6 +78,7 @@ class StoreProduct {
       currency: (data['currency'] as String? ?? 'USD').toUpperCase(),
       stripePriceId: (data['stripe_price_id'] as String? ?? '').trim(),
       icon: (data['icon'] as String? ?? 'shopping_cart').trim(),
+      badge: (data['badge'] as String? ?? '').trim(),
       active: data['active'] == true,
       type: (data['type'] as String? ?? '').trim(),
       vipTier: (data['vip_tier'] as String?)?.trim(),

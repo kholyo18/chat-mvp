@@ -37,7 +37,8 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
   bool _refreshing = false;
   String? _error;
   String _selectedCategory = _StoreCategoryFilter.all.id;
-  bool _pendingCheckoutResumeMessage = false;
+  String? _pendingCheckoutResumeMessageKey;
+  DateTime? _lastVipNoticeShownAt;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
       _userSubscription;
@@ -64,8 +65,7 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshPurchases());
-      if (_pendingCheckoutResumeMessage) {
-        _pendingCheckoutResumeMessage = false;
+      if (_pendingCheckoutResumeMessageKey != null) {
         _showResumeSnackBar();
       }
     }
@@ -85,8 +85,47 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
       _userProfile = snapshot.data() ?? <String, dynamic>{};
       if (mounted) {
         setState(() {});
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _maybeShowVipNotice();
+        });
       }
     });
+  }
+
+  void _maybeShowVipNotice() {
+    if (!mounted) {
+      return;
+    }
+    final notice = (_userProfile['vipNotice'] as String? ?? '').trim();
+    if (notice != 'higher-tier-exists') {
+      _lastVipNoticeShownAt = null;
+      return;
+    }
+    DateTime? noticeAt;
+    final raw = _userProfile['vipNoticeAt'];
+    if (raw is Timestamp) {
+      noticeAt = raw.toDate();
+    } else if (raw is DateTime) {
+      noticeAt = raw;
+    }
+
+    final lastShown = _lastVipNoticeShownAt;
+    if (noticeAt != null && lastShown != null && !noticeAt.isAfter(lastShown)) {
+      return;
+    }
+
+    _lastVipNoticeShownAt = noticeAt ?? DateTime.now();
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..removeCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(storeTr(context, 'vip_notice_higher')),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
   }
 
   Future<void> _load() async {
@@ -178,8 +217,9 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
       _busyProductIds.add(product.id);
     });
     try {
-      await _checkoutService.buyCoins(product.id);
-      _pendingCheckoutResumeMessage = true;
+      await _checkoutService.startCheckout(product.id);
+      _pendingCheckoutResumeMessageKey =
+          product.isVipProduct ? 'vip_resume_message' : 'coins_resume_message';
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(storeTr(context, 'complete_in_browser'))),
@@ -206,12 +246,17 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
     if (!mounted) {
       return;
     }
+    final messageKey = _pendingCheckoutResumeMessageKey;
+    if (messageKey == null) {
+      return;
+    }
+    _pendingCheckoutResumeMessageKey = null;
     final messenger = ScaffoldMessenger.of(context);
     messenger
       ..removeCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(storeTr(context, 'coins_resume_message')),
+          content: Text(storeTr(context, messageKey)),
           action: SnackBarAction(
             label: storeTr(context, 'refresh'),
             onPressed: () {
@@ -317,6 +362,7 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
               : constraints.maxWidth > 600
                   ? 2
                   : 1;
+          final currentVipTier = (_userProfile['vipTier'] as String? ?? '').trim();
           return CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
@@ -341,6 +387,7 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
                         final busy = _busyProductIds.contains(product.id);
                         return ProductCard(
                           product: product,
+                          currentVipTier: currentVipTier,
                           busy: busy,
                           onBuy: () => _buy(product),
                           onView: () => _openProduct(product),

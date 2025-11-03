@@ -30,7 +30,7 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read: if true;
+      allow read: if isOwner(uid);
       allow create: if isOwner(uid);
       allow update: if isOwner(uid)
                     && !( 'coins' in request.resource.data.diff(resource.data).changedKeys())
