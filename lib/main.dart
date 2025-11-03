@@ -74,6 +74,8 @@ import 'ui/auth/sign_in_page.dart';
 import 'models/user_profile.dart';
 import 'widgets/common/coins_pill.dart';
 import 'widgets/common/vip_chip.dart';
+import 'modules/vip/vip_style.dart';
+import 'widgets/vip/vip_entry_overlay.dart';
 import 'widgets/common/verified_badge.dart';
 
 // CODEX-BEGIN:BOOT_GUARD_TYPES
@@ -2220,6 +2222,35 @@ class RoomPage extends StatefulWidget {
   State<RoomPage> createState() => _RoomPageState();
 }
 
+class _RoomMemberProfile {
+  const _RoomMemberProfile({
+    required this.uid,
+    required this.displayName,
+    this.photoUrl,
+    required this.vipTier,
+  });
+
+  final String uid;
+  final String displayName;
+  final String? photoUrl;
+  final String vipTier;
+
+  VipStyle get style => getVipStyle(vipTier);
+
+  _RoomMemberProfile copyWith({
+    String? displayName,
+    String? photoUrl,
+    String? vipTier,
+  }) {
+    return _RoomMemberProfile(
+      uid: uid,
+      displayName: displayName ?? this.displayName,
+      photoUrl: photoUrl ?? this.photoUrl,
+      vipTier: vipTier ?? this.vipTier,
+    );
+  }
+}
+
 class _RoomPageState extends State<RoomPage> {
   String get roomId {
     final args = ModalRoute.of(context)?.settings.arguments;
@@ -2237,6 +2268,13 @@ class _RoomPageState extends State<RoomPage> {
   cf.DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
   final List<ChatMessage> _buffer = [];
   StreamSubscription<cf.QuerySnapshot<Map<String, dynamic>>>? _liveSub;
+  StreamSubscription<cf.QuerySnapshot<Map<String, dynamic>>>? _memberSub;
+  final Map<String, _RoomMemberProfile> _memberProfiles = {};
+  final Map<String, Future<_RoomMemberProfile?>> _profileFutures = {};
+  bool _membersInitialised = false;
+  Widget? _currentVipEntryOverlay;
+  Timer? _vipOverlayTimer;
+  bool _vipEntryEffectsEnabled = true;
 
   // typing
   Timer? _typingTimer;
@@ -2255,15 +2293,56 @@ class _RoomPageState extends State<RoomPage> {
 
   // init
   @override
+  void initState() {
+    super.initState();
+    unawaited(_loadVipEntryPreference());
+  }
+
+  Future<void> _loadVipEntryPreference() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return;
+    }
+    try {
+      final doc = await cf.FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('settings')
+          .doc('preferences')
+          .get();
+      final data = doc.data();
+      if (!mounted || data == null) {
+        return;
+      }
+      final show = data['showVipEntryEffects'];
+      if (show is bool) {
+        setState(() {
+          _vipEntryEffectsEnabled = show;
+        });
+      }
+    } catch (err, stack) {
+      debugPrint('RoomPage._loadVipEntryPreference error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final rid = roomId;
     if (_currentRoomId != rid) {
       _currentRoomId = rid;
+      _memberSub?.cancel();
+      _memberProfiles.clear();
+      _profileFutures.clear();
+      _membersInitialised = false;
+      _vipOverlayTimer?.cancel();
+      _currentVipEntryOverlay = null;
       // CODEX-BEGIN:ROOM_TRANSLATION_OVERRIDE_SYNC
       unawaited(_loadRoomTranslationOverrides(rid));
       // CODEX-END:ROOM_TRANSLATION_OVERRIDE_SYNC
       _subscribeLive();
+      _listenToMembers();
     }
   }
 
@@ -2316,6 +2395,164 @@ class _RoomPageState extends State<RoomPage> {
     });
   }
 
+  void _listenToMembers() {
+    _memberSub?.cancel();
+    final ref = cf.FirebaseFirestore.instance
+        .collection('rooms')
+        .doc(roomId)
+        .collection('members');
+    _memberSub = ref.snapshots().listen((snapshot) {
+      final initialSnapshot = !_membersInitialised;
+      for (final change in snapshot.docChanges) {
+        final uid = change.doc.id;
+        final data = change.doc.data();
+        final displayName = data?['displayName']?.toString();
+        if (displayName != null && displayName.trim().isNotEmpty) {
+          final existing = _memberProfiles[uid];
+          if (existing != null) {
+            _memberProfiles[uid] = existing.copyWith(displayName: displayName.trim());
+          } else {
+            _memberProfiles[uid] = _RoomMemberProfile(
+              uid: uid,
+              displayName: displayName.trim(),
+              photoUrl: null,
+              vipTier: 'none',
+            );
+          }
+        }
+
+        if (change.type == cf.DocumentChangeType.added ||
+            change.type == cf.DocumentChangeType.modified) {
+          _getOrFetchProfile(uid, fallbackName: displayName);
+          if (!initialSnapshot && change.type == cf.DocumentChangeType.added) {
+            _handleVipEntry(uid, fallbackName: displayName);
+          }
+        } else if (change.type == cf.DocumentChangeType.removed) {
+          _memberProfiles.remove(uid);
+          _profileFutures.remove(uid);
+        }
+      }
+      if (mounted) {
+        setState(() {});
+      }
+      if (initialSnapshot) {
+        _membersInitialised = true;
+      }
+    }, onError: (Object err, StackTrace stack) {
+      debugPrint('RoomPage._listenToMembers error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+    });
+  }
+
+  Future<_RoomMemberProfile?> _getOrFetchProfile(String uid, {String? fallbackName}) {
+    final existing = _memberProfiles[uid];
+    if (existing != null && existing.vipTier.isNotEmpty) {
+      return Future.value(existing);
+    }
+    final currentFuture = _profileFutures[uid];
+    if (currentFuture != null) {
+      return currentFuture;
+    }
+    final future = _fetchMemberProfile(uid, fallbackName: fallbackName);
+    _profileFutures[uid] = future;
+    return future;
+  }
+
+  Future<_RoomMemberProfile?> _fetchMemberProfile(String uid, {String? fallbackName}) async {
+    try {
+      final doc = await cf.FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final data = doc.data();
+      if (data == null) {
+        final profile = _RoomMemberProfile(
+          uid: uid,
+          displayName: fallbackName ?? uid,
+          photoUrl: null,
+          vipTier: 'none',
+        );
+        if (mounted) {
+          setState(() {
+            _memberProfiles[uid] = profile;
+          });
+        }
+        return profile;
+      }
+      final vipStatus = VipStatus.fromRaw(
+        data['vip'],
+        fallbackTier: _readString(data['vipTier']) ?? _readString(data['vipLevel']),
+      );
+      final profile = _RoomMemberProfile(
+        uid: uid,
+        displayName: _readString(data['displayName']) ?? fallbackName ?? uid,
+        photoUrl: _readString(data['photoURL'] ?? data['photoUrl']),
+        vipTier: vipStatus.tier,
+      );
+      if (mounted) {
+        setState(() {
+          _memberProfiles[uid] = profile;
+        });
+      }
+      return profile;
+    } catch (err, stack) {
+      debugPrint('RoomPage._fetchMemberProfile error: $err');
+      FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
+      return null;
+    } finally {
+      _profileFutures.remove(uid);
+    }
+  }
+
+  String? _readString(dynamic value) {
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
+
+  void _handleVipEntry(String uid, {String? fallbackName}) {
+    if (!_vipEntryEffectsEnabled) {
+      return;
+    }
+    final self = FirebaseAuth.instance.currentUser?.uid;
+    if (self != null && self == uid) {
+      return;
+    }
+    _getOrFetchProfile(uid, fallbackName: fallbackName).then((profile) {
+      if (!mounted || profile == null) {
+        return;
+      }
+      final style = profile.style;
+      if (!style.hasEffect) {
+        return;
+      }
+      _showVipEntryOverlay(profile.displayName, style);
+    });
+  }
+
+  void _showVipEntryOverlay(String userName, VipStyle style) {
+    if (!_vipEntryEffectsEnabled) {
+      return;
+    }
+    _vipOverlayTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _currentVipEntryOverlay = VipEntryOverlay(
+        userName: userName,
+        style: style,
+      );
+    });
+    _vipOverlayTimer = Timer(style.hasEffect ? const Duration(seconds: 3) : const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() {
+        _currentVipEntryOverlay = null;
+      });
+    });
+  }
+
   Future<void> _loadMore() async {
     if (_lastDoc == null) return;
     final q = await cf.FirebaseFirestore.instance.collection('rooms').doc(roomId)
@@ -2333,6 +2570,8 @@ class _RoomPageState extends State<RoomPage> {
   void dispose() {
     _typingTimer?.cancel();
     _liveSub?.cancel();
+    _memberSub?.cancel();
+    _vipOverlayTimer?.cancel();
     unawaited(() async {
       try {
         await _recorder.dispose();
@@ -2564,6 +2803,63 @@ class _RoomPageState extends State<RoomPage> {
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     final typingRef = rtdb.FirebaseDatabase.instance.ref('typing/$roomId');
+    final chatColumn = Column(
+      children: [
+        // typing indicator
+        StreamBuilder<rtdb.DatabaseEvent>(
+          stream: typingRef.onValue,
+          builder: (context, snap) {
+            if (snap.data?.snapshot.value is Map) {
+              final m = Map<String, dynamic>.from(snap.data!.snapshot.value as Map);
+              final others = m.keys.where((k) => k != uid && m[k] == true).toList();
+              if (others.isNotEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 2),
+                  child: Text('…يكتب الآن', style: TextStyle(color: Colors.grey[600])),
+                );
+              }
+            }
+            return const SizedBox.shrink();
+          },
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _loadMore,
+            child: ListView.builder(
+              reverse: true,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              itemCount: _buffer.length + 1,
+              itemBuilder: (ctx, i) {
+                if (i == _buffer.length) {
+                  return TextButton(
+                    onPressed: _loadMore,
+                    child: const Text('تحميل المزيد'),
+                  );
+                }
+                final m = _buffer[i];
+                final mine = m.from == uid;
+                final sender = _memberProfiles[m.from];
+                if (sender == null && m.from.isNotEmpty) {
+                  _getOrFetchProfile(m.from);
+                }
+                return _MessageBubble(
+                  message: m,
+                  mine: mine,
+                  sender: sender,
+                  onReact: (e)=> _toggleReaction(m.id, e),
+                  onReply: ()=> setState(()=> _replyToId = m.id),
+                  onPin: ()=> _pin(m.id, !m.pinned),
+                  onDelete: ()=> _delete(m.id),
+                );
+              },
+            ),
+          ),
+        ),
+        if (_replyToId != null)
+          _ReplyPreview(onCancel: ()=> setState(()=> _replyToId = null)),
+      ],
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Room'),
@@ -2598,55 +2894,10 @@ class _RoomPageState extends State<RoomPage> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // typing indicator
-          StreamBuilder<rtdb.DatabaseEvent>(
-            stream: typingRef.onValue,
-            builder: (context, snap) {
-              if (snap.data?.snapshot.value is Map) {
-                final m = Map<String, dynamic>.from(snap.data!.snapshot.value as Map);
-                final others = m.keys.where((k) => k != uid && m[k] == true).toList();
-                if (others.isNotEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 6, bottom: 2),
-                    child: Text('…يكتب الآن', style: TextStyle(color: Colors.grey[600])),
-                  );
-                }
-              }
-              return const SizedBox.shrink();
-            },
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _loadMore,
-              child: ListView.builder(
-                reverse: true,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                itemCount: _buffer.length + 1,
-                itemBuilder: (ctx, i) {
-                  if (i == _buffer.length) {
-                    return TextButton(
-                      onPressed: _loadMore,
-                      child: const Text('تحميل المزيد'),
-                    );
-                  }
-                  final m = _buffer[i];
-                  final mine = m.from == uid;
-                  return _MessageBubble(
-                    message: m,
-                    mine: mine,
-                    onReact: (e)=> _toggleReaction(m.id, e),
-                    onReply: ()=> setState(()=> _replyToId = m.id),
-                    onPin: ()=> _pin(m.id, !m.pinned),
-                    onDelete: ()=> _delete(m.id),
-                  );
-                },
-              ),
-            ),
-          ),
-          if (_replyToId != null)
-            _ReplyPreview(onCancel: ()=> setState(()=> _replyToId = null)),
+          chatColumn,
+          if (_currentVipEntryOverlay != null) _currentVipEntryOverlay!,
         ],
       ),
       bottomNavigationBar: _ChatInput(
@@ -2669,21 +2920,32 @@ class _RoomPageState extends State<RoomPage> {
 class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final bool mine;
+  final _RoomMemberProfile? sender;
   final void Function(String emoji) onReact;
   final VoidCallback onReply;
   final VoidCallback onPin;
   final VoidCallback onDelete;
   const _MessageBubble({
-    required this.message, required this.mine,
-    required this.onReact, required this.onReply, required this.onPin, required this.onDelete, super.key});
+    required this.message,
+    required this.mine,
+    this.sender,
+    required this.onReact,
+    required this.onReply,
+    required this.onPin,
+    required this.onDelete,
+    super.key,
+  });
 
   bool _hasUrl(String? t) => t != null && t.contains(RegExp(r'https?://', caseSensitive: false));
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bg = mine ? cs.primaryContainer : cs.surfaceVariant;
-    final BoxBorder? border = mine ? Border.all(color: kTeal.withOpacity(0.35)) : null;
+    final profile = sender;
+    final vipStyle = profile?.style ?? getVipStyle('none');
+    final defaultNameColor = Theme.of(context).textTheme.bodyMedium?.color ?? cs.onSurface;
+    final nameColor = vipStyle.hasEffect ? vipStyle.nameColor : defaultNameColor;
+    final bubbleDecoration = _bubbleDecoration(cs, vipStyle, mine);
     // CODEX-BEGIN:COMPILE_FIX::messagebubble-roomId
     final String roomId = (() {
       final args = ModalRoute.of(context)?.settings.arguments;
@@ -2792,71 +3054,94 @@ class _MessageBubble extends StatelessWidget {
               );
     }
 
-    return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onLongPress: () {
-          showModalBottomSheet(
-            context: context,
-            builder: (_) => _MessageActions(
-              onReact: onReact,
-              onReply: onReply,
-              onPin: onPin,
-              onDelete: onDelete,
-              pinned: message.pinned,
-              // CODEX-BEGIN:TRANSLATOR_ACTIONS
-              onShowOriginal: showOriginalAction,
-              onShowTranslation: showTranslationAction,
-              // CODEX-END:TRANSLATOR_ACTIONS
-            ),
-          );
-        },
-        onDoubleTap: () async {
-          if (mine && message.type == MsgType.text && (message.text?.isNotEmpty ?? false)) {
-            await showEditMessageDialog(context,
-              roomId: roomId, msgId: message.id, initialText: message.text!);
-          }
-        },
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14), border: border),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (message.replyTo != null)
-                _QuotedMessageRich(roomId: roomId, msgId: message.replyTo!),
-              content,
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(shortTime(message.createdAt), style: TextStyle(color: Colors.grey[600], fontSize: 10)),
-                  if (message.pinned) ...[
-                    const SizedBox(width: 6),
-                    const Icon(Icons.push_pin, size: 12, color: kGold),
+    final header = _buildHeader(context, profile, nameColor, vipStyle);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Align(
+        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            header,
+            const SizedBox(height: 6),
+            GestureDetector(
+              onLongPress: () {
+                showModalBottomSheet(
+                  context: context,
+                  builder: (_) => _MessageActions(
+                    onReact: onReact,
+                    onReply: onReply,
+                    onPin: onPin,
+                    onDelete: onDelete,
+                    pinned: message.pinned,
+                    // CODEX-BEGIN:TRANSLATOR_ACTIONS
+                    onShowOriginal: showOriginalAction,
+                    onShowTranslation: showTranslationAction,
+                    // CODEX-END:TRANSLATOR_ACTIONS
+                  ),
+                );
+              },
+              onDoubleTap: () async {
+                if (mine && message.type == MsgType.text && (message.text?.isNotEmpty ?? false)) {
+                  await showEditMessageDialog(
+                    context,
+                    roomId: roomId,
+                    msgId: message.id,
+                    initialText: message.text!,
+                  );
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: bubbleDecoration,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (message.replyTo != null)
+                      _QuotedMessageRich(roomId: roomId, msgId: message.replyTo!),
+                    content,
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          shortTime(message.createdAt),
+                          style: TextStyle(color: Colors.grey[600], fontSize: 10),
+                        ),
+                        if (message.pinned) ...[
+                          const SizedBox(width: 6),
+                          const Icon(Icons.push_pin, size: 12, color: kGold),
+                        ],
+                        if ((message is ChatMessage) && (messageTextEdited(message))) ...[
+                          const SizedBox(width: 6),
+                          const Text('edited', style: TextStyle(fontSize: 10, color: kGray)),
+                        ],
+                      ],
+                    ),
+                    if ((message.reactions ?? {}).isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Wrap(
+                          spacing: 6,
+                          children: [
+                            for (final e in message.reactions!.entries)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.black12,
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text('${e.key} ${e.value}'),
+                              )
+                          ],
+                        ),
+                      ),
                   ],
-                  if ((message is ChatMessage) && (messageTextEdited(message))) ...[
-                    const SizedBox(width: 6),
-                    const Text('edited', style: TextStyle(fontSize: 10, color: kGray)),
-                  ],
-                ],
-              ),
-              if ((message.reactions ?? {}).isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Wrap(spacing: 6, children: [
-                    for (final e in message.reactions!.entries)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.black12, borderRadius: BorderRadius.circular(999)),
-                        child: Text('${e.key} ${e.value}'),
-                      )
-                  ]),
                 ),
-            ],
-          ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2869,6 +3154,151 @@ class _MessageBubble extends StatelessWidget {
     // هنا سنعرض الوسم عندما لا يكون createdAt == editedAt (يحتاج تعديل الموديل لاحقًا)،
     // مؤقتًا نجعله دائمًا false إلا إذا تم تعديل الحقل في الوثيقة ويُسترجع في واجهة أخرى.
     return false;
+  }
+
+  BoxDecoration _bubbleDecoration(ColorScheme cs, VipStyle style, bool mine) {
+    Gradient? gradient;
+    Color? color;
+    switch (style.bubbleTheme) {
+      case 'vip_gold':
+        gradient = const LinearGradient(
+          colors: [Color(0xFFFFF5C3), Color(0xFFFFD54F)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+        break;
+      case 'vip_diamond':
+        gradient = const LinearGradient(
+          colors: [Color(0xFFE0F7FA), Color(0xFFB2EBF2)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+        break;
+      case 'vip_platinum':
+        gradient = const LinearGradient(
+          colors: [Color(0xFFE8EAF6), Color(0xFFCFD8DC)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+        break;
+      case 'vip_silver':
+        gradient = const LinearGradient(
+          colors: [Color(0xFFF5F5F5), Color(0xFFD6D6D6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+        break;
+      case 'vip_bronze':
+        gradient = const LinearGradient(
+          colors: [Color(0xFFFFE3C0), Color(0xFFFFB74D)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+        break;
+      default:
+        color = mine ? cs.primaryContainer : cs.surfaceVariant;
+        break;
+    }
+
+    final boxShadows = <BoxShadow>[];
+    if (style.glowColor != null) {
+      boxShadows.add(
+        BoxShadow(
+          color: style.glowColor!,
+          blurRadius: 12,
+          spreadRadius: 1,
+          offset: const Offset(0, 3),
+        ),
+      );
+    }
+
+    Border? border;
+    if (style.hasEffect) {
+      border = Border.all(color: style.nameColor.withOpacity(0.6), width: 1.4);
+    } else if (mine) {
+      border = Border.all(color: kTeal.withOpacity(0.35));
+    }
+
+    return BoxDecoration(
+      color: gradient == null ? color : null,
+      gradient: gradient,
+      borderRadius: BorderRadius.circular(14),
+      border: border,
+      boxShadow: boxShadows.isEmpty ? null : boxShadows,
+    );
+  }
+
+  Widget _buildHeader(
+    BuildContext context,
+    _RoomMemberProfile? profile,
+    Color nameColor,
+    VipStyle style,
+  ) {
+    final displayName = (profile?.displayName ?? message.from).trim().isEmpty
+        ? message.from
+        : (profile?.displayName ?? message.from);
+    final nameText = Flexible(
+      child: Text(
+        displayName,
+        style: TextStyle(
+          color: nameColor,
+          fontWeight: FontWeight.w600,
+        ),
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+    final avatar = _buildAvatar(profile, style, displayName);
+    final children = <Widget>[
+      avatar,
+      const SizedBox(width: 8),
+      nameText,
+    ];
+    final rowChildren = mine ? children.reversed.toList() : children;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: rowChildren,
+    );
+  }
+
+  Widget _buildAvatar(_RoomMemberProfile? profile, VipStyle style, String displayName) {
+    final photoUrl = profile?.photoUrl;
+    final trimmed = displayName.trim();
+    final fallback = trimmed.isNotEmpty ? trimmed.substring(0, 1).toUpperCase() : '?';
+
+    Widget avatar = CircleAvatar(
+      radius: 18,
+      backgroundImage: (photoUrl != null && photoUrl.isNotEmpty) ? NetworkImage(photoUrl) : null,
+      backgroundColor: Colors.grey.shade300,
+      child: (photoUrl == null || photoUrl.isEmpty)
+          ? Text(
+              fallback,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            )
+          : null,
+    );
+
+    if (style.hasEffect) {
+      avatar = Container(
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: style.nameColor.withOpacity(0.85), width: 2),
+          boxShadow: style.glowColor != null
+              ? [
+                  BoxShadow(
+                    color: style.glowColor!,
+                    blurRadius: 14,
+                    spreadRadius: 2,
+                  )
+                ]
+              : null,
+        ),
+        child: avatar,
+      );
+    }
+
+    return avatar;
   }
 }
 
