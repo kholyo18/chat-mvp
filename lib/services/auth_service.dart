@@ -4,8 +4,9 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
-  static final GoogleSignIn _google =
-      GoogleSignIn(scopes: const <String>['email', 'profile']);
+  static final GoogleSignIn _google = GoogleSignIn(
+    scopes: <String>['email', 'profile'],
+  );
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -89,8 +90,8 @@ class AuthService {
       idToken: gAuth.idToken,
     );
 
-    final userCred = await _auth.signInWithCredential(credential);
-    final user = userCred.user;
+    final UserCredential userCred = await _auth.signInWithCredential(credential);
+    final User? user = userCred.user;
     if (user != null) {
       await _firestore.collection('users').doc(user.uid).set(
         {
