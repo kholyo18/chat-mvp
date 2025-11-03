@@ -2045,9 +2045,9 @@ class _SettingsHubPageState extends State<SettingsHubPage> {
     final String planLabel = AiAssistantController.readablePlanLabel(planKey);
 
     if (_loading) {
-      return const Scaffold(
-        appBar: AppBar(title: Text('Settings')),
-        body: Center(child: CircularProgressIndicator()),
+      return Scaffold(
+        appBar: AppBar(title: const Text('Settings')),
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
