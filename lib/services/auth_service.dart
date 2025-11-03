@@ -4,7 +4,8 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
-  static final GoogleSignIn _google = GoogleSignIn();
+  static final GoogleSignIn _google =
+      GoogleSignIn(scopes: <String>['email', 'profile']);
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -78,13 +79,14 @@ class AuthService {
   }
 
   static Future<User?> signInWithGoogle() async {
-    final GoogleSignInAccount? gUser = await _google.signIn();
+    final GoogleSignInAccount? gUser =
+        await _google.signInSilently() ?? await _google.signIn();
     if (gUser == null) return null;
-    final gAuth = await gUser.authentication;
+    final GoogleSignInAuthentication gAuth = await gUser.authentication;
 
-    final credential = GoogleAuthProvider.credential(
-      idToken: gAuth.idToken,
+    final OAuthCredential credential = GoogleAuthProvider.credential(
       accessToken: gAuth.accessToken,
+      idToken: gAuth.idToken,
     );
 
     final userCred = await _auth.signInWithCredential(credential);
@@ -122,7 +124,7 @@ class AuthService {
 
   static Future<void> signOutAll() async {
     try {
-      await GoogleSignIn().signOut();
+      await _google.signOut();
     } catch (_) {}
     await _auth.signOut();
   }
@@ -136,13 +138,14 @@ class AuthService {
       );
     }
 
-    final GoogleSignInAccount? gUser = await _google.signIn();
+    final GoogleSignInAccount? gUser =
+        await _google.signInSilently() ?? await _google.signIn();
     if (gUser == null) return;
-    final gAuth = await gUser.authentication;
+    final GoogleSignInAuthentication gAuth = await gUser.authentication;
 
-    final credential = GoogleAuthProvider.credential(
-      idToken: gAuth.idToken,
+    final OAuthCredential credential = GoogleAuthProvider.credential(
       accessToken: gAuth.accessToken,
+      idToken: gAuth.idToken,
     );
 
     final linked = await user.linkWithCredential(credential);

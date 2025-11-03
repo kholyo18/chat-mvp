@@ -63,7 +63,7 @@ import 'modules/ai_assistant/ai_assistant_controller.dart';
 import 'modules/privacy/privacy_controller.dart';
 import 'modules/privacy/privacy_settings_page.dart';
 // CODEX-BEGIN:ADMIN_IMPORT
-import 'modules/admin/admin_dashboard_page.dart';
+// import 'modules/admin/admin_dashboard_page.dart';
 // CODEX-END:ADMIN_IMPORT
 import 'services/user_settings_service.dart';
 // CODEX-END:PRIVACY_IMPORTS
