@@ -38,6 +38,7 @@ import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:chat_mvp/admin/admin_portal_page.dart';
 import 'package:chat_mvp/admin/admin_room_panel_page.dart';
+import 'package:chat_mvp/modules/chat/chat_thread_list_item.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_page.dart';
 
 import 'services/coins_service.dart';
@@ -5559,11 +5560,12 @@ class _PeopleDiscoverPageState extends State<PeopleDiscoverPage> {
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   void _onScroll() {
-    if (!_hasMore || _loadingMore) return;
+    if (_isSearching || !_hasMore || _loadingMore) return;
     if (_scrollController.position.extentAfter < 320) {
       _loadPage(reset: false);
     }
@@ -5572,6 +5574,7 @@ class _PeopleDiscoverPageState extends State<PeopleDiscoverPage> {
   Future<void> _loadPage({required bool reset}) async {
     if (_loadingMore) return;
     if (reset) {
+      _memberCache.clear();
       setState(() {
         _initialLoading = true;
         _loadingMore = true;
@@ -5887,12 +5890,16 @@ class _InboxPageState extends State<InboxPage> {
   final ScrollController _scrollController = ScrollController();
   final FirestoreService _firestoreService = FirestoreService();
   final List<InboxThreadItem> _threads = <InboxThreadItem>[];
+  final ChatThreadMemberCache _memberCache = ChatThreadMemberCache();
   cf.DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
   bool _initialLoading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
   String? _errorMessage;
   late final String _currentUid;
+  final TextEditingController _searchController = TextEditingController();
+  bool _isSearching = false;
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -5906,11 +5913,12 @@ class _InboxPageState extends State<InboxPage> {
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   void _onScroll() {
-    if (!_hasMore || _loadingMore) return;
+    if (_isSearching || !_hasMore || _loadingMore) return;
     if (_scrollController.position.extentAfter < 320) {
       _loadPage(reset: false);
     }
@@ -5919,6 +5927,7 @@ class _InboxPageState extends State<InboxPage> {
   Future<void> _loadPage({required bool reset}) async {
     if (_loadingMore) return;
     if (reset) {
+      _memberCache.clear();
       setState(() {
         _initialLoading = true;
         _loadingMore = true;
@@ -5941,14 +5950,26 @@ class _InboxPageState extends State<InboxPage> {
     if (!mounted) return;
 
     if (result is SafeSuccess<InboxThreadsPage>) {
+      final newThreads = result.value.threads;
       setState(() {
-        _threads.addAll(result.value.threads);
+        _threads.addAll(newThreads);
         _lastDoc = result.value.lastDocument;
         _hasMore = result.value.hasMore;
         _errorMessage = null;
         _initialLoading = false;
         _loadingMore = false;
       });
+      for (final thread in newThreads) {
+        final other = _otherMemberId(thread);
+        if (other.isEmpty || other == _currentUid) {
+          continue;
+        }
+        unawaited(_memberCache.fetch(other).then((_) {
+          if (mounted) {
+            setState(() {});
+          }
+        }));
+      }
     } else if (result is SafeFailure<InboxThreadsPage>) {
       setState(() {
         _errorMessage = result.message;
@@ -5962,20 +5983,97 @@ class _InboxPageState extends State<InboxPage> {
     await _loadPage(reset: true);
   }
 
-  Widget _buildList() {
+  String _otherMemberId(InboxThreadItem thread) {
+    return thread.members.firstWhere((x) => x != _currentUid, orElse: () => _currentUid);
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {
+      _searchQuery = value;
+    });
+  }
+
+  void _startSearch() {
+    _searchController.value = TextEditingValue(
+      text: _searchQuery,
+      selection: TextSelection.fromPosition(TextPosition(offset: _searchQuery.length)),
+    );
+    setState(() {
+      _isSearching = true;
+    });
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+    });
+  }
+
+  void _stopSearch() {
+    _searchController.clear();
+    setState(() {
+      _isSearching = false;
+      _searchQuery = '';
+    });
+  }
+
+  List<InboxThreadItem> get _visibleThreads {
+    if (_searchQuery.trim().isEmpty) {
+      return List<InboxThreadItem>.from(_threads);
+    }
+    final query = _searchQuery.trim().toLowerCase();
+    return _threads.where((thread) {
+      final otherUid = _otherMemberId(thread);
+      final profile = _memberCache.getCached(otherUid);
+      final displayName = resolveThreadDisplayName(
+        thread: thread,
+        otherUid: otherUid,
+        otherProfile: profile,
+      ).toLowerCase();
+      final username = resolveThreadUsername(
+        thread: thread,
+        otherUid: otherUid,
+        otherProfile: profile,
+      );
+      final previewText = resolveThreadPreview(thread).text.toLowerCase();
+      final rawPreview = (thread.lastMessage ?? '').toLowerCase();
+      if (displayName.contains(query)) {
+        return true;
+      }
+      if (username != null && username.toLowerCase().contains(query)) {
+        return true;
+      }
+      if (previewText.contains(query) || rawPreview.contains(query)) {
+        return true;
+      }
+      return false;
+    }).toList();
+  }
+
+  Widget _buildPlaceholderList({required Widget child}) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(vertical: 120, horizontal: 24),
+      children: [Center(child: child)],
+    );
+  }
+
+  Widget _buildList(BuildContext context) {
     if (_initialLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return _buildPlaceholderList(child: const CircularProgressIndicator());
     }
     if (_errorMessage != null) {
-      return Center(
+      return _buildPlaceholderList(
         child: TextButton(
           onPressed: () => _loadPage(reset: true),
           child: const Text('حدث خطأ، حاول مرة أخرى'),
         ),
       );
     }
+    final visible = _visibleThreads;
     if (_threads.isEmpty) {
-      return Center(
+      return _buildPlaceholderList(
         child: TextButton.icon(
           onPressed: () => navigatorKey.currentState?.pushNamed('/people'),
           icon: const Icon(Icons.person_add_alt_1_rounded),
@@ -5983,54 +6081,105 @@ class _InboxPageState extends State<InboxPage> {
         ),
       );
     }
+    if (visible.isEmpty) {
+      return _buildPlaceholderList(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.search_rounded, size: 40, color: kGray),
+            SizedBox(height: 16),
+            Text('لا توجد محادثات مطابقة للبحث'),
+          ],
+        ),
+      );
+    }
+    final showLoader = _hasMore && !_isSearching;
+    final itemCount = visible.length + (showLoader ? 1 : 0);
+    final dividerColor = Theme.of(context).colorScheme.onSurface.withOpacity(0.08);
     return ListView.separated(
       controller: _scrollController,
-      padding: const EdgeInsets.all(12),
-      itemCount: _threads.length + (_hasMore ? 1 : 0),
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
-      itemBuilder: (_, i) {
-        if (i >= _threads.length) {
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(top: 8, bottom: 24),
+      itemBuilder: (context, index) {
+        if (index >= visible.length) {
           return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
+            padding: EdgeInsets.symmetric(vertical: 24),
             child: Center(child: CircularProgressIndicator()),
           );
         }
-        final thread = _threads[i];
-        final other = thread.members.firstWhere((x) => x != _currentUid, orElse: () => _currentUid);
-        final last = thread.lastMessage ?? '';
-        final lastAt = thread.updatedAt;
-        final unread = thread.unread[_currentUid] ?? 0;
-
-        return Card(
-          child: ListTile(
-            leading: Stack(
-              children: [
-                const CircleAvatar(child: Icon(Icons.person)),
-                if (unread > 0)
-                  Positioned(
-                    right: -2,
-                    top: -2,
-                    child: Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                      child: Text('$unread', style: const TextStyle(color: Colors.white, fontSize: 10)),
-                    ),
-                  ),
-              ],
-            ),
-            title: Text(other, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text(last, maxLines: 1, overflow: TextOverflow.ellipsis),
-            trailing: Text(shortTime(lastAt), style: const TextStyle(fontSize: 11, color: kGray)),
-            onTap: () => navigatorKey.currentState?.pushNamed('/dm', arguments: thread.id),
-          ),
+        final thread = visible[index];
+        final otherUid = _otherMemberId(thread);
+        final future = _memberCache.fetch(otherUid);
+        return FutureBuilder<UserProfile?>(
+          future: future,
+          builder: (context, snapshot) {
+            final profile = snapshot.data ?? _memberCache.getCached(otherUid);
+            final displayName = resolveThreadDisplayName(
+              thread: thread,
+              otherUid: otherUid,
+              otherProfile: profile,
+            );
+            final photoUrl = resolveThreadPhotoUrl(
+              thread: thread,
+              otherUid: otherUid,
+              otherProfile: profile,
+            );
+            final preview = resolveThreadPreview(thread);
+            final unread = thread.unread[_currentUid] ?? 0;
+            final hasUnread = computeThreadHasUnread(
+              thread: thread,
+              currentUid: _currentUid,
+              unreadCount: unread,
+            );
+            final lastSenderId = thread.raw['lastSenderId'];
+            return ChatThreadListItem(
+              threadId: thread.id,
+              displayName: displayName,
+              photoUrl: photoUrl,
+              preview: preview,
+              updatedAt: thread.updatedAt,
+              unreadCount: unread,
+              hasUnread: hasUnread,
+              isLastMessageFromMe: lastSenderId == _currentUid,
+              isProfileLoading: snapshot.connectionState == ConnectionState.waiting && profile == null,
+              onTap: () => navigatorKey.currentState?.pushNamed('/dm', arguments: thread.id),
+            );
+          },
         );
       },
+      separatorBuilder: (_, __) => Padding(
+        padding: const EdgeInsetsDirectional.only(start: 80, end: 16),
+        child: Divider(height: 1, thickness: 0.6, color: dividerColor),
+      ),
+      itemCount: itemCount,
+    );
+  }
+
+  Widget _buildSearchField(BuildContext context) {
+    return TextField(
+      key: const ValueKey('inbox-search-field'),
+      controller: _searchController,
+      autofocus: true,
+      onChanged: _onSearchChanged,
+      textInputAction: TextInputAction.search,
+      cursorColor: Theme.of(context).colorScheme.primary,
+      style: Theme.of(context).textTheme.titleMedium,
+      textAlign: TextDirection.rtl == Directionality.of(context) ? TextAlign.right : TextAlign.left,
+      decoration: InputDecoration(
+        hintText: 'بحث في الدردشات',
+        hintStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+        border: InputBorder.none,
+        isCollapsed: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final content = _buildList();
+    final content = _buildList(context);
     // CODEX-BEGIN:ADMIN_BLOCK_INBOX
     final appUser = context.watch<AppUser>();
     final bool blocked = appUser.profile['blocked'] == true;
@@ -6040,21 +6189,61 @@ class _InboxPageState extends State<InboxPage> {
       );
     }
     // CODEX-END:ADMIN_BLOCK_INBOX
+    final actions = <Widget>[
+      if (_isSearching)
+        IconButton(
+          icon: Icon(_searchQuery.isEmpty ? Icons.close_rounded : Icons.clear_rounded),
+          onPressed: () {
+            if (_searchQuery.isEmpty) {
+              FocusScope.of(context).unfocus();
+              _stopSearch();
+            } else {
+              _clearSearch();
+            }
+          },
+        )
+      else
+        IconButton(
+          icon: const Icon(Icons.search_rounded),
+          onPressed: _startSearch,
+        ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert_rounded),
+        onSelected: (_) {},
+        itemBuilder: (context) => const [
+          PopupMenuItem<String>(value: 'settings', child: Text('الإعدادات')), // TODO: افتح صفحة الإعدادات
+          PopupMenuItem<String>(value: 'archived', child: Text('الدردشات المؤرشفة')), // TODO: عرض المحادثات المؤرشفة
+        ],
+      ),
+    ];
     return Scaffold(
-      appBar: AppBar(title: const Text('Inbox')),
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        leading: _isSearching
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: () {
+                  FocusScope.of(context).unfocus();
+                  _stopSearch();
+                },
+              )
+            : null,
+        titleSpacing: 0,
+        title: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: _isSearching
+              ? _buildSearchField(context)
+              : const Text(
+                  'الدردشات',
+                  key: ValueKey('inbox-title'),
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+        ),
+        actions: actions,
+      ),
       body: RefreshIndicator(
         onRefresh: _onRefresh,
-        child: content is ListView
-            ? content
-            : ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  SizedBox(
-                    height: MediaQuery.of(context).size.height * 0.5,
-                    child: content,
-              ),
-            ],
-          ),
+        child: content,
       ),
       floatingActionButton: FloatingActionButton(
         // CODEX-BEGIN:ADMIN_BLOCK_INBOX_FAB
@@ -6062,7 +6251,10 @@ class _InboxPageState extends State<InboxPage> {
             ? showBlockedSnack
             : () => navigatorKey.currentState?.pushNamed('/people'),
         // CODEX-END:ADMIN_BLOCK_INBOX_FAB
-        child: const Icon(Icons.person_search_rounded),
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(20))),
+        child: const Icon(Icons.chat_rounded),
       ),
     );
   }
