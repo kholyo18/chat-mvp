@@ -57,8 +57,10 @@ class AuthService {
     return userCredential;
   }
 
-  static Future<UserCredential> signUpWithEmail(
-      String email, String password) async {
+  static Future<UserCredential> signUpWithEmail({
+    required String email,
+    required String password,
+  }) async {
     final UserCredential userCredential =
         await _auth.createUserWithEmailAndPassword(
       email: email,
@@ -127,5 +129,10 @@ class AuthService {
   static Future<void> signOut() async {
     await _googleSignIn.signOut();
     await _auth.signOut();
+  }
+
+  static Future<void> signOutAll() async {
+    await _auth.signOut();
+    await _googleSignIn.signOut();
   }
 }
