@@ -57,6 +57,73 @@ class AuthService {
     return userCredential;
   }
 
+  static Future<UserCredential> signUpWithEmail(
+      String email, String password) async {
+    final UserCredential userCredential =
+        await _auth.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    final User? user = userCredential.user;
+
+    if (user != null) {
+      if (!user.emailVerified) {
+        await user.sendEmailVerification();
+      }
+
+      await _firestore.collection('users').doc(user.uid).set(
+        {
+          'displayName': user.displayName,
+          'email': user.email,
+          'photoUrl': user.photoURL,
+          'providers': user.providerData.map((p) => p.providerId).toSet().toList(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+
+    return userCredential;
+  }
+
+  static Future<UserCredential> signInWithEmail(
+      String email, String password) async {
+    final UserCredential userCredential =
+        await _auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+
+    final User? user = userCredential.user;
+
+    if (user != null) {
+      await _firestore.collection('users').doc(user.uid).set(
+        {
+          'displayName': user.displayName,
+          'email': user.email,
+          'photoUrl': user.photoURL,
+          'providers': user.providerData.map((p) => p.providerId).toSet().toList(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+
+    return userCredential;
+  }
+
+  static Future<void> sendEmailVerification() async {
+    final User? user = _auth.currentUser;
+    if (user != null && !user.emailVerified) {
+      await user.sendEmailVerification();
+    }
+  }
+
+  static Future<void> sendPasswordResetEmail(String email) {
+    return _auth.sendPasswordResetEmail(email: email);
+  }
+
   static Future<void> signOut() async {
     await _googleSignIn.signOut();
     await _auth.signOut();
