@@ -7,7 +7,7 @@ import 'package:google_sign_in_platform_interface/google_sign_in_platform_interf
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  static const String _webClientId = 'REPLACE_WITH_YOUR_WEB_CLIENT_ID';
+  static const String _webClientId = '1094490827601-adssi21hp0dl9m1s52f4kmnvdbqbbu9d.apps.googleusercontent.com';
   static final GoogleSignIn _google = GoogleSignIn(
     scopes: <String>['email', 'profile'],
     serverClientId: _webClientId,
