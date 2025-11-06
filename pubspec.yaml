@@ -10,11 +10,11 @@ dependencies:
     sdk: flutter
 
   # --- FlutterFire (جيل واحد متوافق) ---
-  firebase_core: ^3.6.0
-  firebase_auth: ^5.3.1
+  firebase_core: ^4.2.1
+  firebase_auth: ^6.1.2
   google_sign_in: ^7.2.0
-  cloud_firestore: ^4.17.5
-  cloud_functions: ^5.0.5
+  cloud_firestore: ^6.1.0
+  cloud_functions: ^6.0.4
   firebase_storage: ^13.0.3
   firebase_messaging: ^16.0.3
   firebase_database: ^12.0.0
@@ -44,13 +44,13 @@ dependencies:
   qr_flutter: ^4.1.0
 
   # --- ML Kit (اختياري) ---
-  google_mlkit_translation: ^0.10.0
+  google_mlkit_translation: ^0.13.0
   google_mlkit_language_id: ^0.13.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
