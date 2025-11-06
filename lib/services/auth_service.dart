@@ -280,12 +280,13 @@ class AuthService {
   }
 
   static bool _isUserCancellationError(GoogleSignInException exception) {
-    const cancellationCodes = <String>{
+    const cancellationCodes = <GoogleSignInExceptionCode>{
       GoogleSignInExceptionCode.canceled,
       GoogleSignInExceptionCode.interrupted,
       GoogleSignInExceptionCode.uiUnavailable,
     };
-    return cancellationCodes.contains(exception.code);
+    final GoogleSignInExceptionCode? code = exception.code;
+    return code != null && cancellationCodes.contains(code);
   }
 
   static Future<String?> _fetchAccessToken(
