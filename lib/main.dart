@@ -8,7 +8,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
+import 'dart:ui' as ui show TextDirection;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -30,7 +30,7 @@ import 'package:video_player/video_player.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 
 import 'package:flutter/services.dart'; // للروابط العميقة/الحافظة/الاذونات
 // (للمعاينة لاحقًا قد نستخدم url_launcher/file_picker/cached_network_image إن أضفتها في pubspec)
@@ -6167,7 +6167,7 @@ class _InboxPageState extends State<InboxPage> {
       textInputAction: TextInputAction.search,
       cursorColor: Theme.of(context).colorScheme.primary,
       style: Theme.of(context).textTheme.titleMedium,
-      textAlign: Directionality.of(context) == TextDirection.rtl
+      textAlign: Directionality.of(context) == ui.TextDirection.rtl
           ? TextAlign.right
           : TextAlign.left,
       decoration: InputDecoration(
