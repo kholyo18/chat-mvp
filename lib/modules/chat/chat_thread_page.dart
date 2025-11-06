@@ -70,8 +70,9 @@ class _ChatThreadView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    const TextDirection threadDirection = TextDirection.rtl;
     return Directionality(
-      textDirection: TextDirection.rtl,
+      textDirection: threadDirection,
       child: Scaffold(
         appBar: _ChatAppBar(threadId: threadId),
         body: const SafeArea(
