@@ -38,6 +38,7 @@ import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:chat_mvp/admin/admin_portal_page.dart';
 import 'package:chat_mvp/admin/admin_room_panel_page.dart';
+import 'package:chat_mvp/modules/chat/chat_thread_page.dart';
 
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
@@ -6069,129 +6070,26 @@ class _InboxPageState extends State<InboxPage> {
 // CODEX-END:INBOX_PAGE
 
 // ---------------------- DM Thread Page ----------------------
-class DMPage extends StatefulWidget {
+class DMPage extends StatelessWidget {
   const DMPage({super.key});
-  @override
-  State<DMPage> createState() => _DMPageState();
-}
-
-class _DMPageState extends State<DMPage> {
-  late String threadId;
-  String otherUid = '';
-  final c = TextEditingController();
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    threadId = (ModalRoute.of(context)!.settings.arguments ?? '') as String;
-  }
-
-  Stream<cf.QuerySnapshot<Map<String, dynamic>>> _messages() {
-    return cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId)
-      .collection('messages').orderBy('createdAt', descending: true).limit(50).snapshots();
-  }
-
-  Future<void> _resolveOtherUid() async {
-    final th = await cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId).get();
-    final parts = List<String>.from((th.data()?['members'] ?? []).cast<String>());
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    otherUid = parts.firstWhere((x) => x != me, orElse: ()=> me);
-    setState((){});
-  }
-
-  Future<void> _send() async {
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    final txt = c.text.trim();
-    if (txt.isEmpty) return;
-    final ref = cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId);
-    await ref.collection('messages').add({
-      'from': me,
-      'text': txt,
-      'createdAt': cf.FieldValue.serverTimestamp(),
-    });
-    await ref.set({
-      'lastMessage': txt,
-      'updatedAt': cf.FieldValue.serverTimestamp(),
-      'unread': { otherUid: cf.FieldValue.increment(1), me: 0 },
-    }, cf.SetOptions(merge: true));
-    c.clear();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _resolveOtherUid();
-  }
 
   @override
   Widget build(BuildContext context) {
-    final me = FirebaseAuth.instance.currentUser!.uid;
-    // CODEX-BEGIN:PRIVACY_DM_READ_RECEIPTS
-    final readReceiptsEnabled = context.watch<PrivacySettingsController>().settings?.readReceipts ?? true;
-    // CODEX-END:PRIVACY_DM_READ_RECEIPTS
-    return Scaffold(
-      appBar: AppBar(title: Text(otherUid.isEmpty ? 'Loading...' : otherUid)),
-      body: Column(
-        children: [
-          Expanded(
-            child: StreamBuilder<cf.QuerySnapshot<Map<String, dynamic>>>(
-              stream: _messages(),
-              builder: (c, s) {
-                if (!s.hasData) return const Center(child: CircularProgressIndicator());
-                final docs = s.data!.docs;
-                // عند فتح الشاشة اعتبر الرسائل مقروءة
-                if (readReceiptsEnabled) {
-                  cf.FirebaseFirestore.instance.collection('dm_threads').doc(threadId)
-                      .set({'unread': {me: 0}}, cf.SetOptions(merge: true));
-                }
-                return ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.all(12),
-                  itemCount: docs.length,
-                  itemBuilder: (_, i) {
-                    final d = docs[i].data();
-                    final mine = d['from'] == me;
-                    return Align(
-                      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 3),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: mine ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceVariant,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Text(d['text'] ?? ''),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: c,
-                      decoration: const InputDecoration(
-                        hintText: 'اكتب رسالة خاصة…',
-                        filled: true, border: OutlineInputBorder(borderSide: BorderSide.none, borderRadius: BorderRadius.all(Radius.circular(14))),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FloatingActionButton.small(onPressed: _send, child: const Icon(Icons.send_rounded)),
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
-    );
+    final args = ModalRoute.of(context)?.settings.arguments;
+    String? threadId;
+    String? otherUid;
+    if (args is String) {
+      threadId = args;
+    } else if (args is Map) {
+      threadId = args['threadId'] as String?;
+      otherUid = args['otherUid'] as String?;
+    }
+    if (threadId == null || threadId.isEmpty) {
+      return const Scaffold(
+        body: Center(child: Text('تعذر فتح المحادثة المطلوبة.')),
+      );
+    }
+    return ChatThreadPage(threadId: threadId, otherUid: otherUid);
   }
 }
 
