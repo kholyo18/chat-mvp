@@ -5538,6 +5538,7 @@ class PeopleDiscoverPage extends StatefulWidget {
 
 class _PeopleDiscoverPageState extends State<PeopleDiscoverPage> {
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
   final FirestoreService _firestoreService = FirestoreService();
   final FollowService _followService = FollowService();
   final List<DiscoverUser> _users = <DiscoverUser>[];
@@ -5545,8 +5546,10 @@ class _PeopleDiscoverPageState extends State<PeopleDiscoverPage> {
   bool _initialLoading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
+  bool _isSearching = false;
   String? _errorMessage;
   late final String _currentUid;
+  final Map<String, dynamic> _memberCache = <String, dynamic>{};
 
   @override
   void initState() {
@@ -6164,7 +6167,9 @@ class _InboxPageState extends State<InboxPage> {
       textInputAction: TextInputAction.search,
       cursorColor: Theme.of(context).colorScheme.primary,
       style: Theme.of(context).textTheme.titleMedium,
-      textAlign: TextDirection.rtl == Directionality.of(context) ? TextAlign.right : TextAlign.left,
+      textAlign: Directionality.of(context) == TextDirection.rtl
+          ? TextAlign.right
+          : TextAlign.left,
       decoration: InputDecoration(
         hintText: 'بحث في الدردشات',
         hintStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
