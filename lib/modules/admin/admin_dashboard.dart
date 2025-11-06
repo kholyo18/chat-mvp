@@ -133,6 +133,12 @@ class _StatsGrid extends StatelessWidget {
         description:
             'Approx. count from first ${AdminDashboardController.walletSampleLimit} wallets.',
       ),
+      _StatCardData(
+        title: 'Total reels',
+        value: controller.totalReels.toString(),
+        icon: Icons.play_circle_outline,
+        description: 'Short videos shared by the community.',
+      ),
     ];
 
     final int columns = maxWidth > 960

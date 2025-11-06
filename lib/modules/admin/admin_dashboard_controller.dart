@@ -30,6 +30,7 @@ class AdminDashboardController extends ChangeNotifier {
   int totalUsers = 0;
   int pendingVerifications = 0;
   int walletsWithBalance = 0;
+  int totalReels = 0;
   Map<String, int> vipCounts = <String, int>{
     'none': 0,
     'bronze': 0,
@@ -57,6 +58,8 @@ class AdminDashboardController extends ChangeNotifier {
           _firestore.collection('verification_requests');
       final CollectionReference<Map<String, dynamic>> walletCollection =
           _firestore.collection('wallet');
+      final CollectionReference<Map<String, dynamic>> reelsCollection =
+          _firestore.collection('reels');
 
       totalUsers = await _countDocuments(usersCollection);
 
@@ -68,6 +71,7 @@ class AdminDashboardController extends ChangeNotifier {
       );
 
       walletsWithBalance = await _loadWalletsWithBalance(walletCollection);
+      totalReels = await _countDocuments(reelsCollection);
 
       recentUsers = await _loadRecentUsers(usersCollection);
     } catch (error) {
