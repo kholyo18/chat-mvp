@@ -7,7 +7,7 @@ class AuthService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
-    serverClientId: 'REPLACE_WITH_YOUR_WEB_CLIENT_ID',
+    serverClientId: '1094490827601-adssi21hp0dl9m1s52f4kmnvdbqbbu9d.apps.googleusercontent.com',
   );
 
   static Future<UserCredential?> signInWithGoogle() async {
