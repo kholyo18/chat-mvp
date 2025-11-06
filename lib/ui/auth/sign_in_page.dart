@@ -117,8 +117,8 @@ class _SignInPageState extends State<SignInPage> {
     if (_loadingGoogle) return;
     setState(() => _loadingGoogle = true);
     try {
-      final user = await AuthService.signInWithGoogle();
-      if (user != null && mounted) {
+      final userCredential = await AuthService.signInWithGoogle();
+      if (userCredential?.user != null && mounted) {
         Navigator.of(context).maybePop();
       }
     } catch (e, st) {
