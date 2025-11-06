@@ -73,6 +73,8 @@ import 'screens/auth/email_verification_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/profile_edit.dart';
 import 'ui/auth/sign_in_page.dart';
+import 'ui/reels/create_reel_page.dart';
+import 'ui/reels/reels_page.dart';
 import 'models/user_profile.dart';
 import 'widgets/common/coins_pill.dart';
 import 'widgets/common/vip_chip.dart';
@@ -530,6 +532,8 @@ class MyApp extends StatelessWidget {
         '/auth/register': (_) => const RegisterScreen(),
         '/auth/verify-email': (_) => const EmailVerificationScreen(),
         '/forgot-password': (_) => const ForgotPasswordPage(),
+        '/reels': (_) => const ReelsPage(),
+        '/reels/create': (_) => const CreateReelPage(),
       },
     );
   }
@@ -744,6 +748,8 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                   return const StoriesHubPage();
                 },
                 '/story_create': (_) => const StoryCreatePage(),
+                '/reels': (_) => const ReelsPage(),
+                '/reels/create': (_) => const CreateReelPage(),
 
                 // متجر/محفظة/VIP
                 '/store': (_) => const StorePage(),
@@ -878,6 +884,7 @@ class _HomePageState extends State<HomePage> {
       RoomsTab(),        // مجتمع وغرف
       StorePage(),       // متجر
       ProfilePage(),     // بروفايل
+      ReelsPage(),       // الريلز
     ];
     return Scaffold(
       appBar: AppBar(
@@ -916,15 +923,29 @@ class _HomePageState extends State<HomePage> {
       body: tabs[idx],
       bottomNavigationBar: NavigationBar(
         selectedIndex: idx,
-        onDestinationSelected: (v)=> setState(()=> idx=v),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum), label: 'Rooms'),
-            NavigationDestination(
-                icon: Icon(Icons.storefront),
-                selectedIcon: Icon(Icons.storefront),
-                label: 'Store'),
-            NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
-          ],
+        onDestinationSelected: (v) => setState(() => idx = v),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.forum_outlined),
+            selectedIcon: Icon(Icons.forum),
+            label: 'Rooms',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.storefront),
+            selectedIcon: Icon(Icons.storefront),
+            label: 'Store',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.play_circle_outline),
+            selectedIcon: Icon(Icons.play_circle),
+            label: 'الريلز',
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         // CODEX-BEGIN:ADMIN_BLOCK_HOME_FAB
