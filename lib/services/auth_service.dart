@@ -1,16 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static const String _webClientId = 'REPLACE_WITH_YOUR_WEB_CLIENT_ID';
   static final GoogleSignIn _google = GoogleSignIn(
-    serverClientId: '1094490827601-adssi21hp0dl9m1s52f4kmnvdbqbbu9d.apps.googleusercontent.com',
     scopes: <String>['email', 'profile'],
+    serverClientId: _webClientId,
   );
 
-  static const List<String> _googleScopeHint = <String>['email', 'profile'];
   static Future<void>? _googleInitialization;
 
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -18,7 +20,15 @@ class AuthService {
   static bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
 
   static Future<void> initializeGoogleSignIn() {
-    _googleInitialization ??= _google.initialize();
+    _googleInitialization ??= _google
+        .signInSilently()
+        .catchError((Object error) {
+          if (_isUserCancellationError(error)) {
+            return null;
+          }
+          throw error;
+        })
+        .then<void>((_) {});
     return _googleInitialization!;
   }
 
@@ -102,12 +112,8 @@ class AuthService {
 
     GoogleSignInAccount? account;
     try {
-      final Future<GoogleSignInAccount?>? lightweightAttempt =
-          _google.attemptLightweightAuthentication();
-      if (lightweightAttempt != null) {
-        account = await lightweightAttempt;
-      }
-    } on GoogleSignInException catch (e) {
+      account = await _google.signInSilently();
+    } on PlatformException catch (e) {
       if (!_isUserCancellationError(e)) {
         rethrow;
       }
@@ -115,8 +121,8 @@ class AuthService {
 
     if (account == null) {
       try {
-        account = await _google.authenticate(scopeHint: _googleScopeHint);
-      } on GoogleSignInException catch (e) {
+        account = await _google.signIn();
+      } on PlatformException catch (e) {
         if (_isUserCancellationError(e)) {
           return null;
         }
@@ -139,7 +145,8 @@ class AuthService {
       );
     }
 
-    final String? accessToken = await _fetchAccessToken(account);
+    final String? accessToken =
+        authentication.accessToken ?? await _fetchAccessToken(account);
 
     final OAuthCredential credential = GoogleAuthProvider.credential(
       idToken: idToken,
@@ -197,12 +204,8 @@ class AuthService {
 
     GoogleSignInAccount? account;
     try {
-      final Future<GoogleSignInAccount?>? lightweightAttempt =
-          _google.attemptLightweightAuthentication();
-      if (lightweightAttempt != null) {
-        account = await lightweightAttempt;
-      }
-    } on GoogleSignInException catch (e) {
+      account = await _google.signInSilently();
+    } on PlatformException catch (e) {
       if (!_isUserCancellationError(e)) {
         rethrow;
       }
@@ -210,8 +213,8 @@ class AuthService {
 
     if (account == null) {
       try {
-        account = await _google.authenticate(scopeHint: _googleScopeHint);
-      } on GoogleSignInException catch (e) {
+        account = await _google.signIn();
+      } on PlatformException catch (e) {
         if (_isUserCancellationError(e)) {
           return;
         }
@@ -233,7 +236,8 @@ class AuthService {
       );
     }
 
-    final String? accessToken = await _fetchAccessToken(account);
+    final String? accessToken =
+        authentication.accessToken ?? await _fetchAccessToken(account);
 
     final OAuthCredential credential = GoogleAuthProvider.credential(
       idToken: idToken,
@@ -282,35 +286,30 @@ class AuthService {
     return Exception(ar);
   }
 
-  static bool _isUserCancellationError(GoogleSignInException exception) {
-    const cancellationCodes = <GoogleSignInExceptionCode>{
-      GoogleSignInExceptionCode.canceled,
-      GoogleSignInExceptionCode.interrupted,
-      GoogleSignInExceptionCode.uiUnavailable,
-    };
-    final GoogleSignInExceptionCode? code = exception.code;
-    return code != null && cancellationCodes.contains(code);
+  static bool _isUserCancellationError(Object exception) {
+    if (exception is PlatformException) {
+      const cancellationCodes = <String>{
+        GoogleSignIn.kSignInCanceledError,
+        GoogleSignIn.kSignInRequiredError,
+        GoogleSignInAccount.kFailedToRecoverAuthError,
+        GoogleSignInAccount.kUserRecoverableAuthError,
+      };
+      return cancellationCodes.contains(exception.code);
+    }
+    return false;
   }
 
   static Future<String?> _fetchAccessToken(
     GoogleSignInAccount account,
   ) async {
-    if (_googleScopeHint.isEmpty) {
-      return null;
-    }
-
-    final GoogleSignInAuthorizationClient? client =
-        account.authorizationClient;
-    if (client == null) {
-      return null;
-    }
-
     try {
-      GoogleSignInClientAuthorization? authorization =
-          await client.authorizationForScopes(_googleScopeHint);
-      authorization ??= await client.authorizeScopes(_googleScopeHint);
-      return authorization?.accessToken;
-    } on GoogleSignInException catch (e) {
+      final GoogleSignInTokenData response =
+          await GoogleSignInPlatform.instance.getTokens(
+        email: account.email,
+        shouldRecoverAuth: true,
+      );
+      return response.accessToken;
+    } on PlatformException catch (e) {
       if (_isUserCancellationError(e)) {
         return null;
       }
