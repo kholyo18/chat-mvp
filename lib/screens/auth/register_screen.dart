@@ -103,7 +103,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       await AuthService.signUpWithEmail(
-        fullName: _fullNameCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
         password: _passwordCtrl.text,
       );
