@@ -884,6 +884,7 @@ class _HomePageState extends State<HomePage> {
     // CODEX-END:ADMIN_BLOCK_HOME
     final tabs = const [
       RoomsTab(),        // مجتمع وغرف
+      InboxPage(),       // الدردشات (الرسائل الخاصة)
       StorePage(),       // متجر
       ProfilePage(),     // بروفايل
       ReelsPage(),       // الريلز
@@ -931,6 +932,11 @@ class _HomePageState extends State<HomePage> {
             icon: Icon(Icons.forum_outlined),
             selectedIcon: Icon(Icons.forum),
             label: 'Rooms',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.chat_bubble_outline),
+            selectedIcon: Icon(Icons.chat_bubble),
+            label: 'الدردشات',
           ),
           NavigationDestination(
             icon: Icon(Icons.storefront),
