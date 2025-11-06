@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -70,7 +71,7 @@ class _ChatThreadView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const TextDirection threadDirection = TextDirection.rtl;
+    const ui.TextDirection threadDirection = ui.TextDirection.rtl;
     return Directionality(
       textDirection: threadDirection,
       child: Scaffold(
