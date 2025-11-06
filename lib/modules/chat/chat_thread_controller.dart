@@ -57,14 +57,14 @@ class ChatThreadController extends ChangeNotifier {
     FirebaseAuth? auth,
     rtdb.FirebaseDatabase? realtimeDatabase,
     ImagePicker? picker,
-    Record? recorder,
+    AudioRecorder? recorder,
     TranslatorService? translatorService,
   })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
         _storage = storage ?? FirebaseStorage.instance,
         _auth = auth ?? FirebaseAuth.instance,
         _realtimeDatabase = realtimeDatabase ?? rtdb.FirebaseDatabase.instance,
         _picker = picker ?? ImagePicker(),
-        _recorder = recorder ?? Record(),
+        _recorder = recorder ?? AudioRecorder(),
         _translatorService = translatorService ?? TranslatorService();
 
   final String threadId;
@@ -73,7 +73,7 @@ class ChatThreadController extends ChangeNotifier {
   final FirebaseAuth _auth;
   final rtdb.FirebaseDatabase _realtimeDatabase;
   final ImagePicker _picker;
-  final Record _recorder;
+  final AudioRecorder _recorder;
   final TranslatorService _translatorService;
   final TranslateService _manualTranslator = const TranslateService();
 
@@ -437,11 +437,11 @@ class ChatThreadController extends ChangeNotifier {
     }
     final hasPermission = await _recorder.hasPermission();
     if (!hasPermission) {
-      throw Exception('يجب منح إذن الميكروفون');
+      return;
     }
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/chat_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    await _recorder.start(path: path);
+    await _recorder.start(const RecordConfig(), path: path);
     _recordedFilePath = path;
     _recordingStartedAt = DateTime.now();
     recordingDuration = Duration.zero;
