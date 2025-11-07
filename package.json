@@ -1,0 +1,23 @@
+{
+  "name": "chat-mvp",
+  "version": "1.0.0",
+  "description": "This repository contains the Flutter client and Firebase resources for the chat MVP application. The app ships with a server-backed wallet (coins, VIP tiers, and transaction history) plus verified coin purchases through Google Play Billing and Stripe Checkout.",
+  "main": "server.js",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "openai": "^6.8.1"
+  }
+}

@@ -17,7 +17,8 @@ const String kAiAssistantBotModeKey = 'aiAssistant.botType';
 ///
 /// Replace this URL with your deployed Firebase Function or server endpoint
 /// that performs authenticated requests to OpenAI (model: `gpt-4o-mini`).
-const String kAiAssistantBackendUrl = 'https://YOUR_BACKEND_URL/aiChat';
+const String kAiAssistantBackendUrl =
+    'https://render-deployment-placeholder.onrender.com/aiChat';
 
 /// Allowed bot personas exposed to the user.
 const Map<String, String> kBotModeLabels = {
