@@ -12,6 +12,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../calls/agora_call_client.dart';
 import '../../modules/calls/dm_call_service.dart';
 import '../../modules/privacy/privacy_controller.dart';
 import '../../services/firestore_service.dart';
@@ -234,9 +235,39 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
       FlutterError.reportError(
         FlutterErrorDetails(exception: err, stack: stack),
       );
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('فشل بدء المكالمة، حاول مجددًا')),
-      );
+      if (err is AgoraPermissionException) {
+        debugPrint(
+          'DM CALL START FAILED: missingPermissions=${err.missingPermissions}',
+        );
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('يرجى منح صلاحيات المكالمة للمتابعة.')),
+        );
+        return;
+      }
+      final agoraClient = AgoraCallClient.instance;
+      final agoraException = err is AgoraCallException ? err : null;
+      final agoraCode = agoraException?.agoraErrorCode;
+      final engineCode = agoraClient.lastEngineErrorCode;
+      final joinResult = agoraClient.lastJoinResultCode;
+      final resolvedCode = () {
+        if (agoraCode != null && agoraCode != 0) {
+          return agoraCode;
+        }
+        if (engineCode != null && engineCode != 0) {
+          return engineCode;
+        }
+        if (joinResult != null && joinResult != 0) {
+          return joinResult;
+        }
+        return agoraCode ?? engineCode ?? joinResult;
+      }();
+      if (resolvedCode != null && resolvedCode != 0) {
+        final message = agoraException?.message ?? 'فشل بدء المكالمة، حاول مجددًا';
+        debugPrint('DM CALL START FAILED: agoraError=$resolvedCode, message=$message');
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('فشل بدء المكالمة، حاول مجددًا')),
+        );
+      }
     }
   }
 }

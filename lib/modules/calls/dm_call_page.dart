@@ -135,6 +135,22 @@ class _DmCallPageState extends State<DmCallPage> {
     }
   }
 
+  int? _resolveAgoraErrorCode([AgoraCallException? exception]) {
+    final direct = exception?.agoraErrorCode;
+    if (direct != null && direct != 0) {
+      return direct;
+    }
+    final engineCode = _callClient.lastEngineErrorCode;
+    if (engineCode != null && engineCode != 0) {
+      return engineCode;
+    }
+    final joinCode = _callClient.lastJoinResultCode;
+    if (joinCode != null && joinCode != 0) {
+      return joinCode;
+    }
+    return direct ?? engineCode ?? joinCode;
+  }
+
   Future<void> _handleEnd(DmCallSession session) async {
     await _terminateCall(session);
     if (!mounted) return;
@@ -152,10 +168,22 @@ class _DmCallPageState extends State<DmCallPage> {
       _showAgoraErrorSnackBar(_permissionErrorMessage(err));
     } on AgoraCallException catch (err, stack) {
       _logError(err, stack);
+      final errorCode = _resolveAgoraErrorCode(err);
+      if (errorCode != null && errorCode != 0) {
+        debugPrint(
+          'DM CALL ACCEPT FAILED: agoraError=$errorCode, message=${err.message}',
+        );
+      }
       _showAgoraErrorSnackBar(err.message);
     } catch (err, stack) {
       _logError(err, stack);
-      _showOperationFailedSnackBar('تعذر قبول المكالمة، حاول مرة أخرى.');
+      final errorCode = _resolveAgoraErrorCode();
+      if (errorCode != null && errorCode != 0) {
+        debugPrint(
+          'DM CALL ACCEPT FAILED: agoraError=$errorCode, message=$err',
+        );
+        _showOperationFailedSnackBar('تعذر قبول المكالمة، حاول مرة أخرى.');
+      }
     }
   }
 
