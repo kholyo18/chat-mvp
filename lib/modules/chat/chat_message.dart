@@ -52,6 +52,9 @@ class ChatMessage {
     required this.senderId,
     required this.type,
     required this.createdAt,
+    this.sentAt,
+    this.deliveredAt,
+    this.seenAt,
     this.text,
     this.mediaUrl,
     this.mediaThumbUrl,
@@ -68,8 +71,20 @@ class ChatMessage {
     cf.QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final data = doc.data();
-    return ChatMessage(
+    return ChatMessage.fromMap(
+      data,
       id: doc.id,
+      reference: doc.reference,
+    );
+  }
+
+  factory ChatMessage.fromMap(
+    Map<String, dynamic> data, {
+    required String id,
+    cf.DocumentReference<Map<String, dynamic>>? reference,
+  }) {
+    return ChatMessage(
+      id: id,
       senderId: (data['from'] ?? data['senderId'] ?? '') as String,
       type: ChatMessageTypeParser.fromValue(data['type'] as String?),
       text: (data['text'] as String?)?.trim(),
@@ -90,14 +105,40 @@ class ChatMessage {
             )
           : const <String, dynamic>{},
       createdAt: _parseTimestamp(data['createdAt']),
-      reference: doc.reference,
+      sentAt: _parseTimestamp(data['sentAt']),
+      deliveredAt: _parseTimestamp(data['deliveredAt']),
+      seenAt: _parseTimestamp(data['seenAt']),
+      reference: reference,
     );
+  }
+
+  Map<String, Object?> toFirestore() {
+    return <String, Object?>{
+      'from': senderId,
+      'type': type.value,
+      'text': text,
+      'mediaUrl': mediaUrl,
+      'mediaThumbUrl': mediaThumbUrl,
+      'replyToMessageId': replyToMessageId,
+      'forwardedFromThreadId': forwardFromThreadId,
+      'status': status,
+      'deletedFor': deletedFor,
+      'deletedForEveryone': deletedForEveryone,
+      'metadata': metadata,
+      'createdAt': createdAt,
+      'sentAt': sentAt,
+      'deliveredAt': deliveredAt,
+      'seenAt': seenAt,
+    }..removeWhere((_, value) => value == null);
   }
 
   final String id;
   final String senderId;
   final ChatMessageType type;
   final DateTime? createdAt;
+  final DateTime? sentAt;
+  final DateTime? deliveredAt;
+  final DateTime? seenAt;
   final String? text;
   final String? mediaUrl;
   final String? mediaThumbUrl;

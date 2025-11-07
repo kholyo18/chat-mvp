@@ -5,10 +5,12 @@ import 'dart:ui' as ui;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../modules/privacy/privacy_controller.dart';
 import '../../services/firestore_service.dart';
@@ -249,11 +251,39 @@ class _MessagesList extends StatefulWidget {
 
 class _MessagesListState extends State<_MessagesList> {
   final ScrollController _scrollController = ScrollController();
+  List<String> _knownMessageIds = <String>[];
+  bool _initialLoadDone = false;
+  Set<String> _lastSeenRequestIds = <String>{};
 
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  bool _setsAreEqual(Set<String> a, Set<String> b) {
+    if (identical(a, b)) {
+      return true;
+    }
+    if (a.length != b.length) {
+      return false;
+    }
+    for (final value in a) {
+      if (!b.contains(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<void> _playReceiveFeedback() async {
+    try {
+      await SystemSound.play(SystemSoundType.click);
+    } catch (err) {
+      if (kDebugMode) {
+        debugPrint('Receive sound failed: $err');
+      }
+    }
   }
 
   @override
@@ -273,11 +303,48 @@ class _MessagesListState extends State<_MessagesList> {
           (a, b) => (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
               .compareTo(b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)),
         );
-        if (me != null && messages.isNotEmpty) {
+        final currentIds = messages.map((m) => m.id).toList();
+        final previousIds = _knownMessageIds.toSet();
+        final newMessages = messages.where((m) => !previousIds.contains(m.id)).toList();
+        final undelivered = me == null
+            ? const <ChatMessage>[]
+            : messages
+                .where((m) => m.senderId != me && m.deliveredAt == null)
+                .toList();
+        final unseenIds = me == null
+            ? <String>{}
+            : messages
+                .where((m) => m.senderId != me && m.seenAt == null)
+                .map((m) => m.id)
+                .toSet();
+        final wasInitialLoad = !_initialLoadDone;
+        if (me != null && undelivered.isNotEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            controller.markMessagesAsSeen(messages);
+            unawaited(controller.markMessagesAsDelivered(undelivered));
           });
         }
+        if (me != null) {
+          if (unseenIds.isNotEmpty && !_setsAreEqual(unseenIds, _lastSeenRequestIds)) {
+            _lastSeenRequestIds = Set<String>.from(unseenIds);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              unawaited(controller.markMessagesAsSeen(me));
+            });
+          } else if (unseenIds.isEmpty && _lastSeenRequestIds.isNotEmpty) {
+            _lastSeenRequestIds = <String>{};
+          }
+        }
+        if (!wasInitialLoad && me != null) {
+          final newIncoming = newMessages.where((m) => m.senderId != me).toList();
+          if (newIncoming.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              unawaited(_playReceiveFeedback());
+            });
+          }
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _knownMessageIds = currentIds;
+          _initialLoadDone = true;
+        });
         final entries = _buildEntries(messages);
         return ListView.builder(
           controller: _scrollController,
@@ -286,29 +353,45 @@ class _MessagesListState extends State<_MessagesList> {
           itemCount: entries.length,
           itemBuilder: (context, index) {
             final entry = entries[entries.length - 1 - index];
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (entry.dateLabel != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surfaceVariant,
-                          borderRadius: BorderRadius.circular(12),
+            return AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, animation) {
+                final offsetAnimation = Tween<Offset>(
+                  begin: const Offset(0, 0.15),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut));
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(position: offsetAnimation, child: child),
+                );
+              },
+              child: Column(
+                key: ValueKey<String>(entry.message.id),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (entry.dateLabel != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surfaceVariant,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(entry.dateLabel!,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                         ),
-                        child: Text(entry.dateLabel!,
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
-                                ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                       ),
                     ),
-                  ),
-                _MessageBubble(message: entry.message, isMine: entry.message.senderId == me),
-              ],
+                  _MessageBubble(message: entry.message, isMine: entry.message.senderId == me),
+                ],
+              ),
             );
           },
         );
@@ -357,6 +440,8 @@ class _MessageEntry {
   final String? dateLabel;
 }
 
+enum _DeliveryState { none, sent, delivered, seen }
+
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message, required this.isMine});
 
@@ -377,9 +462,12 @@ class _MessageBubble extends StatelessWidget {
       bottomLeft: Radius.circular(isMine ? 18 : 6),
       bottomRight: Radius.circular(isMine ? 6 : 18),
     );
-    final createdAt = message.createdAt ?? DateTime.now();
-    final time = DateFormat('HH:mm').format(createdAt);
+    final timestamp = message.sentAt ?? message.createdAt ?? DateTime.now();
+    final time = DateFormat('HH:mm').format(timestamp);
     final translated = controller.translatedTextFor(message.id);
+    final deliveryState = _deliveryStateFor(message);
+    final statusIcon = _iconForDeliveryState(deliveryState);
+    final statusColor = _statusColorForDeliveryState(theme, deliveryState);
     Widget content;
 
     if (message.deletedForEveryone) {
@@ -396,10 +484,20 @@ class _MessageBubble extends StatelessWidget {
           );
           break;
         case ChatMessageType.image:
-          content = _MediaPreview(url: message.mediaUrl, isVideo: false);
+          content = _MediaPreview(
+            messageId: message.id,
+            url: message.mediaUrl,
+            thumbnailUrl: message.mediaThumbUrl,
+            isVideo: false,
+          );
           break;
         case ChatMessageType.video:
-          content = _MediaPreview(url: message.mediaUrl, isVideo: true);
+          content = _MediaPreview(
+            messageId: message.id,
+            url: message.mediaUrl,
+            thumbnailUrl: message.mediaThumbUrl,
+            isVideo: true,
+          );
           break;
         case ChatMessageType.audio:
           content = _AudioMessageBubble(
@@ -476,22 +574,26 @@ class _MessageBubble extends StatelessWidget {
                     ),
                   ),
                 ),
+              const SizedBox(height: 6),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const SizedBox(width: 8),
                   Text(
                     time,
                     style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 11),
                   ),
                   if (isMine)
                     Padding(
-                      padding: const EdgeInsets.only(right: 4, left: 2),
-                      child: Icon(
-                        _statusIcon(message.status),
-                        size: 16,
-                        color: _statusColor(context, message.status),
+                      padding: const EdgeInsetsDirectional.only(start: 4),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child: Icon(
+                          statusIcon,
+                          key: ValueKey<_DeliveryState>(deliveryState),
+                          size: 16,
+                          color: statusColor,
+                        ),
                       ),
                     ),
                 ],
@@ -534,23 +636,45 @@ class _MessageBubble extends StatelessWidget {
     }
   }
 
-  IconData _statusIcon(String? status) {
-    switch (status) {
-      case 'seen':
+  _DeliveryState _deliveryStateFor(ChatMessage message) {
+    final normalized = message.status?.toLowerCase();
+    if (message.seenAt != null || normalized == 'seen') {
+      return _DeliveryState.seen;
+    }
+    if (message.deliveredAt != null || normalized == 'delivered') {
+      return _DeliveryState.delivered;
+    }
+    if (message.sentAt != null || normalized == 'sent') {
+      return _DeliveryState.sent;
+    }
+    return _DeliveryState.none;
+  }
+
+  IconData _iconForDeliveryState(_DeliveryState state) {
+    switch (state) {
+      case _DeliveryState.seen:
+      case _DeliveryState.delivered:
         return Icons.done_all_rounded;
-      case 'delivered':
-        return Icons.done_all_rounded;
-      case 'sent':
-      default:
-        return Icons.done_rounded;
+      case _DeliveryState.sent:
+      case _DeliveryState.none:
+        return Icons.check_rounded;
     }
   }
 
-  Color _statusColor(BuildContext context, String? status) {
-    if (status == 'seen') {
-      return Theme.of(context).colorScheme.secondary;
+  Color _statusColorForDeliveryState(ThemeData theme, _DeliveryState state) {
+    final onBubble = isMine
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurfaceVariant;
+    switch (state) {
+      case _DeliveryState.seen:
+        final accent = theme.colorScheme.secondary;
+        return accent;
+      case _DeliveryState.delivered:
+        return onBubble.withOpacity(0.8);
+      case _DeliveryState.sent:
+      case _DeliveryState.none:
+        return onBubble.withOpacity(0.6);
     }
-    return Theme.of(context).colorScheme.onPrimary.withOpacity(isMine ? 0.9 : 0.7);
   }
 }
 
@@ -991,40 +1115,297 @@ class _ComposerState extends State<_Composer> {
 }
 
 class _MediaPreview extends StatelessWidget {
-  const _MediaPreview({required this.url, required this.isVideo});
+  const _MediaPreview({
+    required this.messageId,
+    required this.url,
+    this.thumbnailUrl,
+    required this.isVideo,
+  });
 
+  final String messageId;
   final String? url;
+  final String? thumbnailUrl;
   final bool isVideo;
 
   @override
   Widget build(BuildContext context) {
     if (url == null || url!.isEmpty) {
-      return const Text('لا يمكن عرض الملف');
+      return Text(
+        'لا يمكن عرض الملف',
+        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6)),
+      );
     }
-    final border = BorderRadius.circular(16);
-    return ClipRRect(
-      borderRadius: border,
+    final heroTag = 'chat-media-$messageId';
+    final border = BorderRadius.circular(18);
+    final previewUrl = (thumbnailUrl?.isNotEmpty ?? false) ? thumbnailUrl! : url!;
+    final aspectRatio = isVideo ? 16 / 9 : 4 / 5;
+    return GestureDetector(
+      onTap: () => _openViewer(context, heroTag),
+      child: Hero(
+        tag: heroTag,
+        child: ClipRRect(
+          borderRadius: border,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              AspectRatio(
+                aspectRatio: aspectRatio,
+                child: CachedNetworkImage(
+                  imageUrl: previewUrl,
+                  fit: BoxFit.cover,
+                  placeholder: (context, _) =>
+                      Container(color: Theme.of(context).colorScheme.surfaceVariant),
+                  errorWidget: (context, _, __) => Container(
+                    color: Theme.of(context).colorScheme.surfaceVariant,
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.broken_image, color: Colors.white70, size: 36),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Colors.black.withOpacity(isVideo ? 0.35 : 0.15),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (isVideo)
+                Container(
+                  decoration: const BoxDecoration(
+                    color: Colors.black45,
+                    shape: BoxShape.circle,
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  child: const Icon(Icons.play_arrow_rounded, size: 36, color: Colors.white),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openViewer(BuildContext context, String heroTag) {
+    final mediaUrl = url;
+    if (mediaUrl == null || mediaUrl.isEmpty) {
+      return;
+    }
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black.withOpacity(0.9),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return FadeTransition(
+            opacity: animation,
+            child: _MediaViewerPage(
+              url: mediaUrl,
+              heroTag: heroTag,
+              isVideo: isVideo,
+              thumbnailUrl: thumbnailUrl,
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MediaViewerPage extends StatelessWidget {
+  const _MediaViewerPage({
+    required this.url,
+    required this.heroTag,
+    required this.isVideo,
+    this.thumbnailUrl,
+  });
+
+  final String url;
+  final String heroTag;
+  final bool isVideo;
+  final String? thumbnailUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Center(
+            child: Hero(
+              tag: heroTag,
+              child: isVideo
+                  ? _VideoPlayerView(url: url, thumbnailUrl: thumbnailUrl)
+                  : InteractiveViewer(
+                      maxScale: 4,
+                      child: CachedNetworkImage(
+                        imageUrl: url,
+                        fit: BoxFit.contain,
+                        placeholder: (context, _) => const Center(
+                          child: CircularProgressIndicator(color: Colors.white70),
+                        ),
+                        errorWidget: (context, _, __) => const Icon(
+                          Icons.broken_image_outlined,
+                          color: Colors.white54,
+                          size: 72,
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+          PositionedDirectional(
+            top: mediaQuery.padding.top + 12,
+            start: 12,
+            child: IconButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(Icons.close_rounded, color: Colors.white),
+              tooltip: 'إغلاق',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VideoPlayerView extends StatefulWidget {
+  const _VideoPlayerView({required this.url, this.thumbnailUrl});
+
+  final String url;
+  final String? thumbnailUrl;
+
+  @override
+  State<_VideoPlayerView> createState() => _VideoPlayerViewState();
+}
+
+class _VideoPlayerViewState extends State<_VideoPlayerView> {
+  late final VideoPlayerController _controller;
+  Future<void>? _initialization;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.network(widget.url);
+    _initialization = _controller.initialize().then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      _controller
+        ..setLooping(true)
+        ..play();
+    }).catchError((Object error, StackTrace stack) {
+      if (kDebugMode) {
+        debugPrint('Failed to initialize video: $error');
+      }
+      if (mounted) {
+        setState(() {
+          _error = error;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return _buildPlaceholder(
+        const Icon(Icons.error_outline, color: Colors.white70, size: 48),
+      );
+    }
+    return FutureBuilder<void>(
+      future: _initialization,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return _buildPlaceholder(
+            const SizedBox(
+              width: 48,
+              height: 48,
+              child: CircularProgressIndicator(color: Colors.white70),
+            ),
+          );
+        }
+        return ValueListenableBuilder<VideoPlayerValue>(
+          valueListenable: _controller,
+          builder: (context, value, child) {
+            final aspect = value.aspectRatio == 0 ? 16 / 9 : value.aspectRatio;
+            return GestureDetector(
+              onTap: () {
+                if (value.isPlaying) {
+                  _controller.pause();
+                } else {
+                  _controller.play();
+                }
+              },
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  AspectRatio(
+                    aspectRatio: aspect,
+                    child: VideoPlayer(_controller),
+                  ),
+                  AnimatedOpacity(
+                    opacity: value.isPlaying ? 0 : 1,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(
+                      Icons.play_circle_fill,
+                      color: Colors.white70,
+                      size: 72,
+                    ),
+                  ),
+                  PositionedDirectional(
+                    bottom: 16,
+                    start: 24,
+                    end: 24,
+                    child: VideoProgressIndicator(
+                      _controller,
+                      allowScrubbing: true,
+                      colors: const VideoProgressColors(
+                        backgroundColor: Colors.white24,
+                        bufferedColor: Colors.white38,
+                        playedColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildPlaceholder(Widget child) {
+    final previewUrl = widget.thumbnailUrl;
+    return AspectRatio(
+      aspectRatio: 16 / 9,
       child: Stack(
         alignment: Alignment.center,
         children: [
-          AspectRatio(
-            aspectRatio: 4 / 3,
-            child: CachedNetworkImage(
-              imageUrl: url!,
+          if (previewUrl != null && previewUrl.isNotEmpty)
+            CachedNetworkImage(
+              imageUrl: previewUrl,
               fit: BoxFit.cover,
-              placeholder: (context, _) =>
-                  Container(color: Theme.of(context).colorScheme.surfaceVariant),
-              errorWidget: (context, _, __) => const Icon(Icons.broken_image),
-            ),
-          ),
-          if (isVideo)
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                borderRadius: border,
-              ),
-              child: const Icon(Icons.play_circle_fill, size: 48, color: Colors.white),
-            ),
+              placeholder: (context, _) => Container(color: Colors.black26),
+              errorWidget: (context, _, __) => Container(color: Colors.black26),
+            )
+          else
+            Container(color: Colors.black26),
+          child,
         ],
       ),
     );
