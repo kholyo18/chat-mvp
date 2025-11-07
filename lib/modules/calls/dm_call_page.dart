@@ -18,14 +18,12 @@ class DmCallPage extends StatefulWidget {
     required this.session,
     this.onAnswerIncomingCall,
     this.onDeclineIncomingCall,
-    required this.onEnsureActiveCall,
     required this.onTerminateCall,
   });
 
   final DmCallSession session;
   final Future<void> Function(DmCallSession session)? onAnswerIncomingCall;
   final Future<void> Function(DmCallSession session)? onDeclineIncomingCall;
-  final Future<void> Function(DmCallSession session) onEnsureActiveCall;
   final DmCallTerminateCallback onTerminateCall;
 
   @override
@@ -45,6 +43,8 @@ class _DmCallPageState extends State<DmCallPage> {
     super.initState();
     _callRef = cf.FirebaseFirestore.instance.collection('calls').doc(widget.session.callId);
     _callSub = _callRef.snapshots().listen(_handleSnapshot, onError: _logError);
+    _latestSession = widget.session;
+    _maybeStartAgora(widget.session);
   }
 
   @override
@@ -116,21 +116,33 @@ class _DmCallPageState extends State<DmCallPage> {
     );
   }
 
-  void _ensureAgoraSession(DmCallSession session) {
-    final status = session.status.toLowerCase();
-    if (status != 'active' && status != 'in-progress') {
+  void _maybeStartAgora(DmCallSession session) {
+    final shouldJoin = session.isActiveForCurrentUser;
+    if (!shouldJoin) {
       return;
     }
     if (_joiningAgora) {
       return;
     }
+    final currentChannel = _callClient.currentChannelId;
+    if (_callClient.isJoined && currentChannel == session.channelId) {
+      return;
+    }
     _joiningAgora = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
-        await widget.onEnsureActiveCall(session);
+        await _callClient.startCall(
+          channelId: session.channelId,
+          isVideo: session.type == DmCallType.video,
+        );
       } on AgoraPermissionException {
         if (mounted) {
           _showAgoraErrorSnackBar('يرجى منح صلاحيات الميكروفون/الكاميرا للمكالمة.');
+        }
+      } on AgoraCallException catch (err, stack) {
+        _logError(err, stack);
+        if (mounted) {
+          _showAgoraErrorSnackBar('تعذر الاتصال بالمكالمة. حاول مرة أخرى.');
         }
       } catch (err, stack) {
         _logError(err, stack);
@@ -238,7 +250,7 @@ class _DmCallPageState extends State<DmCallPage> {
               status: status,
             );
             _latestSession = session;
-            _ensureAgoraSession(session);
+            _maybeStartAgora(session);
             return _CallContent(
               session: session,
               callClient: _callClient,
