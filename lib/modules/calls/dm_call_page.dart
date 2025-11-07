@@ -37,6 +37,7 @@ class _DmCallPageState extends State<DmCallPage> {
   bool _endedLocally = false;
   final AgoraCallClient _callClient = AgoraCallClient.instance;
   DmCallSession? _latestSession;
+  bool _isProcessingJoin = false;
 
   @override
   void initState() {
@@ -162,6 +163,14 @@ class _DmCallPageState extends State<DmCallPage> {
     if (callback == null) {
       return;
     }
+    if (_isProcessingJoin) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _isProcessingJoin = true;
+      });
+    }
     try {
       await callback(session);
     } on AgoraPermissionException catch (err) {
@@ -183,6 +192,14 @@ class _DmCallPageState extends State<DmCallPage> {
           'DM CALL ACCEPT FAILED: agoraError=$errorCode, message=$err',
         );
         _showOperationFailedSnackBar('تعذر قبول المكالمة، حاول مرة أخرى.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessingJoin = false;
+        });
+      } else {
+        _isProcessingJoin = false;
       }
     }
   }
@@ -278,6 +295,7 @@ class _DmCallPageState extends State<DmCallPage> {
               onSwitchCamera: session.type == DmCallType.video
                   ? () => unawaited(_handleSwitchCamera())
                   : null,
+              isProcessingAccept: _isProcessingJoin,
             );
           },
         ),
@@ -324,6 +342,7 @@ class _CallContent extends StatelessWidget {
     this.onToggleMute,
     this.onToggleSpeaker,
     this.onSwitchCamera,
+    this.isProcessingAccept = false,
   });
 
   final DmCallSession session;
@@ -334,6 +353,7 @@ class _CallContent extends StatelessWidget {
   final VoidCallback? onToggleMute;
   final VoidCallback? onToggleSpeaker;
   final VoidCallback? onSwitchCamera;
+  final bool isProcessingAccept;
 
   @override
   Widget build(BuildContext context) {
@@ -342,6 +362,7 @@ class _CallContent extends StatelessWidget {
         session: session,
         onAccept: onAccept!,
         onDecline: onDecline!,
+        isProcessingAccept: isProcessingAccept,
       );
     }
     return _ActiveCallView(
@@ -644,11 +665,13 @@ class _IncomingCallView extends StatelessWidget {
     required this.session,
     required this.onAccept,
     required this.onDecline,
+    this.isProcessingAccept = false,
   });
 
   final DmCallSession session;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
+  final bool isProcessingAccept;
 
   @override
   Widget build(BuildContext context) {
@@ -704,13 +727,14 @@ class _IncomingCallView extends StatelessWidget {
                   background: Colors.redAccent,
                   icon: Icons.call_end_rounded,
                   label: 'رفض',
-                  onPressed: onDecline,
+                  onPressed: isProcessingAccept ? null : onDecline,
                 ),
                 _IncomingActionButton(
                   background: Colors.greenAccent,
                   icon: Icons.call_rounded,
                   label: 'قبول',
-                  onPressed: onAccept,
+                  onPressed: isProcessingAccept ? null : onAccept,
+                  isLoading: isProcessingAccept,
                 ),
               ],
             ),
@@ -726,25 +750,36 @@ class _IncomingActionButton extends StatelessWidget {
     required this.background,
     required this.icon,
     required this.label,
-    required this.onPressed,
+    this.onPressed,
+    this.isLoading = false,
   });
 
   final Color background;
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         RawMaterialButton(
-          onPressed: onPressed,
+          onPressed: isLoading ? null : onPressed,
           elevation: 0,
           fillColor: background,
           padding: const EdgeInsets.all(22),
           shape: const CircleBorder(),
-          child: Icon(icon, color: Colors.white, size: 32),
+          child: isLoading
+              ? const SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                )
+              : Icon(icon, color: Colors.white, size: 32),
         ),
         const SizedBox(height: 12),
         Text(

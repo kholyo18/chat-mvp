@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../config/agora_config.dart';
 import '../../models/user_profile.dart';
 import 'agora_call_client.dart';
 import 'dm_call_models.dart';
@@ -110,8 +111,7 @@ class DmCallService {
                   : 'أنت')),
       'avatarUrl': currentUser.photoURL,
       'role': 'caller',
-      'state': 'joined',
-      'joinedAt': now,
+      'state': 'joining',
     };
 
     final calleeParticipant = <String, dynamic>{
@@ -146,6 +146,7 @@ class DmCallService {
           currentUser.uid: callerAgoraUid,
           otherUserId: calleeAgoraUid,
         },
+        if (AgoraConfig.token != null) 'token': AgoraConfig.token,
       },
     };
 
@@ -155,11 +156,16 @@ class DmCallService {
       debugPrint(
         'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
       );
-      if (type == DmCallType.video) {
-        await _agoraClient.joinVideoChannel(channelId: channelId);
-      } else {
-        await _agoraClient.joinVoiceChannel(channelId: channelId);
-      }
+      await _agoraClient.joinDmCall(
+        channelId: channelId,
+        token: AgoraConfig.token,
+        uid: callerAgoraUid,
+        isVideo: type == DmCallType.video,
+      );
+      await callRef.update(<String, dynamic>{
+        'participants.${currentUser.uid}.state': 'joined',
+        'participants.${currentUser.uid}.joinedAt': cf.FieldValue.serverTimestamp(),
+      });
     } catch (error, stack) {
       debugPrint('DmCallService: Failed to join Agora for call ${callRef.id}: $error');
       FlutterError.reportError(
@@ -201,6 +207,7 @@ class DmCallService {
       initiatorId: currentUser.uid,
       participants: participants,
       status: 'ringing',
+      agoraToken: AgoraConfig.token,
     );
 
     final nav = navigator;
@@ -368,13 +375,18 @@ class DmCallService {
       return null;
     }
     String channelId = (data['channelId'] as String?) ?? '';
-    if (channelId.isEmpty) {
-      final agoraRaw = data['agora'];
-      if (agoraRaw is Map<String, dynamic>) {
-        final nestedId = agoraRaw['channelId'];
-        if (nestedId is String && nestedId.isNotEmpty) {
-          channelId = nestedId;
-        }
+    final dynamic agoraData = data['agora'];
+    if (channelId.isEmpty && agoraData is Map<String, dynamic>) {
+      final nestedId = agoraData['channelId'];
+      if (nestedId is String && nestedId.isNotEmpty) {
+        channelId = nestedId;
+      }
+    }
+    String? agoraToken;
+    if (agoraData is Map<String, dynamic>) {
+      final tokenValue = agoraData['token'];
+      if (tokenValue is String && tokenValue.trim().isNotEmpty) {
+        agoraToken = tokenValue.trim();
       }
     }
     if (channelId.isEmpty) {
@@ -388,6 +400,7 @@ class DmCallService {
       initiatorId: (data['initiator'] as String?) ?? '',
       participants: participants,
       status: (data['status'] as String?) ?? 'ringing',
+      agoraToken: agoraToken,
     );
   }
 
@@ -427,24 +440,30 @@ class DmCallService {
     }
     final callRef = _firestore.collection('calls').doc(call.callId);
     final shouldActivate = call.status != 'active';
-    final payload = <String, dynamic>{
-      'participants.$uid.state': 'joined',
-      'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
+    final preJoinPayload = <String, dynamic>{
+      'participants.$uid.state': 'joining',
       'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
     };
-    if (shouldActivate) {
-      payload['status'] = 'active';
-    }
-    await callRef.update(payload);
+    await callRef.update(preJoinPayload);
     try {
       debugPrint(
         'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId} (localUid=$localAgoraUid)',
       );
-      if (call.type == DmCallType.video) {
-        await _agoraClient.joinVideoChannel(channelId: call.channelId);
-      } else {
-        await _agoraClient.joinVoiceChannel(channelId: call.channelId);
+      final token = call.agoraToken ?? AgoraConfig.token;
+      await _agoraClient.joinDmCall(
+        channelId: call.channelId,
+        token: token,
+        uid: localAgoraUid,
+        isVideo: call.type == DmCallType.video,
+      );
+      final postJoinPayload = <String, dynamic>{
+        'participants.$uid.state': 'joined',
+        'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
+      };
+      if (shouldActivate) {
+        postJoinPayload['status'] = 'active';
       }
+      await callRef.update(postJoinPayload);
     } catch (error) {
       final revert = <String, dynamic>{
         'participants.$uid.state': 'ringing',
@@ -514,7 +533,7 @@ class DmCallService {
 
   Future<void> _teardownAgora(String _) async {
     try {
-      await _agoraClient.leaveCall();
+      await _agoraClient.leaveCurrentCall();
     } catch (err, stack) {
       debugPrint('DmCallService: Failed to teardown Agora call: $err');
       FlutterError.reportError(

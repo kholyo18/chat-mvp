@@ -53,6 +53,7 @@ class DmCallSession {
     required this.initiatorId,
     required this.participants,
     this.status = 'ringing',
+    this.agoraToken,
   });
 
   final String callId;
@@ -62,10 +63,12 @@ class DmCallSession {
   final String initiatorId;
   final List<DmCallParticipant> participants;
   final String status;
+  final String? agoraToken;
 
   DmCallSession copyWith({
     List<DmCallParticipant>? participants,
     String? status,
+    String? agoraToken,
   }) {
     return DmCallSession(
       callId: callId,
@@ -75,6 +78,7 @@ class DmCallSession {
       initiatorId: initiatorId,
       participants: participants ?? this.participants,
       status: status ?? this.status,
+      agoraToken: agoraToken ?? this.agoraToken,
     );
   }
 
