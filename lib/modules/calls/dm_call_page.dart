@@ -1,7 +1,6 @@
 import 'dart:async';
 
-import 'package:agora_rtc_engine/rtc_local_view.dart' as rtc_local_view;
-import 'package:agora_rtc_engine/rtc_remote_view.dart' as rtc_remote_view;
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:flutter/material.dart';
 
@@ -512,24 +511,7 @@ class _VideoCallBody extends StatelessWidget {
                 ValueListenableBuilder<Set<int>>(
                   valueListenable: callClient.remoteUserIds,
                   builder: (context, remoteUsers, _) {
-                    final remoteUid = remoteUsers.isNotEmpty ? remoteUsers.first : null;
-                    if (remoteUid != null) {
-                      return rtc_remote_view.SurfaceView(
-                        channelId: session.channelId,
-                        uid: remoteUid,
-                      );
-                    }
-                    return Container(
-                      color: Colors.black87,
-                      alignment: Alignment.center,
-                      child: Text(
-                        'بانتظار انضمام الطرف الآخر…',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: Colors.white70,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    );
+                    return _buildRemoteVideo(remoteUsers, theme);
                   },
                 ),
                 PositionedDirectional(
@@ -541,7 +523,7 @@ class _VideoCallBody extends StatelessWidget {
                       width: 120,
                       height: 160,
                       color: Colors.black54,
-                      child: rtc_local_view.SurfaceView(),
+                      child: _buildLocalVideo(),
                     ),
                   ),
                 ),
@@ -565,6 +547,51 @@ class _VideoCallBody extends StatelessWidget {
           textAlign: TextAlign.center,
         ),
       ],
+    );
+  }
+
+  Widget _buildRemoteVideo(Set<int> remoteUsers, ThemeData theme) {
+    final engine = callClient.maybeEngine;
+    if (engine == null) {
+      return _buildWaitingForRemote(theme);
+    }
+    final remoteUid = remoteUsers.isNotEmpty ? remoteUsers.first : null;
+    if (remoteUid == null) {
+      return _buildWaitingForRemote(theme);
+    }
+    return AgoraVideoView(
+      controller: VideoViewController.remote(
+        rtcEngine: engine,
+        canvas: VideoCanvas(uid: remoteUid),
+        connection: RtcConnection(channelId: session.channelId),
+      ),
+    );
+  }
+
+  Widget _buildLocalVideo() {
+    final engine = callClient.maybeEngine;
+    if (engine == null) {
+      return const SizedBox.expand();
+    }
+    return AgoraVideoView(
+      controller: VideoViewController(
+        rtcEngine: engine,
+        canvas: const VideoCanvas(uid: 0),
+      ),
+    );
+  }
+
+  Widget _buildWaitingForRemote(ThemeData theme) {
+    return Container(
+      color: Colors.black87,
+      alignment: Alignment.center,
+      child: Text(
+        'بانتظار انضمام الطرف الآخر…',
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: Colors.white70,
+        ),
+        textAlign: TextAlign.center,
+      ),
     );
   }
 }
