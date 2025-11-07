@@ -82,8 +82,9 @@ class DmCallService {
 
     final callRef = _firestore.collection('calls').doc();
     final now = cf.FieldValue.serverTimestamp();
-    final sanitizedThreadId = threadId.isNotEmpty ? threadId : callRef.id;
-    final channelId = 'dm_$sanitizedThreadId';
+    final channelId = 'dm_call_${callRef.id}';
+    final callerAgoraUid = _agoraClient.agoraUidForUser(currentUser.uid);
+    final calleeAgoraUid = _agoraClient.agoraUidForUser(otherUserId);
 
     UserProfile? otherProfile;
     try {
@@ -139,13 +140,20 @@ class DmCallService {
         currentUser.uid: callerParticipant,
         otherUserId: calleeParticipant,
       },
+      'agora': <String, dynamic>{
+        'channelId': channelId,
+        'uids': <String, int>{
+          currentUser.uid: callerAgoraUid,
+          otherUserId: calleeAgoraUid,
+        },
+      },
     };
 
     await callRef.set(callPayload);
 
     try {
       debugPrint(
-        'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id})',
+        'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
       );
       if (type == DmCallType.video) {
         await _agoraClient.joinVideoChannel(channelId: channelId);
@@ -359,10 +367,23 @@ class DmCallService {
     if (participants.isEmpty) {
       return null;
     }
+    String channelId = (data['channelId'] as String?) ?? '';
+    if (channelId.isEmpty) {
+      final agoraRaw = data['agora'];
+      if (agoraRaw is Map<String, dynamic>) {
+        final nestedId = agoraRaw['channelId'];
+        if (nestedId is String && nestedId.isNotEmpty) {
+          channelId = nestedId;
+        }
+      }
+    }
+    if (channelId.isEmpty) {
+      channelId = callId;
+    }
     return DmCallSession(
       callId: callId,
       threadId: (data['threadId'] as String?) ?? callId,
-      channelId: (data['channelId'] as String?) ?? callId,
+      channelId: channelId,
       type: type,
       initiatorId: (data['initiator'] as String?) ?? '',
       participants: participants,
@@ -400,6 +421,10 @@ class DmCallService {
     if (uid == null) {
       throw StateError('User must be signed in to answer calls');
     }
+    final localAgoraUid = _agoraClient.agoraUidForUser(uid);
+    if (call.channelId.isEmpty) {
+      throw StateError('Call channelId is missing');
+    }
     final callRef = _firestore.collection('calls').doc(call.callId);
     final shouldActivate = call.status != 'active';
     final payload = <String, dynamic>{
@@ -413,7 +438,7 @@ class DmCallService {
     await callRef.update(payload);
     try {
       debugPrint(
-        'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId}',
+        'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId} (localUid=$localAgoraUid)',
       );
       if (call.type == DmCallType.video) {
         await _agoraClient.joinVideoChannel(channelId: call.channelId);
