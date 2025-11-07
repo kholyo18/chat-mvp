@@ -50,6 +50,7 @@ class AgoraCallClient {
   RtcEngine? _engine;
   bool _isInitialized = false;
   bool _isJoined = false;
+  bool _isJoining = false;
   bool _isVideoCall = false;
   String? _currentChannelId;
 
@@ -73,6 +74,8 @@ class AgoraCallClient {
 
   RtcEngine? get maybeEngine => _engine;
 
+  Future<void> init() => initializeIfNeeded();
+
   RtcEngine _requireEngine() {
     final engine = _engine;
     if (engine == null) {
@@ -81,10 +84,20 @@ class AgoraCallClient {
     return engine;
   }
 
+  void _validateAppId() {
+    final appId = AgoraConfig.appId.trim();
+    if (appId.isEmpty || appId == 'YOUR_AGORA_APP_ID') {
+      throw AgoraCallException(
+        'إعدادات الاتصال غير مكتملة. يرجى التحقق من App ID الخاص بخدمة Agora.',
+      );
+    }
+  }
+
   Future<void> initializeIfNeeded() async {
     if (_isInitialized) {
       return;
     }
+    _validateAppId();
     final engine = createAgoraRtcEngine();
     _engine = engine;
     await engine.initialize(
@@ -135,6 +148,18 @@ class AgoraCallClient {
             ),
           );
         },
+        onConnectionStateChanged: (
+          RtcConnection connection,
+          ConnectionStateType state,
+          ConnectionChangedReasonType reason,
+        ) {
+          debugPrint(
+            'AgoraCallClient: Connection state changed to ${state.name} due to ${reason.name} (channel=${connection.channelId})',
+          );
+        },
+        onConnectionLost: (RtcConnection connection) {
+          debugPrint('AgoraCallClient: Connection lost for ${connection.channelId}');
+        },
         onError: (ErrorCodeType error, String message) {
           debugPrint('AgoraCallClient: Engine error $error => $message');
         },
@@ -143,13 +168,47 @@ class AgoraCallClient {
     _isInitialized = true;
   }
 
+  Future<void> joinVoiceChannel({
+    required String channelId,
+  }) async {
+    await _joinChannel(
+      channelId: channelId,
+      isVideo: false,
+    );
+  }
+
+  Future<void> joinVideoChannel({
+    required String channelId,
+  }) async {
+    await _joinChannel(
+      channelId: channelId,
+      isVideo: true,
+    );
+  }
+
+  @visibleForTesting
   Future<void> startCall({
+    required String channelId,
+    required bool isVideo,
+  }) async {
+    await _joinChannel(channelId: channelId, isVideo: isVideo);
+  }
+
+  Future<void> _joinChannel({
     required String channelId,
     required bool isVideo,
   }) async {
     await _ensurePermissions(isVideo: isVideo);
     await initializeIfNeeded();
     final engine = _requireEngine();
+
+    if (_isJoining) {
+      if (_currentChannelId == channelId) {
+        debugPrint('AgoraCallClient: Join already in progress for $channelId');
+        return;
+      }
+      await leaveCall();
+    }
 
     if (_isJoined) {
       if (_currentChannelId == channelId) {
@@ -158,6 +217,8 @@ class AgoraCallClient {
       }
       await leaveCall();
     }
+
+    _isJoining = true;
 
     _isVideoCall = isVideo;
     _currentChannelId = channelId;
@@ -168,8 +229,17 @@ class AgoraCallClient {
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
 
+    await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
+
     if (isVideo) {
       await engine.enableVideo();
+      await engine.setVideoEncoderConfiguration(
+        const VideoEncoderConfiguration(
+          dimensions: VideoDimensions(width: 960, height: 540),
+          frameRate: VideoFrameRate.videoFrameRateFps30,
+          orientationMode: OrientationMode.orientationModeAdaptive,
+        ),
+      );
       await engine.startPreview();
       await engine.setEnableSpeakerphone(true);
       isSpeakerEnabled.value = true;
@@ -181,8 +251,9 @@ class AgoraCallClient {
     }
 
     try {
+      final token = AgoraConfig.token;
       await engine.joinChannel(
-        token: AgoraConfig.token ?? '',
+        token: token,
         channelId: channelId,
         uid: 0,
         options: ChannelMediaOptions(
@@ -198,12 +269,20 @@ class AgoraCallClient {
       _currentChannelId = null;
       _isJoined = false;
       debugPrint('AgoraCallClient: joinChannel failed $error');
-      throw AgoraCallException('Failed to join Agora channel', error);
+      throw AgoraCallException(
+        _localizedMessageForError(error.code),
+        error,
+      );
     } catch (error) {
       _currentChannelId = null;
       _isJoined = false;
       debugPrint('AgoraCallClient: joinChannel threw $error');
-      throw AgoraCallException('Failed to join Agora channel', error);
+      throw AgoraCallException(
+        'تعذر الاتصال بالمكالمة. حاول مرة أخرى.',
+        error,
+      );
+    } finally {
+      _isJoining = false;
     }
   }
 
@@ -227,10 +306,47 @@ class AgoraCallClient {
     _isJoined = false;
     _currentChannelId = null;
     _isVideoCall = false;
+    _isJoining = false;
     isMuted.value = false;
     isSpeakerEnabled.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
+  }
+
+  Future<void> dispose() async {
+    if (_engine == null) {
+      return;
+    }
+    try {
+      await leaveCall();
+    } finally {
+      try {
+        await _engine?.release();
+      } catch (error) {
+        debugPrint('AgoraCallClient: Failed to release engine $error');
+      }
+      _engine = null;
+      _isInitialized = false;
+    }
+  }
+
+  String _localizedMessageForError(ErrorCodeType code) {
+    switch (code) {
+      case ErrorCodeType.errInvalidAppId:
+        return 'معرّف تطبيق Agora غير صالح. يرجى التحقق من الإعدادات.';
+      case ErrorCodeType.errInvalidChannelName:
+        return 'قناة المكالمة غير صالحة. حاول مرة أخرى بعد لحظات.';
+      case ErrorCodeType.errInvalidToken:
+        return 'بيانات المصادقة للمكالمة غير صحيحة. يرجى إعادة المحاولة.';
+      case ErrorCodeType.errJoinChannelRejected:
+        return 'تم رفض الاتصال بالمكالمة. يرجى المحاولة مجددًا.';
+      case ErrorCodeType.errConnectionInterrupted:
+      case ErrorCodeType.errConnectionLost:
+      case ErrorCodeType.errNoNetwork:
+        return 'لا يوجد اتصال بالشبكة. تحقق من الإنترنت ثم حاول مرة أخرى.';
+      default:
+        return 'تعذر الاتصال بالمكالمة. رمز الخطأ: ${code.name}';
+    }
   }
 
   Future<void> toggleMute() async {

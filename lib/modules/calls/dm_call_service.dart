@@ -376,15 +376,41 @@ class DmCallService {
       throw StateError('User must be signed in to answer calls');
     }
     final callRef = _firestore.collection('calls').doc(call.callId);
+    final shouldActivate = call.status != 'active';
     final payload = <String, dynamic>{
       'participants.$uid.state': 'joined',
       'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
       'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
     };
-    if (call.status != 'active') {
+    if (shouldActivate) {
       payload['status'] = 'active';
     }
     await callRef.update(payload);
+    try {
+      if (call.type == DmCallType.video) {
+        await _agoraClient.joinVideoChannel(channelId: call.channelId);
+      } else {
+        await _agoraClient.joinVoiceChannel(channelId: call.channelId);
+      }
+    } catch (error) {
+      final revert = <String, dynamic>{
+        'participants.$uid.state': 'ringing',
+        'participants.$uid.joinedAt': cf.FieldValue.delete(),
+        'ringingTargets': cf.FieldValue.arrayUnion(<String>[uid]),
+      };
+      if (shouldActivate) {
+        revert['status'] = 'ringing';
+      }
+      try {
+        await callRef.update(revert);
+      } catch (updateError, stack) {
+        debugPrint('DmCallService: Failed to revert call state after Agora error: $updateError');
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: updateError, stack: stack),
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<void> declineIncomingCall(DmCallSession call) async {
@@ -485,7 +511,7 @@ class DmCallService {
 
   /// Stops any active listeners used for incoming calls.
   void dispose() {
-    unawaited(_agoraClient.leaveCall());
+    unawaited(_agoraClient.dispose());
     stopListening();
     _navigatorKey = null;
   }
