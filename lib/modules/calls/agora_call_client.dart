@@ -41,9 +41,17 @@ enum AgoraRemoteUserEventType { joined, left }
 
 /// Thin wrapper around [RtcEngine] to manage the DM call lifecycle.
 class AgoraCallClient {
-  AgoraCallClient._();
+  AgoraCallClient._internal();
 
-  static final AgoraCallClient instance = AgoraCallClient._();
+  factory AgoraCallClient() => instance;
+
+  static final AgoraCallClient instance = AgoraCallClient._internal();
+
+  late final RtcEngine _engine;
+  bool _initialized = false;
+  bool _isVideoCall = false;
+  String? _currentChannelId;
+  int? _localUid;
 
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isSpeakerEnabled = ValueNotifier<bool>(false);
@@ -57,24 +65,23 @@ class AgoraCallClient {
   Stream<AgoraRemoteUserEvent> get remoteUserEvents =>
       _remoteUserEventsController.stream;
 
-  RtcEngine? _engine;
-  bool _isVideoCall = false;
-  String? _currentChannelId;
-  int? _localUid;
+  bool get isInitialized => _initialized;
   String? get currentChannelId => _currentChannelId;
 
   bool get isConnected => _currentChannelId != null;
 
-  Future<RtcEngine> _ensureEngineInitialized() async {
-    var engine = _engine;
-    if (engine != null) {
-      return engine;
+  Future<void> initialize({required String appId}) async {
+    if (_initialized) {
+      return;
     }
-    engine = createAgoraRtcEngine();
-    await engine.initialize(
-      RtcEngineContext(appId: AgoraConfig.appId),
+    _engine = createAgoraRtcEngine();
+    await _engine.initialize(
+      RtcEngineContext(
+        appId: appId,
+        channelProfile: ChannelProfileType.channelProfileCommunication,
+      ),
     );
-    engine.registerEventHandler(
+    _engine.registerEventHandler(
       RtcEngineEventHandler(
         onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
           isLocalUserJoined.value = true;
@@ -84,6 +91,8 @@ class AgoraCallClient {
           remoteUserIds.value = <int>{};
           _currentChannelId = null;
           _localUid = null;
+          _isVideoCall = false;
+          isSpeakerEnabled.value = false;
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           final next = <int>{...remoteUserIds.value, remoteUid};
@@ -111,8 +120,18 @@ class AgoraCallClient {
         },
       ),
     );
-    _engine = engine;
-    return engine;
+    _initialized = true;
+  }
+
+  RtcEngine get engine => _requireEngine();
+
+  RtcEngine? get maybeEngine => _initialized ? _engine : null;
+
+  RtcEngine _requireEngine() {
+    if (!_initialized) {
+      throw AgoraCallException('Engine is not initialized');
+    }
+    return _engine;
   }
 
   Future<void> startVoiceCall({
@@ -138,20 +157,14 @@ class AgoraCallClient {
   }
 
   Future<void> toggleMute() async {
-    final engine = _engine;
-    if (engine == null) {
-      throw AgoraCallException('Engine is not initialized');
-    }
+    final engine = _requireEngine();
     final next = !isMuted.value;
     isMuted.value = next;
     await engine.muteLocalAudioStream(next);
   }
 
   Future<void> toggleSpeakerphone() async {
-    final engine = _engine;
-    if (engine == null) {
-      throw AgoraCallException('Engine is not initialized');
-    }
+    final engine = _requireEngine();
     final next = !isSpeakerEnabled.value;
     isSpeakerEnabled.value = next;
     await engine.setEnableSpeakerphone(next);
@@ -161,26 +174,22 @@ class AgoraCallClient {
     if (!_isVideoCall) {
       return;
     }
-    final engine = _engine;
-    if (engine == null) {
-      throw AgoraCallException('Engine is not initialized');
-    }
+    final engine = _requireEngine();
     await engine.switchCamera();
   }
 
   Future<void> endCall() async {
-    final engine = _engine;
-    if (engine == null) {
+    if (!_initialized) {
       return;
     }
     try {
+      final engine = _requireEngine();
       await engine.leaveChannel();
       if (_isVideoCall) {
         await engine.stopPreview();
+        await engine.disableVideo();
       }
     } finally {
-      await engine.release();
-      _engine = null;
       _currentChannelId = null;
       _localUid = null;
       _isVideoCall = false;
@@ -197,7 +206,8 @@ class AgoraCallClient {
     required bool isVideo,
   }) async {
     await _ensurePermissions(isVideo: isVideo);
-    final engine = await _ensureEngineInitialized();
+    await initialize(appId: AgoraConfig.appId);
+    final engine = _requireEngine();
     _isVideoCall = isVideo;
     isMuted.value = false;
     isLocalUserJoined.value = false;
@@ -205,6 +215,7 @@ class AgoraCallClient {
 
     if (_currentChannelId != null) {
       await engine.leaveChannel();
+      await engine.stopPreview();
     }
 
     await engine.enableAudio();
@@ -235,8 +246,9 @@ class AgoraCallClient {
       autoSubscribeVideo: isVideo,
     );
 
+    final token = AgoraConfig.token;
     await engine.joinChannel(
-      token: AgoraConfig.token ?? '',
+      token: token ?? '',
       channelId: channelName,
       uid: uid,
       options: options,
