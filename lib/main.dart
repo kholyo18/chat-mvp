@@ -41,6 +41,7 @@ import 'package:chat_mvp/admin/admin_room_panel_page.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_list_item.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_page.dart';
 
+import 'modules/calls/dm_call_service.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
@@ -579,6 +580,7 @@ class ChatUltraApp extends StatefulWidget {
 class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver {
   final presence = PresenceService();
   final fcm = NotificationsService();
+  final DmCallService _dmCallService = DmCallService();
   // CODEX-BEGIN:PRIVACY_PRESENCE_STATE
   bool? _lastPresenceVisible;
   // CODEX-END:PRIVACY_PRESENCE_STATE
@@ -587,12 +589,17 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _dmCallService.listenForIncomingCalls(navigatorKey: navigatorKey);
     // CODEX-BEGIN:BOOT_GUARD_DEFER_CALL
     _kickBootWarmups();
     // CODEX-END:BOOT_GUARD_DEFER_CALL
   }
   @override
-  void dispose() { WidgetsBinding.instance.removeObserver(this); super.dispose(); }
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _dmCallService.dispose();
+    super.dispose();
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {

@@ -47,6 +47,7 @@ class _DmCallPageState extends State<DmCallPage> {
         'status': 'in-progress',
         'participants.$uid.state': 'joined',
         'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
+        'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
       });
       _joiningMarked = true;
     } catch (err, stack) {
@@ -81,6 +82,7 @@ class _DmCallPageState extends State<DmCallPage> {
     final payload = <String, dynamic>{
       'status': 'ended',
       'endedAt': cf.FieldValue.serverTimestamp(),
+      'ringingTargets': <String>[],
     };
     if (uid != null) {
       payload['participants.$uid.state'] = 'ended';
