@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
@@ -53,6 +55,7 @@ class AgoraCallClient {
   bool _isJoining = false;
   bool _isVideoCall = false;
   String? _currentChannelId;
+  int? _localUid;
 
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isSpeakerEnabled = ValueNotifier<bool>(false);
@@ -69,6 +72,7 @@ class AgoraCallClient {
   bool get isInitialized => _isInitialized;
   bool get isJoined => _isJoined;
   String? get currentChannelId => _currentChannelId;
+  int? get localUid => _localUid;
 
   RtcEngine get engine => _requireEngine();
 
@@ -110,7 +114,7 @@ class AgoraCallClient {
       RtcEngineEventHandler(
         onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
           debugPrint(
-            'AgoraCallClient: Joined channel ${connection.channelId} in ${elapsed}ms',
+            'AgoraCallClient: Joined channel ${connection.channelId} as uid=${connection.localUid} in ${elapsed}ms',
           );
           _isJoined = true;
           isLocalUserJoined.value = true;
@@ -124,6 +128,7 @@ class AgoraCallClient {
           _isVideoCall = false;
           isMuted.value = false;
           isSpeakerEnabled.value = false;
+          _localUid = null;
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           debugPrint('AgoraCallClient: Remote user $remoteUid joined');
@@ -161,7 +166,9 @@ class AgoraCallClient {
           debugPrint('AgoraCallClient: Connection lost for ${connection.channelId}');
         },
         onError: (ErrorCodeType error, String message) {
-          debugPrint('AgoraCallClient: Engine error $error => $message');
+          debugPrint(
+            'AgoraCallClient: Engine error ${error.name}(${error.value()}) => $message',
+          );
         },
       ),
     );
@@ -222,6 +229,7 @@ class AgoraCallClient {
 
     _isVideoCall = isVideo;
     _currentChannelId = channelId;
+    final uid = _resolveLocalUid();
     isMuted.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
@@ -252,10 +260,13 @@ class AgoraCallClient {
 
     try {
       final token = AgoraConfig.token;
+      debugPrint(
+        'AgoraCallClient: Joining channel $channelId (video=$isVideo, uid=$uid, tokenProvided=${token != null})',
+      );
       await engine.joinChannel(
         token: token ?? '',
         channelId: channelId,
-        uid: 0,
+        uid: uid,
         options: ChannelMediaOptions(
           channelProfile: ChannelProfileType.channelProfileCommunication,
           clientRoleType: ClientRoleType.clientRoleBroadcaster,
@@ -268,6 +279,7 @@ class AgoraCallClient {
     } on AgoraRtcException catch (error) {
       _currentChannelId = null;
       _isJoined = false;
+      _localUid = null;
       debugPrint('AgoraCallClient: joinChannel failed $error');
       throw AgoraCallException(
         _localizedMessageForError(error.code),
@@ -276,6 +288,7 @@ class AgoraCallClient {
     } catch (error) {
       _currentChannelId = null;
       _isJoined = false;
+      _localUid = null;
       debugPrint('AgoraCallClient: joinChannel threw $error');
       throw AgoraCallException(
         'تعذر الاتصال بالمكالمة. حاول مرة أخرى.',
@@ -311,6 +324,7 @@ class AgoraCallClient {
     isSpeakerEnabled.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
+    _localUid = null;
   }
 
   Future<void> dispose() async {
@@ -330,12 +344,13 @@ class AgoraCallClient {
     }
   }
 
-  String _localizedMessageForError(int code) {
+  String _localizedMessageForError(ErrorCodeType code) {
+    final intCode = code.value();
     const networkErrorCodes = <int>{104, 1114, 1115};
-    if (networkErrorCodes.contains(code)) {
+    if (networkErrorCodes.contains(intCode)) {
       return 'لا يوجد اتصال بالشبكة. تحقق من الإنترنت ثم حاول مرة أخرى.';
     }
-    switch (code) {
+    switch (intCode) {
       case 101:
         return 'معرّف تطبيق Agora غير صالح. يرجى التحقق من الإعدادات.';
       case 102:
@@ -345,7 +360,7 @@ class AgoraCallClient {
       case 17:
         return 'تم رفض الاتصال بالمكالمة. يرجى المحاولة مجددًا.';
       default:
-        return 'تعذر الاتصال بالمكالمة. رمز الخطأ: $code';
+        return 'تعذر الاتصال بالمكالمة. رمز الخطأ: $intCode';
     }
   }
 
@@ -414,4 +429,27 @@ class AgoraCallClient {
     }
   }
 
+  int _resolveLocalUid() {
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+    if (firebaseUser == null) {
+      throw AgoraCallException(
+        'يجب تسجيل الدخول لإجراء المكالمة.',
+      );
+    }
+    final uid = _stableAgoraUid(firebaseUser.uid);
+    _localUid = uid;
+    return uid;
+  }
+
+  int _stableAgoraUid(String uid) {
+    final bytes = utf8.encode(uid);
+    var hash = 0;
+    for (final byte in bytes) {
+      hash = (hash * 31 + byte) & 0x7fffffff;
+    }
+    if (hash == 0) {
+      return 1;
+    }
+    return hash;
+  }
 }
