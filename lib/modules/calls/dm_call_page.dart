@@ -7,9 +7,16 @@ import 'package:flutter/material.dart';
 import 'dm_call_models.dart';
 
 class DmCallPage extends StatefulWidget {
-  const DmCallPage({super.key, required this.session});
+  const DmCallPage({
+    super.key,
+    required this.session,
+    this.onAnswerIncomingCall,
+    this.onDeclineIncomingCall,
+  });
 
   final DmCallSession session;
+  final Future<void> Function(DmCallSession session)? onAnswerIncomingCall;
+  final Future<void> Function(DmCallSession session)? onDeclineIncomingCall;
 
   @override
   State<DmCallPage> createState() => _DmCallPageState();
@@ -19,14 +26,12 @@ class _DmCallPageState extends State<DmCallPage> {
   late final cf.DocumentReference<Map<String, dynamic>> _callRef;
   StreamSubscription<cf.DocumentSnapshot<Map<String, dynamic>>>? _callSub;
   bool _endedLocally = false;
-  bool _joiningMarked = false;
 
   @override
   void initState() {
     super.initState();
     _callRef = cf.FirebaseFirestore.instance.collection('calls').doc(widget.session.callId);
     _callSub = _callRef.snapshots().listen(_handleSnapshot, onError: _logError);
-    unawaited(_markJoined());
   }
 
   @override
@@ -38,41 +43,13 @@ class _DmCallPageState extends State<DmCallPage> {
     super.dispose();
   }
 
-  Future<void> _markJoined() async {
-    if (_joiningMarked) return;
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-    DmCallParticipant? currentParticipant;
-    for (final participant in widget.session.participants) {
-      if (participant.uid == uid) {
-        currentParticipant = participant;
-        break;
-      }
-    }
-    final isCallee = currentParticipant?.role == 'callee';
-    try {
-      final payload = <String, dynamic>{
-        'participants.$uid.state': 'joined',
-        'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
-        'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
-      };
-      if (isCallee) {
-        payload['status'] = 'active';
-      }
-      await _callRef.update(payload);
-      _joiningMarked = true;
-    } catch (err, stack) {
-      _logError(err, stack);
-      _showOperationFailedSnackBar();
-    }
-  }
-
   void _handleSnapshot(cf.DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data();
     if (data == null) {
       return;
     }
     if (data['status'] == 'ended' && !_endedLocally) {
+      _endedLocally = true;
       if (mounted) {
         Future<void>.delayed(const Duration(milliseconds: 350), () {
           if (!mounted) return;
@@ -140,15 +117,29 @@ class _DmCallPageState extends State<DmCallPage> {
             final status = (data['status'] as String?) ?? 'ringing';
             final participantsRaw = data['participants'] as Map<String, dynamic>?;
             final participants = _parseParticipants(participantsRaw);
-            return _CallContent(
-              status: status,
+            if (participants.isEmpty) {
+              return const _CallLoading();
+            }
+            final session = widget.session.copyWith(
               participants: participants,
-              type: widget.session.type,
+              status: status,
+            );
+            return _CallContent(
+              session: session,
               onEnd: () async {
                 await _endCall();
                 if (!mounted) return;
                 Navigator.of(context).maybePop();
               },
+              onAccept: widget.onAnswerIncomingCall == null
+                  ? null
+                  : () => widget.onAnswerIncomingCall!(session),
+              onDecline: widget.onDeclineIncomingCall == null
+                  ? null
+                  : () async {
+                      _endedLocally = true;
+                      await widget.onDeclineIncomingCall!(session);
+                    },
             );
           },
         ),
@@ -187,24 +178,47 @@ class _DmCallPageState extends State<DmCallPage> {
 
 class _CallContent extends StatelessWidget {
   const _CallContent({
-    required this.status,
-    required this.participants,
-    required this.type,
+    required this.session,
     required this.onEnd,
+    this.onAccept,
+    this.onDecline,
   });
 
-  final String status;
-  final List<DmCallParticipant> participants;
-  final DmCallType type;
+  final DmCallSession session;
+  final Future<void> Function() onEnd;
+  final Future<void> Function()? onAccept;
+  final Future<void> Function()? onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    if (session.isRingingForCurrentUser && onAccept != null && onDecline != null) {
+      return _IncomingCallView(
+        session: session,
+        onAccept: onAccept!,
+        onDecline: onDecline!,
+      );
+    }
+    return _ActiveCallView(
+      session: session,
+      onEnd: onEnd,
+    );
+  }
+}
+
+class _ActiveCallView extends StatelessWidget {
+  const _ActiveCallView({required this.session, required this.onEnd});
+
+  final DmCallSession session;
   final Future<void> Function() onEnd;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final callee = participants.where((p) => p.role == 'callee').firstOrNull ??
-        participants.first;
-    final caller = participants.where((p) => p.role == 'caller').firstOrNull;
-    final statusLabel = _statusLabel(status);
+    final remote = session.otherParticipant ??
+        session.caller ??
+        session.callee ??
+        (session.participants.isNotEmpty ? session.participants.first : null);
+    final statusLabel = _statusLabel(session.status);
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -212,7 +226,7 @@ class _CallContent extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Align(
-            alignment: Alignment.centerLeft,
+            alignment: AlignmentDirectional.centerStart,
             child: IconButton(
               onPressed: () => unawaited(onEnd()),
               icon: const Icon(Icons.close_rounded, color: Colors.white),
@@ -223,10 +237,13 @@ class _CallContent extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _AvatarPlaceholder(url: callee.avatarUrl, label: callee.displayName),
+                _AvatarPlaceholder(
+                  url: remote?.avatarUrl,
+                  label: remote?.displayName ?? 'مكالمة جارية',
+                ),
                 const SizedBox(height: 24),
                 Text(
-                  callee.displayName,
+                  remote?.displayName ?? 'مكالمة جارية',
                   style: theme.textTheme.headlineSmall?.copyWith(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
@@ -237,21 +254,8 @@ class _CallContent extends StatelessWidget {
                 Text(
                   statusLabel,
                   style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                  textAlign: TextAlign.center,
                 ),
-                if (caller != null) ...[
-                  const SizedBox(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.person, color: Colors.white70, size: 18),
-                      const SizedBox(width: 8),
-                      Text(
-                        caller.displayName,
-                        style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ],
               ],
             ),
           ),
@@ -274,10 +278,10 @@ class _CallContent extends StatelessWidget {
                 ),
                 const SizedBox(width: 24),
                 _CallActionButton(
-                  icon: type == DmCallType.video
+                  icon: session.type == DmCallType.video
                       ? Icons.videocam_off_rounded
                       : Icons.volume_up_rounded,
-                  label: type == DmCallType.video ? 'فيديو' : 'مكبر',
+                  label: session.type == DmCallType.video ? 'فيديو' : 'مكبر',
                   onPressed: () {},
                 ),
               ],
@@ -298,6 +302,123 @@ class _CallContent extends StatelessWidget {
       default:
         return 'جارٍ الاتصال…';
     }
+  }
+}
+
+class _IncomingCallView extends StatelessWidget {
+  const _IncomingCallView({
+    required this.session,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  final DmCallSession session;
+  final Future<void> Function() onAccept;
+  final Future<void> Function() onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final caller = session.caller ?? session.otherParticipant;
+    final direction = Directionality.of(context);
+    final callLabel = session.type == DmCallType.video ? 'مكالمة فيديو' : 'مكالمة صوتية';
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const SizedBox(height: 16),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _AvatarPlaceholder(
+                  url: caller?.avatarUrl,
+                  label: caller?.displayName ?? 'مكالمة واردة',
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  caller?.displayName ?? 'مكالمة واردة',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'يتصل بك…',
+                  style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  callLabel,
+                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 24, top: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              textDirection: direction,
+              children: [
+                _IncomingActionButton(
+                  background: Colors.redAccent,
+                  icon: Icons.call_end_rounded,
+                  label: 'رفض',
+                  onPressed: () => unawaited(onDecline()),
+                ),
+                _IncomingActionButton(
+                  background: Colors.greenAccent,
+                  icon: Icons.call_rounded,
+                  label: 'قبول',
+                  onPressed: () => unawaited(onAccept()),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IncomingActionButton extends StatelessWidget {
+  const _IncomingActionButton({
+    required this.background,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final Color background;
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        RawMaterialButton(
+          onPressed: onPressed,
+          elevation: 0,
+          fillColor: background,
+          padding: const EdgeInsets.all(22),
+          shape: const CircleBorder(),
+          child: Icon(icon, color: Colors.white, size: 32),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+        ),
+      ],
+    );
   }
 }
 

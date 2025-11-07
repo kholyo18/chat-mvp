@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 /// Type of DM call being placed.
@@ -51,6 +52,7 @@ class DmCallSession {
     required this.type,
     required this.initiatorId,
     required this.participants,
+    this.status = 'ringing',
   });
 
   final String callId;
@@ -59,9 +61,11 @@ class DmCallSession {
   final DmCallType type;
   final String initiatorId;
   final List<DmCallParticipant> participants;
+  final String status;
 
   DmCallSession copyWith({
     List<DmCallParticipant>? participants,
+    String? status,
   }) {
     return DmCallSession(
       callId: callId,
@@ -70,6 +74,62 @@ class DmCallSession {
       type: type,
       initiatorId: initiatorId,
       participants: participants ?? this.participants,
+      status: status ?? this.status,
     );
   }
+
+  String? get _currentUserId => FirebaseAuth.instance.currentUser?.uid;
+
+  DmCallParticipant? get currentParticipant {
+    final uid = _currentUserId;
+    if (uid == null) {
+      return null;
+    }
+    for (final participant in participants) {
+      if (participant.uid == uid) {
+        return participant;
+      }
+    }
+    return null;
+  }
+
+  DmCallParticipant? get caller {
+    for (final participant in participants) {
+      if (participant.role == 'caller') {
+        return participant;
+      }
+    }
+    return null;
+  }
+
+  DmCallParticipant? get callee {
+    for (final participant in participants) {
+      if (participant.role == 'callee') {
+        return participant;
+      }
+    }
+    return null;
+  }
+
+  DmCallParticipant? get otherParticipant {
+    final uid = _currentUserId;
+    if (uid == null) {
+      return participants.isNotEmpty ? participants.first : null;
+    }
+    for (final participant in participants) {
+      if (participant.uid != uid) {
+        return participant;
+      }
+    }
+    return participants.isNotEmpty ? participants.first : null;
+  }
+
+  bool get isCurrentUserCaller => currentParticipant?.role == 'caller';
+
+  bool get isIncomingForCurrentUser => currentParticipant?.role == 'callee';
+
+  bool get isRingingForCurrentUser =>
+      isIncomingForCurrentUser && (currentParticipant?.isRinging ?? false);
+
+  bool get isActiveForCurrentUser => currentParticipant?.isJoined ?? false;
 }
