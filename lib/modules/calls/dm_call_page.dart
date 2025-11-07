@@ -37,7 +37,6 @@ class _DmCallPageState extends State<DmCallPage> {
   bool _endedLocally = false;
   final AgoraCallClient _callClient = AgoraCallClient.instance;
   DmCallSession? _latestSession;
-  bool _joiningAgora = false;
 
   @override
   void initState() {
@@ -45,7 +44,6 @@ class _DmCallPageState extends State<DmCallPage> {
     _callRef = cf.FirebaseFirestore.instance.collection('calls').doc(widget.session.callId);
     _callSub = _callRef.snapshots().listen(_handleSnapshot, onError: _logError);
     _latestSession = widget.session;
-    _maybeStartAgora(widget.session);
   }
 
   @override
@@ -115,56 +113,6 @@ class _DmCallPageState extends State<DmCallPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
-  }
-
-  void _maybeStartAgora(DmCallSession session) {
-    _joinAgora(session, requireActiveState: true);
-  }
-
-  void _joinAgora(
-    DmCallSession session, {
-    required bool requireActiveState,
-  }) {
-    if (requireActiveState && !session.isActiveForCurrentUser) {
-      return;
-    }
-    if (_joiningAgora) {
-      return;
-    }
-    final currentChannel = _callClient.currentChannelId;
-    if (_callClient.isJoined && currentChannel == session.channelId) {
-      return;
-    }
-    _joiningAgora = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      try {
-        if (_callClient.isJoined &&
-            _callClient.currentChannelId == session.channelId) {
-          return;
-        }
-        if (session.type == DmCallType.video) {
-          await _callClient.joinVideoChannel(channelId: session.channelId);
-        } else {
-          await _callClient.joinVoiceChannel(channelId: session.channelId);
-        }
-      } on AgoraPermissionException catch (err) {
-        if (mounted) {
-          _showAgoraErrorSnackBar(_permissionErrorMessage(err));
-        }
-      } on AgoraCallException catch (err, stack) {
-        _logError(err, stack);
-        if (mounted) {
-          _showAgoraErrorSnackBar(err.message);
-        }
-      } catch (err, stack) {
-        _logError(err, stack);
-        if (mounted) {
-          _showAgoraErrorSnackBar('تعذر الاتصال بالمكالمة. حاول مرة أخرى.');
-        }
-      } finally {
-        _joiningAgora = false;
-      }
-    });
   }
 
   String _permissionErrorMessage(AgoraPermissionException exception) {
@@ -287,7 +235,6 @@ class _DmCallPageState extends State<DmCallPage> {
               status: status,
             );
             _latestSession = session;
-            _maybeStartAgora(session);
             return _CallContent(
               session: session,
               callClient: _callClient,
@@ -404,7 +351,6 @@ class _ActiveCallView extends StatelessWidget {
         session.caller ??
         session.callee ??
         (session.participants.isNotEmpty ? session.participants.first : null);
-    final statusLabel = _statusLabel(session.status);
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -420,17 +366,32 @@ class _ActiveCallView extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: session.type == DmCallType.video
-                ? _VideoCallBody(
-                    session: session,
-                    callClient: callClient,
-                    remote: remote,
-                    statusLabel: statusLabel,
-                  )
-                : _AudioCallBody(
-                    remote: remote,
-                    statusLabel: statusLabel,
-                  ),
+            child: ValueListenableBuilder<bool>(
+              valueListenable: callClient.isLocalUserJoined,
+              builder: (context, localJoined, _) {
+                return ValueListenableBuilder<Set<int>>(
+                  valueListenable: callClient.remoteUserIds,
+                  builder: (context, remoteUsers, __) {
+                    final statusLabel = _statusLabel(
+                      localJoined: localJoined,
+                      remoteUsers: remoteUsers,
+                      callStatus: session.status,
+                    );
+                    return session.type == DmCallType.video
+                        ? _VideoCallBody(
+                            session: session,
+                            callClient: callClient,
+                            remote: remote,
+                            statusLabel: statusLabel,
+                          )
+                        : _AudioCallBody(
+                            remote: remote,
+                            statusLabel: statusLabel,
+                          );
+                  },
+                );
+              },
+            ),
           ),
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
@@ -484,16 +445,21 @@ class _ActiveCallView extends StatelessWidget {
     );
   }
 
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'active':
-      case 'in-progress':
-        return 'متصل';
-      case 'ended':
-        return 'انتهت المكالمة';
-      default:
-        return 'جارٍ الاتصال…';
+  String _statusLabel({
+    required bool localJoined,
+    required Set<int> remoteUsers,
+    required String callStatus,
+  }) {
+    if (callStatus == 'ended') {
+      return 'انتهت المكالمة';
     }
+    if (!localJoined) {
+      return 'جارٍ الاتصال…';
+    }
+    if (remoteUsers.isEmpty) {
+      return 'بانتظار انضمام الطرف الآخر…';
+    }
+    return 'متصل';
   }
 }
 
@@ -602,11 +568,11 @@ class _VideoCallBody extends StatelessWidget {
   Widget _buildRemoteVideo(Set<int> remoteUsers, ThemeData theme) {
     final engine = callClient.maybeEngine;
     if (engine == null) {
-      return _buildWaitingForRemote(theme);
+      return _buildWaitingForRemote(theme, statusLabel);
     }
     final remoteUid = remoteUsers.isNotEmpty ? remoteUsers.first : null;
     if (remoteUid == null) {
-      return _buildWaitingForRemote(theme);
+      return _buildWaitingForRemote(theme, statusLabel);
     }
     return AgoraVideoView(
       controller: VideoViewController.remote(
@@ -625,17 +591,17 @@ class _VideoCallBody extends StatelessWidget {
     return AgoraVideoView(
       controller: VideoViewController(
         rtcEngine: engine,
-        canvas: const VideoCanvas(uid: 0),
+        canvas: VideoCanvas(uid: callClient.localUid ?? 0),
       ),
     );
   }
 
-  Widget _buildWaitingForRemote(ThemeData theme) {
+  Widget _buildWaitingForRemote(ThemeData theme, String message) {
     return Container(
       color: Colors.black87,
       alignment: Alignment.center,
       child: Text(
-        'بانتظار انضمام الطرف الآخر…',
+        message,
         style: theme.textTheme.bodyMedium?.copyWith(
           color: Colors.white70,
         ),

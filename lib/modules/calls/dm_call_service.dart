@@ -143,6 +143,31 @@ class DmCallService {
 
     await callRef.set(callPayload);
 
+    try {
+      debugPrint(
+        'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id})',
+      );
+      if (type == DmCallType.video) {
+        await _agoraClient.joinVideoChannel(channelId: channelId);
+      } else {
+        await _agoraClient.joinVoiceChannel(channelId: channelId);
+      }
+    } catch (error, stack) {
+      debugPrint('DmCallService: Failed to join Agora for call ${callRef.id}: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+      try {
+        await callRef.delete();
+      } catch (deleteError, deleteStack) {
+        debugPrint('DmCallService: Failed to delete call ${callRef.id} after Agora error: $deleteError');
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: deleteError, stack: deleteStack),
+        );
+      }
+      rethrow;
+    }
+
     final participants = <DmCallParticipant>[
       DmCallParticipant(
         uid: currentUser.uid,
@@ -387,6 +412,9 @@ class DmCallService {
     }
     await callRef.update(payload);
     try {
+      debugPrint(
+        'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId}',
+      );
       if (call.type == DmCallType.video) {
         await _agoraClient.joinVideoChannel(channelId: call.channelId);
       } else {
