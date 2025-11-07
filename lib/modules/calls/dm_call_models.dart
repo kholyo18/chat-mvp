@@ -21,7 +21,8 @@ class DmCallParticipant {
   final String state;
 
   bool get isRinging => state == 'ringing';
-  bool get isJoined => state == 'joined' || state == 'in-progress';
+  bool get isJoined =>
+      state == 'joined' || state == 'in-progress' || state == 'active';
   bool get isEnded => state == 'ended';
 
   DmCallParticipant copyWith({

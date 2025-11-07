@@ -203,7 +203,7 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
         break;
     }
   }
-  static final DmCallService _callService = DmCallService();
+  static final DmCallService _callService = DmCallService.instance;
 
   Future<void> _startCall(BuildContext context, {required bool isVideo}) async {
     final controller = context.read<ChatThreadController>();
