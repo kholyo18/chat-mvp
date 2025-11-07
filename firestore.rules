@@ -37,10 +37,11 @@ service cloud.firestore {
     }
 
     match /calls/{callId} {
-      allow create: if isCallParticipant(request.resource.data);
-      allow read: if isCallParticipant(resource.data);
-      allow update: if isCallParticipant(resource.data) ||
-                    isCallParticipant(request.resource.data);
+      allow create: if isSignedIn() && hasCallParticipant(request.resource.data);
+      allow read: if isSignedIn() && hasCallParticipant(resource.data);
+      allow update: if isSignedIn() &&
+                    hasCallParticipant(resource.data) &&
+                    hasCallParticipant(request.resource.data);
       allow delete: if false;
     }
 

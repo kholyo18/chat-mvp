@@ -42,6 +42,8 @@ dependencies:
   timeago: ^3.6.0
   uuid: ^4.4.0
   qr_flutter: ^4.1.0
+  agora_rtc_engine: ^6.3.2
+  permission_handler: ^11.3.1
 
   # --- ML Kit (اختياري) ---
   google_mlkit_translation: ^0.13.0
