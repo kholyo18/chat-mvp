@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'agora_call_client.dart';
 import 'dm_call_models.dart';
@@ -117,8 +118,14 @@ class _DmCallPageState extends State<DmCallPage> {
   }
 
   void _maybeStartAgora(DmCallSession session) {
-    final shouldJoin = session.isActiveForCurrentUser;
-    if (!shouldJoin) {
+    _joinAgora(session, requireActiveState: true);
+  }
+
+  void _joinAgora(
+    DmCallSession session, {
+    required bool requireActiveState,
+  }) {
+    if (requireActiveState && !session.isActiveForCurrentUser) {
       return;
     }
     if (_joiningAgora) {
@@ -131,18 +138,23 @@ class _DmCallPageState extends State<DmCallPage> {
     _joiningAgora = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
-        await _callClient.startCall(
-          channelId: session.channelId,
-          isVideo: session.type == DmCallType.video,
-        );
-      } on AgoraPermissionException {
+        if (_callClient.isJoined &&
+            _callClient.currentChannelId == session.channelId) {
+          return;
+        }
+        if (session.type == DmCallType.video) {
+          await _callClient.joinVideoChannel(channelId: session.channelId);
+        } else {
+          await _callClient.joinVoiceChannel(channelId: session.channelId);
+        }
+      } on AgoraPermissionException catch (err) {
         if (mounted) {
-          _showAgoraErrorSnackBar('يرجى منح صلاحيات الميكروفون/الكاميرا للمكالمة.');
+          _showAgoraErrorSnackBar(_permissionErrorMessage(err));
         }
       } on AgoraCallException catch (err, stack) {
         _logError(err, stack);
         if (mounted) {
-          _showAgoraErrorSnackBar('تعذر الاتصال بالمكالمة. حاول مرة أخرى.');
+          _showAgoraErrorSnackBar(err.message);
         }
       } catch (err, stack) {
         _logError(err, stack);
@@ -153,6 +165,26 @@ class _DmCallPageState extends State<DmCallPage> {
         _joiningAgora = false;
       }
     });
+  }
+
+  String _permissionErrorMessage(AgoraPermissionException exception) {
+    final labels = exception.missingPermissions.map(_permissionLabel).toSet().toList();
+    if (labels.isEmpty) {
+      return 'يرجى منح الصلاحيات المطلوبة لإجراء المكالمة.';
+    }
+    final labelText = labels.join(' و ');
+    return 'يرجى منح صلاحية $labelText للمتابعة في المكالمة.';
+  }
+
+  String _permissionLabel(Permission permission) {
+    switch (permission) {
+      case Permission.camera:
+        return 'الكاميرا';
+      case Permission.microphone:
+        return 'الميكروفون';
+      default:
+        return 'الصلاحيات المطلوبة';
+    }
   }
 
   Future<void> _handleEnd(DmCallSession session) async {
@@ -168,6 +200,11 @@ class _DmCallPageState extends State<DmCallPage> {
     }
     try {
       await callback(session);
+    } on AgoraPermissionException catch (err) {
+      _showAgoraErrorSnackBar(_permissionErrorMessage(err));
+    } on AgoraCallException catch (err, stack) {
+      _logError(err, stack);
+      _showAgoraErrorSnackBar(err.message);
     } catch (err, stack) {
       _logError(err, stack);
       _showOperationFailedSnackBar('تعذر قبول المكالمة، حاول مرة أخرى.');
