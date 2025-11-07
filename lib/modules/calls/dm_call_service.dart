@@ -12,7 +12,7 @@ import 'dm_call_page.dart';
 
 /// Service responsible for orchestrating DM call sessions.
 class DmCallService {
-  DmCallService({
+  DmCallService._({
     cf.FirebaseFirestore? firestore,
     FirebaseAuth? auth,
     Uuid? uuid,
@@ -20,16 +20,32 @@ class DmCallService {
         _auth = auth ?? FirebaseAuth.instance,
         _uuid = uuid ?? const Uuid();
 
+  factory DmCallService({
+    cf.FirebaseFirestore? firestore,
+    FirebaseAuth? auth,
+    Uuid? uuid,
+  }) {
+    if (firestore != null || auth != null || uuid != null) {
+      return DmCallService._(
+        firestore: firestore,
+        auth: auth,
+        uuid: uuid,
+      );
+    }
+    return instance;
+  }
+
+  static final DmCallService instance = DmCallService._();
+
   final cf.FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
   final Uuid _uuid;
-  StreamSubscription<User?>? _authSubscription;
   StreamSubscription<cf.QuerySnapshot<Map<String, dynamic>>>?
       _incomingCallsSubscription;
   GlobalKey<NavigatorState>? _navigatorKey;
   String? _listeningUid;
-  bool _incomingListenerInitialized = false;
   final Set<String> _handledIncomingCallIds = <String>{};
+  final Set<String> _activeCallRouteIds = <String>{};
 
   Future<void> startVoiceCallWithUser(
     String threadId,
@@ -169,41 +185,33 @@ class DmCallService {
     );
   }
 
-  /// Starts listening for incoming DM calls targeting the signed-in user.
-  void listenForIncomingCalls({
+  /// Starts listening for incoming DM calls targeting [uid].
+  void startListening({
+    required String uid,
     required GlobalKey<NavigatorState> navigatorKey,
   }) {
+    if (uid.isEmpty) {
+      debugPrint('DmCallService: startListening aborted due to empty uid');
+      return;
+    }
+    final alreadyListening =
+        _incomingCallsSubscription != null && _listeningUid == uid;
+    final navigatorUnchanged = identical(_navigatorKey, navigatorKey);
     _navigatorKey = navigatorKey;
-    if (_incomingListenerInitialized) {
+    if (alreadyListening && navigatorUnchanged) {
+      debugPrint('DmCallService: listener already active for uid=$uid');
       return;
     }
-    _incomingListenerInitialized = true;
-    _authSubscription =
-        _auth.userChanges().listen(_handleAuthStateChanged, onError: (error) {
-      debugPrint('DmCallService auth listener error: $error');
-    });
-    _handleAuthStateChanged(_auth.currentUser);
-  }
-
-  void _handleAuthStateChanged(User? user) {
-    final uid = user?.uid;
-    if (uid == _listeningUid) {
-      return;
-    }
+    stopListening();
     _listeningUid = uid;
-    _incomingCallsSubscription?.cancel();
-    _incomingCallsSubscription = null;
-    _handledIncomingCallIds.clear();
-    if (uid == null) {
-      return;
-    }
-    _incomingCallsSubscription = _firestore
+    debugPrint('DmCallService: Subscribing for incoming DM calls (uid=$uid)');
+    final query = _firestore
         .collection('calls')
         .where('mode', isEqualTo: 'dm')
-        .where('ringingTargets', arrayContains: uid)
-        .snapshots()
-        .listen(
-      _handleIncomingSnapshot,
+        .where('status', isEqualTo: 'ringing')
+        .where('participantIds', arrayContains: uid);
+    _incomingCallsSubscription = query.snapshots().listen(
+      (snapshot) => _handleIncomingSnapshot(snapshot, uid),
       onError: (error, stack) {
         debugPrint('DmCallService incoming call listener error: $error');
         FlutterError.reportError(
@@ -213,30 +221,99 @@ class DmCallService {
     );
   }
 
+  /// Cancels the incoming calls listener, if active.
+  void stopListening() {
+    if (_incomingCallsSubscription != null) {
+      debugPrint('DmCallService: Stopping incoming call listener');
+    }
+    _incomingCallsSubscription?.cancel();
+    _incomingCallsSubscription = null;
+    _handledIncomingCallIds.clear();
+    _activeCallRouteIds.clear();
+    _listeningUid = null;
+  }
+
   void _handleIncomingSnapshot(
     cf.QuerySnapshot<Map<String, dynamic>> snapshot,
+    String targetUid,
   ) {
+    final docIds = snapshot.docs.map((doc) => doc.id).join(', ');
+    debugPrint(
+      'DmCallService: Snapshot for $targetUid has ${snapshot.docs.length} docs [$docIds]',
+    );
+    if (_listeningUid != targetUid) {
+      debugPrint(
+        'DmCallService: Ignoring snapshot for stale uid=$targetUid (listening=$_listeningUid)',
+      );
+      return;
+    }
     for (final change in snapshot.docChanges) {
       final doc = change.doc;
       final callId = doc.id;
       if (change.type == cf.DocumentChangeType.removed) {
+        debugPrint('DmCallService: Call $callId removed from ringing snapshot');
         _handledIncomingCallIds.remove(callId);
+        _activeCallRouteIds.remove(callId);
         continue;
       }
       final data = doc.data();
       if (data == null) {
+        debugPrint('DmCallService: Skipping $callId because data is null');
         continue;
       }
       final status = (data['status'] as String?) ?? 'ringing';
+      final endedAt = data['endedAt'];
+      if (endedAt != null) {
+        debugPrint('DmCallService: Ignoring $callId because endedAt=$endedAt');
+        _handledIncomingCallIds.remove(callId);
+        continue;
+      }
       if (status != 'ringing') {
+        debugPrint('DmCallService: Ignoring $callId with status=$status');
         _handledIncomingCallIds.remove(callId);
         continue;
       }
       if (_handledIncomingCallIds.contains(callId)) {
+        debugPrint('DmCallService: Call $callId already handled');
         continue;
       }
+      final participantsRaw = data['participants'];
+      if (participantsRaw is! Map<String, dynamic>) {
+        debugPrint('DmCallService: Call $callId has invalid participants payload');
+        continue;
+      }
+      final participantRaw = participantsRaw[targetUid];
+      if (participantRaw is! Map<String, dynamic>) {
+        debugPrint(
+          'DmCallService: Call $callId does not include participant data for $targetUid',
+        );
+        continue;
+      }
+      final role = (participantRaw['role'] as String?)?.toLowerCase();
+      if (role != 'callee') {
+        debugPrint(
+          'DmCallService: Call $callId ignored because participant role is $role',
+        );
+        continue;
+      }
+      final participantsDescription = participantsRaw.entries
+          .map((entry) {
+            final value = entry.value;
+            if (value is Map<String, dynamic>) {
+              final displayName = value['displayName'];
+              final entryRole = value['role'];
+              final entryState = value['state'];
+              return '${entry.key}($entryRole/$entryState/$displayName)';
+            }
+            return entry.key;
+          })
+          .join(', ');
+      debugPrint(
+        'DmCallService: Incoming ringing call $callId for $targetUid participants=[$participantsDescription]',
+      );
       final session = _sessionFromData(callId, data);
       if (session == null) {
+        debugPrint('DmCallService: Failed to build session for call $callId');
         continue;
       }
       _handledIncomingCallIds.add(callId);
@@ -296,13 +373,24 @@ class DmCallService {
       _handledIncomingCallIds.remove(session.callId);
       return;
     }
+    if (_activeCallRouteIds.contains(session.callId)) {
+      debugPrint(
+        'DmCallService: Call ${session.callId} is already being presented, skipping push',
+      );
+      return;
+    }
     try {
+      _activeCallRouteIds.add(session.callId);
+      debugPrint('DmCallService: Presenting call ${session.callId}');
       await navigator.push(
         MaterialPageRoute<void>(
           builder: (_) => DmCallPage(session: session),
           settings: RouteSettings(name: '/dm/call/${session.callId}'),
         ),
-      );
+      ).whenComplete(() {
+        _activeCallRouteIds.remove(session.callId);
+        debugPrint('DmCallService: Call ${session.callId} route dismissed');
+      });
     } catch (err, stack) {
       _handledIncomingCallIds.remove(session.callId);
       debugPrint('Failed to present DM call: $err');
@@ -314,13 +402,7 @@ class DmCallService {
 
   /// Stops any active listeners used for incoming calls.
   void dispose() {
-    _authSubscription?.cancel();
-    _incomingCallsSubscription?.cancel();
-    _authSubscription = null;
-    _incomingCallsSubscription = null;
-    _listeningUid = null;
+    stopListening();
     _navigatorKey = null;
-    _handledIncomingCallIds.clear();
-    _incomingListenerInitialized = false;
   }
 }

@@ -580,7 +580,8 @@ class ChatUltraApp extends StatefulWidget {
 class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver {
   final presence = PresenceService();
   final fcm = NotificationsService();
-  final DmCallService _dmCallService = DmCallService();
+  final DmCallService _dmCallService = DmCallService.instance;
+  StreamSubscription<User?>? _dmCallAuthSubscription;
   // CODEX-BEGIN:PRIVACY_PRESENCE_STATE
   bool? _lastPresenceVisible;
   // CODEX-END:PRIVACY_PRESENCE_STATE
@@ -589,7 +590,28 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _dmCallService.listenForIncomingCalls(navigatorKey: navigatorKey);
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      _dmCallService.startListening(
+        uid: currentUser.uid,
+        navigatorKey: navigatorKey,
+      );
+    } else {
+      _dmCallService.stopListening();
+    }
+    _dmCallAuthSubscription =
+        FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user == null) {
+        _dmCallService.stopListening();
+      } else {
+        _dmCallService.startListening(
+          uid: user.uid,
+          navigatorKey: navigatorKey,
+        );
+      }
+    }, onError: (error) {
+      debugPrint('ChatUltraApp: auth listener error $error');
+    });
     // CODEX-BEGIN:BOOT_GUARD_DEFER_CALL
     _kickBootWarmups();
     // CODEX-END:BOOT_GUARD_DEFER_CALL
@@ -597,6 +619,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _dmCallAuthSubscription?.cancel();
     _dmCallService.dispose();
     super.dispose();
   }

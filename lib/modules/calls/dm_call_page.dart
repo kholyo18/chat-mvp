@@ -42,16 +42,28 @@ class _DmCallPageState extends State<DmCallPage> {
     if (_joiningMarked) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
+    DmCallParticipant? currentParticipant;
+    for (final participant in widget.session.participants) {
+      if (participant.uid == uid) {
+        currentParticipant = participant;
+        break;
+      }
+    }
+    final isCallee = currentParticipant?.role == 'callee';
     try {
-      await _callRef.update({
-        'status': 'in-progress',
+      final payload = <String, dynamic>{
         'participants.$uid.state': 'joined',
         'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
         'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
-      });
+      };
+      if (isCallee) {
+        payload['status'] = 'active';
+      }
+      await _callRef.update(payload);
       _joiningMarked = true;
     } catch (err, stack) {
       _logError(err, stack);
+      _showOperationFailedSnackBar();
     }
   }
 
@@ -93,8 +105,18 @@ class _DmCallPageState extends State<DmCallPage> {
     } catch (err, stack) {
       if (!silent) {
         _logError(err, stack);
+        _showOperationFailedSnackBar();
       }
     }
+  }
+
+  void _showOperationFailedSnackBar() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('تعذر تحديث حالة المكالمة، يرجى المحاولة مرة أخرى.'),
+      ),
+    );
   }
 
   @override
@@ -268,6 +290,7 @@ class _CallContent extends StatelessWidget {
 
   String _statusLabel(String status) {
     switch (status) {
+      case 'active':
       case 'in-progress':
         return 'متصل';
       case 'ended':
