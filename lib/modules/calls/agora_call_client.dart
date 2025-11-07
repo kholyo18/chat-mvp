@@ -64,6 +64,9 @@ class AgoraCallClient {
   int? _localUid;
   int? _lastJoinResultCode;
   int? _lastEngineErrorCode;
+  Future<void>? _initializationFuture;
+  Future<void>? _ongoingJoin;
+  String? _joiningChannelId;
 
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isSpeakerEnabled = ValueNotifier<bool>(false);
@@ -88,7 +91,11 @@ class AgoraCallClient {
 
   RtcEngine? get maybeEngine => _engine;
 
-  Future<void> init() => initializeIfNeeded();
+  Future<void> init() => _ensureEngineInitialized(enableVideo: false);
+
+  void _log(String message) {
+    debugPrint('AgoraCallClient: $message');
+  }
 
   RtcEngine _requireEngine() {
     final engine = _engine;
@@ -107,45 +114,73 @@ class AgoraCallClient {
     }
   }
 
-  Future<void> initializeIfNeeded() async {
-    if (_isInitialized) {
+  Future<void> _ensureEngineInitialized({required bool enableVideo}) async {
+    if (_engine != null) {
+      if (enableVideo) {
+        await _engine!.enableVideo();
+      }
+      return;
+    }
+    if (_initializationFuture != null) {
+      await _initializationFuture;
+      if (enableVideo) {
+        await _engine?.enableVideo();
+      }
       return;
     }
     _validateAppId();
-    debugPrint(
-      'AgoraCallClient: Initializing engine (appIdConfigured=${AgoraConfig.appId.trim().isNotEmpty})',
-    );
+    _log('Initializing Agora engine...');
+    final future = _createAndInitializeEngine(enableVideo: enableVideo);
+    _initializationFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_initializationFuture, future)) {
+        _initializationFuture = null;
+      }
+    }
+  }
+
+  Future<void> _createAndInitializeEngine({required bool enableVideo}) async {
     final engine = createAgoraRtcEngine();
-    _engine = engine;
     await engine.initialize(
-      RtcEngineContext(
-        appId: AgoraConfig.appId,
-        channelProfile: ChannelProfileType.channelProfileCommunication,
-      ),
+      const RtcEngineContext(appId: AgoraConfig.appId),
     );
+    await engine.enableAudio();
+    if (enableVideo) {
+      await engine.enableVideo();
+    }
+    await engine.setChannelProfile(
+      ChannelProfileType.channelProfileCommunication,
+    );
+    await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
+
     engine.registerEventHandler(
       RtcEngineEventHandler(
         onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          debugPrint(
-            'AGORA onJoinChannelSuccess: channel=${connection.channelId}, uid=${connection.localUid}, elapsed=$elapsed',
+          _log(
+            'onJoinChannelSuccess: ${connection.channelId} uid=${connection.localUid} elapsed=$elapsed',
           );
           _isJoined = true;
+          _currentChannelId = connection.channelId;
+          _localUid = connection.localUid;
           isLocalUserJoined.value = true;
         },
         onLeaveChannel: (RtcConnection connection, RtcStats stats) {
-          debugPrint('AgoraCallClient: Left channel ${connection.channelId}');
+          _log('onLeaveChannel: ${connection.channelId}');
           _isJoined = false;
-          isLocalUserJoined.value = false;
-          remoteUserIds.value = <int>{};
+          _isJoining = false;
           _currentChannelId = null;
+          _localUid = null;
           _isVideoCall = false;
+          isLocalUserJoined.value = false;
           isMuted.value = false;
           isSpeakerEnabled.value = false;
-          _localUid = null;
+          remoteUserIds.value = <int>{};
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          debugPrint(
-            'AGORA onUserJoined: channel=${connection.channelId}, remoteUid=$remoteUid, elapsed=$elapsed',
+          _log(
+            'onUserJoined: ${connection.channelId} remoteUid=$remoteUid elapsed=$elapsed',
           );
           final next = <int>{...remoteUserIds.value, remoteUid};
           remoteUserIds.value = next;
@@ -156,10 +191,13 @@ class AgoraCallClient {
             ),
           );
         },
-        onUserOffline:
-            (RtcConnection connection, int remoteUid, UserOfflineReasonType reason) {
-          debugPrint(
-            'AGORA onUserOffline: channel=${connection.channelId}, remoteUid=$remoteUid, reason=$reason',
+        onUserOffline: (
+          RtcConnection connection,
+          int remoteUid,
+          UserOfflineReasonType reason,
+        ) {
+          _log(
+            'onUserOffline: ${connection.channelId} remoteUid=$remoteUid reason=${reason.name}',
           );
           final next = <int>{...remoteUserIds.value}..remove(remoteUid);
           remoteUserIds.value = next;
@@ -175,42 +213,65 @@ class AgoraCallClient {
           ConnectionStateType state,
           ConnectionChangedReasonType reason,
         ) {
-          debugPrint(
-            'AgoraCallClient: Connection state changed to ${state.name} due to ${reason.name} (channel=${connection.channelId})',
+          _log(
+            'Connection state changed: ${state.name} (reason=${reason.name}, channel=${connection.channelId})',
           );
         },
         onConnectionLost: (RtcConnection connection) {
-          debugPrint('AgoraCallClient: Connection lost for ${connection.channelId}');
+          _log('Connection lost for ${connection.channelId}');
         },
         onError: (ErrorCodeType error, String message) {
           final code = error.value();
           _lastEngineErrorCode = code;
-          debugPrint(
-            'AGORA ERROR: code=$code, type=${error.name}, message=$message',
-          );
+          _log('AGORA onError: code=$code message=$message type=${error.name}');
         },
       ),
     );
+
+    _engine = engine;
     _isInitialized = true;
-    debugPrint('AgoraCallClient: Engine initialized');
+    _log('Agora engine initialized.');
   }
 
-  Future<void> joinVoiceChannel({
+  Future<void> joinDmCall({
     required String channelId,
+    required String? token,
+    required int uid,
+    required bool isVideo,
   }) async {
-    await _joinChannel(
-      channelId: channelId,
-      isVideo: false,
-    );
-  }
+    if (channelId.trim().isEmpty) {
+      throw AgoraCallException('معرّف قناة الاتصال غير صالح.');
+    }
 
-  Future<void> joinVideoChannel({
-    required String channelId,
-  }) async {
-    await _joinChannel(
+    if (_ongoingJoin != null) {
+      if (_joiningChannelId == channelId) {
+        return _ongoingJoin!;
+      }
+      try {
+        await _ongoingJoin;
+      } catch (error, stack) {
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stack),
+        );
+      }
+    }
+
+    final joinFuture = _performJoin(
       channelId: channelId,
-      isVideo: true,
+      token: token,
+      uid: uid,
+      isVideo: isVideo,
     );
+    _ongoingJoin = joinFuture;
+    _joiningChannelId = channelId;
+    try {
+      await joinFuture;
+    } finally {
+      if (identical(_ongoingJoin, joinFuture)) {
+        _ongoingJoin = null;
+        _joiningChannelId = null;
+      }
+    }
   }
 
   @visibleForTesting
@@ -218,47 +279,52 @@ class AgoraCallClient {
     required String channelId,
     required bool isVideo,
   }) async {
-    await _joinChannel(channelId: channelId, isVideo: isVideo);
+    final uid = _resolveLocalUid();
+    await joinDmCall(
+      channelId: channelId,
+      token: AgoraConfig.token,
+      uid: uid,
+      isVideo: isVideo,
+    );
   }
 
-  Future<void> _joinChannel({
+  Future<void> _performJoin({
     required String channelId,
+    required String? token,
+    required int uid,
     required bool isVideo,
   }) async {
     _lastJoinResultCode = null;
     _lastEngineErrorCode = null;
+
     await _ensurePermissions(isVideo: isVideo);
-    await initializeIfNeeded();
+    await _ensureEngineInitialized(enableVideo: isVideo);
+
     final engine = _requireEngine();
 
-    if (_isJoining) {
-      if (_currentChannelId == channelId) {
-        debugPrint('AgoraCallClient: Join already in progress for $channelId');
-        return;
-      }
-      await leaveCall();
+    if (_isJoining && _currentChannelId == channelId) {
+      _log('Join already in progress for $channelId');
+      return;
     }
-
-    if (_isJoined) {
-      if (_currentChannelId == channelId) {
-        debugPrint('AgoraCallClient: Already joined $channelId');
-        return;
-      }
-      await leaveCall();
+    if (_isJoined && _currentChannelId == channelId) {
+      _log('Already joined channel $channelId');
+      return;
+    }
+    if (_isJoined && _currentChannelId != channelId) {
+      await _leaveCurrentCall(awaitOngoingJoin: false);
     }
 
     _isJoining = true;
-
     _isVideoCall = isVideo;
     _currentChannelId = channelId;
-    final uid = _resolveLocalUid();
+    _localUid = uid;
+
     isMuted.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
 
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
-
     await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
 
     if (isVideo) {
@@ -280,16 +346,15 @@ class AgoraCallClient {
       isSpeakerEnabled.value = false;
     }
 
-    final token = (AgoraConfig.token ?? '').trim();
-    final hasToken = token.isNotEmpty;
-    debugPrint(
-      'AGORA joinChannel: token=${hasToken ? token : ''}, channelId=$channelId, uid=$uid, withVideo=$isVideo',
+    final trimmedToken = token?.trim();
+    final hasToken = trimmedToken?.isNotEmpty == true;
+    _log(
+      'Joining Agora channel: id=$channelId uid=$uid isVideo=$isVideo tokenProvided=$hasToken',
     );
 
-    int joinResultCode = 0;
     try {
       await engine.joinChannel(
-        token: token,
+        token: hasToken ? trimmedToken : null,
         channelId: channelId,
         uid: uid,
         options: ChannelMediaOptions(
@@ -301,12 +366,17 @@ class AgoraCallClient {
           autoSubscribeVideo: isVideo,
         ),
       );
+      _lastJoinResultCode = 0;
+      _log('joinChannel completed for $channelId');
     } on AgoraRtcException catch (error) {
-      joinResultCode = error.code;
+      _lastJoinResultCode = error.code;
       _currentChannelId = null;
       _isJoined = false;
       _localUid = null;
+      isLocalUserJoined.value = false;
+      remoteUserIds.value = <int>{};
       final errorCode = _errorCodeTypeFromValue(error.code);
+      _log('joinChannel failed: code=${error.code} message=${error.message}');
       throw AgoraCallException(
         _localizedMessageForError(
           errorCode,
@@ -319,28 +389,39 @@ class AgoraCallClient {
       _currentChannelId = null;
       _isJoined = false;
       _localUid = null;
+      isLocalUserJoined.value = false;
+      remoteUserIds.value = <int>{};
+      _log('joinChannel failed with unexpected error: $error');
       throw AgoraCallException(
         'تعذر الاتصال بالمكالمة. حاول مرة أخرى.',
         cause: error,
       );
     } finally {
-      _lastJoinResultCode = joinResultCode;
-      debugPrint('AGORA joinChannel result: $joinResultCode');
       _isJoining = false;
     }
   }
 
-  Future<void> leaveCall() async {
-    if (!_isInitialized) {
+  Future<void> leaveCurrentCall() => _leaveCurrentCall(awaitOngoingJoin: true);
+
+  Future<void> _leaveCurrentCall({required bool awaitOngoingJoin}) async {
+    if (_engine == null) {
       return;
     }
-    debugPrint('AgoraCallClient: Leaving current call (channel=$_currentChannelId)');
+    if (awaitOngoingJoin && _ongoingJoin != null) {
+      try {
+        await _ongoingJoin;
+      } catch (_) {
+        // Ignore join errors when leaving.
+      }
+    }
+
+    _log('Leaving Agora channel (channel=$_currentChannelId)');
     final engine = _requireEngine();
-    if (_isJoined) {
+    if (_isJoined || _isJoining) {
       try {
         await engine.leaveChannel();
       } catch (error) {
-        debugPrint('AgoraCallClient: leaveChannel error $error');
+        _log('leaveChannel error: $error');
         rethrow;
       }
     }
@@ -348,31 +429,36 @@ class AgoraCallClient {
       await engine.stopPreview();
     }
     await engine.disableVideo();
+
     _isJoined = false;
-    _currentChannelId = null;
-    _isVideoCall = false;
     _isJoining = false;
+    _isVideoCall = false;
+    _currentChannelId = null;
+    _localUid = null;
     isMuted.value = false;
     isSpeakerEnabled.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
-    _localUid = null;
   }
 
   Future<void> dispose() async {
-    if (_engine == null) {
+    final engine = _engine;
+    if (engine == null) {
       return;
     }
     try {
-      await leaveCall();
+      await leaveCurrentCall();
     } finally {
       try {
-        await _engine?.release();
+        await engine.release();
       } catch (error) {
-        debugPrint('AgoraCallClient: Failed to release engine $error');
+        _log('Failed to release engine $error');
       }
       _engine = null;
       _isInitialized = false;
+      _initializationFuture = null;
+      _ongoingJoin = null;
+      _joiningChannelId = null;
     }
   }
 
