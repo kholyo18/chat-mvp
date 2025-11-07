@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -268,29 +269,75 @@ class ChatThreadController extends ChangeNotifier {
     }
   }
 
-  Future<void> markMessagesAsSeen(Iterable<ChatMessage> messages) async {
+  Future<void> markMessagesAsSeen(String currentUserId) async {
+    final threadRef = _firestore.collection('dm_threads').doc(threadId);
+    try {
+      await threadRef.set({'unread': {currentUserId: 0}}, cf.SetOptions(merge: true));
+    } catch (err, stack) {
+      _reportError(err, stack);
+    }
+    if (!readReceiptsEnabled) {
+      return;
+    }
+    try {
+      final query = await threadRef
+          .collection('messages')
+          .where('seenAt', isNull: true)
+          .orderBy('createdAt', descending: true)
+          .limit(100)
+          .get();
+      final batch = _firestore.batch();
+      var hasUpdates = false;
+      for (final doc in query.docs) {
+        final data = doc.data();
+        final senderId = (data['from'] ?? data['senderId'] ?? '') as String;
+        if (senderId == currentUserId) {
+          continue;
+        }
+        final update = <String, Object?>{
+          'seenAt': cf.FieldValue.serverTimestamp(),
+          'status': 'seen',
+        };
+        if (data['deliveredAt'] == null) {
+          update['deliveredAt'] = cf.FieldValue.serverTimestamp();
+        }
+        hasUpdates = true;
+        batch.update(doc.reference, update);
+      }
+      if (hasUpdates) {
+        await batch.commit();
+      }
+    } catch (err, stack) {
+      _reportError(err, stack);
+    }
+  }
+
+  Future<void> markMessagesAsDelivered(Iterable<ChatMessage> messages) async {
     final me = _currentUid;
     if (me == null) {
       return;
     }
-    final threadRef = _firestore.collection('dm_threads').doc(threadId);
-    await threadRef.set({'unread': {me: 0}}, cf.SetOptions(merge: true));
-    if (!readReceiptsEnabled) {
-      return;
-    }
     final batch = _firestore.batch();
+    var hasUpdates = false;
     for (final message in messages) {
       if (message.senderId == me) {
         continue;
       }
-      if (message.reference == null) {
+      final ref = message.reference;
+      if (ref == null || message.deliveredAt != null) {
         continue;
       }
-      final currentStatus = (message.status ?? '').toLowerCase();
-      if (currentStatus == 'seen') {
-        continue;
+      final update = <String, Object?>{
+        'deliveredAt': cf.FieldValue.serverTimestamp(),
+      };
+      if (message.seenAt == null) {
+        update['status'] = 'delivered';
       }
-      batch.update(message.reference!, <String, Object>{'status': 'seen'});
+      batch.update(ref, update);
+      hasUpdates = true;
+    }
+    if (!hasUpdates) {
+      return;
     }
     try {
       await batch.commit();
@@ -606,6 +653,7 @@ class ChatThreadController extends ChangeNotifier {
       'from': me,
       'type': type.value,
       'createdAt': cf.FieldValue.serverTimestamp(),
+      'sentAt': cf.FieldValue.serverTimestamp(),
       'status': 'sent',
       'replyToMessageId': replyTo?.id,
       ...payload,
@@ -625,6 +673,24 @@ class ChatThreadController extends ChangeNotifier {
     );
     replyTo = null;
     notifyListeners();
+    unawaited(_playSendFeedback());
+  }
+
+  Future<void> _playSendFeedback() async {
+    try {
+      await HapticFeedback.lightImpact();
+    } catch (err) {
+      if (kDebugMode) {
+        debugPrint('Haptic feedback failed: $err');
+      }
+    }
+    try {
+      await SystemSound.play(SystemSoundType.click);
+    } catch (err) {
+      if (kDebugMode) {
+        debugPrint('System sound failed: $err');
+      }
+    }
   }
 
   Future<void> _updateThreadMetadata({
