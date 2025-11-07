@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
@@ -526,7 +527,8 @@ class _MessageBubble extends StatelessWidget {
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          constraints: BoxConstraints(maxWidth: min(MediaQuery.of(context).size.width * 0.8, 360)),
+          constraints: BoxConstraints(
+              maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360)),
           decoration: BoxDecoration(color: bubbleColor, borderRadius: borderRadius),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
