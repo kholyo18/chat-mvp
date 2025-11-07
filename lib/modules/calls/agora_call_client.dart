@@ -348,13 +348,14 @@ class AgoraCallClient {
 
     final trimmedToken = token?.trim();
     final hasToken = trimmedToken?.isNotEmpty == true;
+    final effectiveToken = hasToken ? trimmedToken! : '';
     _log(
       'Joining Agora channel: id=$channelId uid=$uid isVideo=$isVideo tokenProvided=$hasToken',
     );
 
     try {
       await engine.joinChannel(
-        token: hasToken ? trimmedToken : null,
+        token: effectiveToken,
         channelId: channelId,
         uid: uid,
         options: ChannelMediaOptions(
