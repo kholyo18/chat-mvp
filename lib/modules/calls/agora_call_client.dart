@@ -281,8 +281,12 @@ class AgoraCallClient {
       _isJoined = false;
       _localUid = null;
       debugPrint('AgoraCallClient: joinChannel failed $error');
+      final errorCode = _errorCodeTypeFromValue(error.code);
       throw AgoraCallException(
-        _localizedMessageForError(error.code),
+        _localizedMessageForError(
+          errorCode,
+          rawCode: error.code,
+        ),
         error,
       );
     } catch (error) {
@@ -344,8 +348,8 @@ class AgoraCallClient {
     }
   }
 
-  String _localizedMessageForError(ErrorCodeType code) {
-    final intCode = code.value();
+  String _localizedMessageForError(ErrorCodeType code, {int? rawCode}) {
+    final intCode = rawCode ?? code.value();
     const networkErrorCodes = <int>{104, 1114, 1115};
     if (networkErrorCodes.contains(intCode)) {
       return 'لا يوجد اتصال بالشبكة. تحقق من الإنترنت ثم حاول مرة أخرى.';
@@ -361,6 +365,14 @@ class AgoraCallClient {
         return 'تم رفض الاتصال بالمكالمة. يرجى المحاولة مجددًا.';
       default:
         return 'تعذر الاتصال بالمكالمة. رمز الخطأ: $intCode';
+    }
+  }
+
+  ErrorCodeType _errorCodeTypeFromValue(int code) {
+    try {
+      return ErrorCodeTypeExt.fromValue(code);
+    } catch (_) {
+      return ErrorCodeType.errFailed;
     }
   }
 
