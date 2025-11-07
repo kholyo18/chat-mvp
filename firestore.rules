@@ -6,6 +6,10 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid;
     }
 
+    function isCallParticipant(map) {
+      return isSignedIn() && map is map && map[request.auth.uid] is map;
+    }
+
     match /rooms/{roomId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn();
@@ -22,6 +26,13 @@ service cloud.firestore {
       match /invites/{inviteId} {
         allow read, write: if false;
       }
+    }
+
+    match /calls/{callId} {
+      allow create: if isCallParticipant(request.resource.data.participants);
+      allow read: if isCallParticipant(resource.data.participants);
+      allow update: if isCallParticipant(resource.data.participants);
+      allow delete: if false;
     }
 
     match /store_products/{id} {

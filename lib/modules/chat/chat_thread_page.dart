@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
@@ -12,6 +11,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../modules/calls/dm_call_service.dart';
 import '../../modules/privacy/privacy_controller.dart';
 import '../../services/firestore_service.dart';
 import '../translator/translator_service.dart';
@@ -158,12 +158,12 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         IconButton(
           icon: const Icon(Icons.call),
-          onPressed: () => _showCallComingSoon(context, isVideo: false),
+          onPressed: () => _startCall(context, isVideo: false),
           tooltip: 'مكالمة صوتية',
         ),
         IconButton(
           icon: const Icon(Icons.videocam_rounded),
-          onPressed: () => _showCallComingSoon(context, isVideo: true),
+          onPressed: () => _startCall(context, isVideo: true),
           tooltip: 'مكالمة فيديو',
         ),
         PopupMenuButton<String>(
@@ -202,44 +202,42 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
         break;
     }
   }
-}
+  static final DmCallService _callService = DmCallService();
 
-void _showCallComingSoon(BuildContext context, {required bool isVideo}) {
-  showModalBottomSheet<void>(
-    context: context,
-    builder: (context) {
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(isVideo ? Icons.videocam_rounded : Icons.call,
-                  size: 48, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(height: 16),
-              Text(
-                isVideo
-                    ? 'مكالمات الفيديو قادمة قريباً'
-                    : 'المكالمات الصوتية ستكون متاحة قريباً',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'نعمل على دمج خدمة الاتصال. شكراً لصبرك!',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('حسناً'),
-              ),
-            ],
-          ),
-        ),
+  Future<void> _startCall(BuildContext context, {required bool isVideo}) async {
+    final controller = context.read<ChatThreadController>();
+    final otherUid = controller.otherUid;
+    if (otherUid == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('فشل بدء المكالمة، حاول مجددًا')),
       );
-    },
-  );
+      return;
+    }
+    try {
+      final nav = Navigator.of(context);
+      if (isVideo) {
+        await _callService.startVideoCallWithUser(
+          threadId,
+          otherUid,
+          navigator: nav,
+        );
+      } else {
+        await _callService.startVoiceCallWithUser(
+          threadId,
+          otherUid,
+          navigator: nav,
+        );
+      }
+    } catch (err, stack) {
+      debugPrint('Failed to start DM call: $err');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: err, stack: stack),
+      );
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('فشل بدء المكالمة، حاول مجددًا')),
+      );
+    }
+  }
 }
 
 class _MessagesList extends StatefulWidget {
