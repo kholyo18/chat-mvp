@@ -4,7 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../models/user_profile.dart';
 import 'agora_call_client.dart';
@@ -16,21 +15,17 @@ class DmCallService {
   DmCallService._({
     cf.FirebaseFirestore? firestore,
     FirebaseAuth? auth,
-    Uuid? uuid,
   })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance,
-        _uuid = uuid ?? const Uuid();
+        _auth = auth ?? FirebaseAuth.instance;
 
   factory DmCallService({
     cf.FirebaseFirestore? firestore,
     FirebaseAuth? auth,
-    Uuid? uuid,
   }) {
-    if (firestore != null || auth != null || uuid != null) {
+    if (firestore != null || auth != null) {
       return DmCallService._(
         firestore: firestore,
         auth: auth,
-        uuid: uuid,
       );
     }
     return instance;
@@ -40,7 +35,6 @@ class DmCallService {
 
   final cf.FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
-  final Uuid _uuid;
   StreamSubscription<cf.QuerySnapshot<Map<String, dynamic>>>?
       _incomingCallsSubscription;
   GlobalKey<NavigatorState>? _navigatorKey;
@@ -48,8 +42,6 @@ class DmCallService {
   final Set<String> _handledIncomingCallIds = <String>{};
   final Set<String> _activeCallRouteIds = <String>{};
   final AgoraCallClient _agoraClient = AgoraCallClient.instance;
-  String? _activeAgoraCallId;
-  String? _joiningAgoraCallId;
 
   Future<void> startVoiceCallWithUser(
     String threadId,
@@ -90,7 +82,8 @@ class DmCallService {
 
     final callRef = _firestore.collection('calls').doc();
     final now = cf.FieldValue.serverTimestamp();
-    final channelId = _uuid.v4();
+    final sanitizedThreadId = threadId.isNotEmpty ? threadId : callRef.id;
+    final channelId = 'dm_$sanitizedThreadId';
 
     UserProfile? otherProfile;
     try {
@@ -188,7 +181,6 @@ class DmCallService {
           session: session,
           onAnswerIncomingCall: answerIncomingCall,
           onDeclineIncomingCall: declineIncomingCall,
-          onEnsureActiveCall: ensureActiveCall,
           onTerminateCall: terminateCall,
         ),
         settings: RouteSettings(name: '/dm/call/${session.callId}'),
@@ -393,7 +385,6 @@ class DmCallService {
       payload['status'] = 'active';
     }
     await callRef.update(payload);
-    await ensureActiveCall(call.copyWith(status: 'active'));
   }
 
   Future<void> declineIncomingCall(DmCallSession call) async {
@@ -414,42 +405,6 @@ class DmCallService {
     final navigator = _navigatorKey?.currentState;
     if (navigator != null) {
       await navigator.maybePop();
-    }
-  }
-
-  Future<void> ensureActiveCall(DmCallSession session) async {
-    final uid = _auth.currentUser?.uid;
-    if (uid == null) {
-      throw StateError('User must be signed in to join calls');
-    }
-    final status = session.status.toLowerCase();
-    if (status != 'active' && status != 'in-progress') {
-      return;
-    }
-    if (_activeAgoraCallId == session.callId) {
-      return;
-    }
-    if (_joiningAgoraCallId == session.callId) {
-      return;
-    }
-    _joiningAgoraCallId = session.callId;
-    try {
-      if (session.type == DmCallType.video) {
-        await _agoraClient.startVideoCall(
-          channelName: session.channelId,
-          userId: uid,
-        );
-      } else {
-        await _agoraClient.startVoiceCall(
-          channelName: session.channelId,
-          userId: uid,
-        );
-      }
-      _activeAgoraCallId = session.callId;
-    } finally {
-      if (_joiningAgoraCallId == session.callId) {
-        _joiningAgoraCallId = null;
-      }
     }
   }
 
@@ -478,15 +433,9 @@ class DmCallService {
     }
   }
 
-  Future<void> _teardownAgora(String callId) async {
-    if (_activeAgoraCallId == callId) {
-      _activeAgoraCallId = null;
-    }
-    if (_joiningAgoraCallId == callId) {
-      _joiningAgoraCallId = null;
-    }
+  Future<void> _teardownAgora(String _) async {
     try {
-      await _agoraClient.endCall();
+      await _agoraClient.leaveCall();
     } catch (err, stack) {
       debugPrint('DmCallService: Failed to teardown Agora call: $err');
       FlutterError.reportError(
@@ -517,7 +466,6 @@ class DmCallService {
             session: session,
             onAnswerIncomingCall: answerIncomingCall,
             onDeclineIncomingCall: declineIncomingCall,
-            onEnsureActiveCall: ensureActiveCall,
             onTerminateCall: terminateCall,
           ),
           settings: RouteSettings(name: '/dm/call/${session.callId}'),
@@ -537,10 +485,7 @@ class DmCallService {
 
   /// Stops any active listeners used for incoming calls.
   void dispose() {
-    final activeCallId = _activeAgoraCallId;
-    if (activeCallId != null) {
-      unawaited(_teardownAgora(activeCallId));
-    }
+    unawaited(_agoraClient.leaveCall());
     stopListening();
     _navigatorKey = null;
   }
