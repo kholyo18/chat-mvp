@@ -234,8 +234,8 @@ class AgoraCallClient {
     if (isVideo) {
       await engine.enableVideo();
       await engine.setVideoEncoderConfiguration(
-        const VideoEncoderConfiguration(
-          dimensions: VideoDimensions(width: 960, height: 540),
+        VideoEncoderConfiguration(
+          dimensions: const VideoDimensions(width: 960, height: 540),
           frameRate: VideoFrameRate.videoFrameRateFps30,
           orientationMode: OrientationMode.orientationModeAdaptive,
         ),
@@ -253,7 +253,7 @@ class AgoraCallClient {
     try {
       final token = AgoraConfig.token;
       await engine.joinChannel(
-        token: token,
+        token: token ?? '',
         channelId: channelId,
         uid: 0,
         options: ChannelMediaOptions(
@@ -330,22 +330,22 @@ class AgoraCallClient {
     }
   }
 
-  String _localizedMessageForError(ErrorCodeType code) {
+  String _localizedMessageForError(int code) {
+    const networkErrorCodes = <int>{104, 1114, 1115};
+    if (networkErrorCodes.contains(code)) {
+      return 'لا يوجد اتصال بالشبكة. تحقق من الإنترنت ثم حاول مرة أخرى.';
+    }
     switch (code) {
-      case ErrorCodeType.errInvalidAppId:
+      case 101:
         return 'معرّف تطبيق Agora غير صالح. يرجى التحقق من الإعدادات.';
-      case ErrorCodeType.errInvalidChannelName:
+      case 102:
         return 'قناة المكالمة غير صالحة. حاول مرة أخرى بعد لحظات.';
-      case ErrorCodeType.errInvalidToken:
+      case 109:
         return 'بيانات المصادقة للمكالمة غير صحيحة. يرجى إعادة المحاولة.';
-      case ErrorCodeType.errJoinChannelRejected:
+      case 17:
         return 'تم رفض الاتصال بالمكالمة. يرجى المحاولة مجددًا.';
-      case ErrorCodeType.errConnectionInterrupted:
-      case ErrorCodeType.errConnectionLost:
-      case ErrorCodeType.errNoNetwork:
-        return 'لا يوجد اتصال بالشبكة. تحقق من الإنترنت ثم حاول مرة أخرى.';
       default:
-        return 'تعذر الاتصال بالمكالمة. رمز الخطأ: ${code.name}';
+        return 'تعذر الاتصال بالمكالمة. رمز الخطأ: $code';
     }
   }
 
