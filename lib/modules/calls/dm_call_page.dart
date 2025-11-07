@@ -1,10 +1,17 @@
 import 'dart:async';
 
+import 'package:agora_rtc_engine/rtc_local_view.dart' as rtc_local_view;
+import 'package:agora_rtc_engine/rtc_remote_view.dart' as rtc_remote_view;
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'agora_call_client.dart';
 import 'dm_call_models.dart';
+
+typedef DmCallTerminateCallback = Future<void> Function(
+  DmCallSession session, {
+  bool remoteEnded,
+});
 
 class DmCallPage extends StatefulWidget {
   const DmCallPage({
@@ -12,11 +19,15 @@ class DmCallPage extends StatefulWidget {
     required this.session,
     this.onAnswerIncomingCall,
     this.onDeclineIncomingCall,
+    required this.onEnsureActiveCall,
+    required this.onTerminateCall,
   });
 
   final DmCallSession session;
   final Future<void> Function(DmCallSession session)? onAnswerIncomingCall;
   final Future<void> Function(DmCallSession session)? onDeclineIncomingCall;
+  final Future<void> Function(DmCallSession session) onEnsureActiveCall;
+  final DmCallTerminateCallback onTerminateCall;
 
   @override
   State<DmCallPage> createState() => _DmCallPageState();
@@ -26,6 +37,9 @@ class _DmCallPageState extends State<DmCallPage> {
   late final cf.DocumentReference<Map<String, dynamic>> _callRef;
   StreamSubscription<cf.DocumentSnapshot<Map<String, dynamic>>>? _callSub;
   bool _endedLocally = false;
+  final AgoraCallClient _callClient = AgoraCallClient.instance;
+  DmCallSession? _latestSession;
+  bool _joiningAgora = false;
 
   @override
   void initState() {
@@ -38,7 +52,8 @@ class _DmCallPageState extends State<DmCallPage> {
   void dispose() {
     _callSub?.cancel();
     if (!_endedLocally) {
-      unawaited(_endCall(silent: true));
+      final session = _latestSession ?? widget.session;
+      unawaited(_terminateCall(session, silent: true));
     }
     super.dispose();
   }
@@ -49,7 +64,8 @@ class _DmCallPageState extends State<DmCallPage> {
       return;
     }
     if (data['status'] == 'ended' && !_endedLocally) {
-      _endedLocally = true;
+      final session = _latestSession ?? widget.session;
+      unawaited(_terminateCall(session, remoteEnded: true, silent: true));
       if (mounted) {
         Future<void>.delayed(const Duration(milliseconds: 350), () {
           if (!mounted) return;
@@ -64,36 +80,134 @@ class _DmCallPageState extends State<DmCallPage> {
     FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stack));
   }
 
-  Future<void> _endCall({bool silent = false}) async {
-    if (_endedLocally) return;
-    _endedLocally = true;
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    final payload = <String, dynamic>{
-      'status': 'ended',
-      'endedAt': cf.FieldValue.serverTimestamp(),
-      'ringingTargets': <String>[],
-    };
-    if (uid != null) {
-      payload['participants.$uid.state'] = 'ended';
-      payload['participants.$uid.leftAt'] = cf.FieldValue.serverTimestamp();
+  Future<void> _terminateCall(
+    DmCallSession session, {
+    bool remoteEnded = false,
+    bool silent = false,
+  }) async {
+    if (!remoteEnded && _endedLocally) {
+      return;
     }
+    _endedLocally = true;
     try {
-      await _callRef.update(payload);
+      await widget.onTerminateCall(session, remoteEnded: remoteEnded);
     } catch (err, stack) {
       if (!silent) {
         _logError(err, stack);
-        _showOperationFailedSnackBar();
+        _showOperationFailedSnackBar(
+          remoteEnded
+              ? 'تعذر إنهاء المكالمة بشكل صحيح.'
+              : 'تعذر إنهاء المكالمة، يرجى المحاولة مرة أخرى.',
+        );
       }
     }
   }
 
-  void _showOperationFailedSnackBar() {
+  void _showOperationFailedSnackBar(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تعذر تحديث حالة المكالمة، يرجى المحاولة مرة أخرى.'),
-      ),
+      SnackBar(content: Text(message)),
     );
+  }
+
+  void _showAgoraErrorSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _ensureAgoraSession(DmCallSession session) {
+    final status = session.status.toLowerCase();
+    if (status != 'active' && status != 'in-progress') {
+      return;
+    }
+    if (_joiningAgora) {
+      return;
+    }
+    _joiningAgora = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await widget.onEnsureActiveCall(session);
+      } on AgoraPermissionException {
+        if (mounted) {
+          _showAgoraErrorSnackBar('يرجى منح صلاحيات الميكروفون/الكاميرا للمكالمة.');
+        }
+      } catch (err, stack) {
+        _logError(err, stack);
+        if (mounted) {
+          _showAgoraErrorSnackBar('تعذر الاتصال بالمكالمة. حاول مرة أخرى.');
+        }
+      } finally {
+        _joiningAgora = false;
+      }
+    });
+  }
+
+  Future<void> _handleEnd(DmCallSession session) async {
+    await _terminateCall(session);
+    if (!mounted) return;
+    Navigator.of(context).maybePop();
+  }
+
+  Future<void> _handleAccept(DmCallSession session) async {
+    final callback = widget.onAnswerIncomingCall;
+    if (callback == null) {
+      return;
+    }
+    try {
+      await callback(session);
+    } catch (err, stack) {
+      _logError(err, stack);
+      _showOperationFailedSnackBar('تعذر قبول المكالمة، حاول مرة أخرى.');
+    }
+  }
+
+  Future<void> _handleDecline(DmCallSession session) async {
+    final callback = widget.onDeclineIncomingCall;
+    if (callback == null) {
+      return;
+    }
+    try {
+      _endedLocally = true;
+      await callback(session);
+    } catch (err, stack) {
+      _logError(err, stack);
+      _showOperationFailedSnackBar('تعذر رفض المكالمة، حاول مرة أخرى.');
+    }
+  }
+
+  Future<void> _handleToggleMute() async {
+    try {
+      await _callClient.toggleMute();
+    } on AgoraCallException {
+      _showAgoraErrorSnackBar('انتظر بدء الاتصال قبل التحكم في الميكروفون.');
+    } catch (err, stack) {
+      _logError(err, stack);
+      _showAgoraErrorSnackBar('تعذر تغيير حالة الميكروفون، حاول مرة أخرى.');
+    }
+  }
+
+  Future<void> _handleToggleSpeaker() async {
+    try {
+      await _callClient.toggleSpeakerphone();
+    } on AgoraCallException {
+      _showAgoraErrorSnackBar('انتظر بدء الاتصال قبل استخدام مكبر الصوت.');
+    } catch (err, stack) {
+      _logError(err, stack);
+      _showAgoraErrorSnackBar('تعذر تغيير وضع مكبر الصوت، حاول مرة أخرى.');
+    }
+  }
+
+  Future<void> _handleSwitchCamera() async {
+    try {
+      await _callClient.switchCamera();
+    } on AgoraCallException {
+      _showAgoraErrorSnackBar('لا يمكن تبديل الكاميرا الآن.');
+    } catch (err, stack) {
+      _logError(err, stack);
+      _showAgoraErrorSnackBar('تعذر تبديل الكاميرا، حاول مرة أخرى.');
+    }
   }
 
   @override
@@ -124,22 +238,23 @@ class _DmCallPageState extends State<DmCallPage> {
               participants: participants,
               status: status,
             );
+            _latestSession = session;
+            _ensureAgoraSession(session);
             return _CallContent(
               session: session,
-              onEnd: () async {
-                await _endCall();
-                if (!mounted) return;
-                Navigator.of(context).maybePop();
-              },
+              callClient: _callClient,
+              onEnd: () => unawaited(_handleEnd(session)),
               onAccept: widget.onAnswerIncomingCall == null
                   ? null
-                  : () => widget.onAnswerIncomingCall!(session),
+                  : () => unawaited(_handleAccept(session)),
               onDecline: widget.onDeclineIncomingCall == null
                   ? null
-                  : () async {
-                      _endedLocally = true;
-                      await widget.onDeclineIncomingCall!(session);
-                    },
+                  : () => unawaited(_handleDecline(session)),
+              onToggleMute: () => unawaited(_handleToggleMute()),
+              onToggleSpeaker: () => unawaited(_handleToggleSpeaker()),
+              onSwitchCamera: session.type == DmCallType.video
+                  ? () => unawaited(_handleSwitchCamera())
+                  : null,
             );
           },
         ),
@@ -179,15 +294,23 @@ class _DmCallPageState extends State<DmCallPage> {
 class _CallContent extends StatelessWidget {
   const _CallContent({
     required this.session,
+    required this.callClient,
     required this.onEnd,
     this.onAccept,
     this.onDecline,
+    this.onToggleMute,
+    this.onToggleSpeaker,
+    this.onSwitchCamera,
   });
 
   final DmCallSession session;
-  final Future<void> Function() onEnd;
-  final Future<void> Function()? onAccept;
-  final Future<void> Function()? onDecline;
+  final AgoraCallClient callClient;
+  final VoidCallback onEnd;
+  final VoidCallback? onAccept;
+  final VoidCallback? onDecline;
+  final VoidCallback? onToggleMute;
+  final VoidCallback? onToggleSpeaker;
+  final VoidCallback? onSwitchCamera;
 
   @override
   Widget build(BuildContext context) {
@@ -200,16 +323,31 @@ class _CallContent extends StatelessWidget {
     }
     return _ActiveCallView(
       session: session,
+      callClient: callClient,
       onEnd: onEnd,
+      onToggleMute: onToggleMute,
+      onToggleSpeaker: onToggleSpeaker,
+      onSwitchCamera: onSwitchCamera,
     );
   }
 }
 
 class _ActiveCallView extends StatelessWidget {
-  const _ActiveCallView({required this.session, required this.onEnd});
+  const _ActiveCallView({
+    required this.session,
+    required this.callClient,
+    required this.onEnd,
+    this.onToggleMute,
+    this.onToggleSpeaker,
+    this.onSwitchCamera,
+  });
 
   final DmCallSession session;
-  final Future<void> Function() onEnd;
+  final AgoraCallClient callClient;
+  final VoidCallback onEnd;
+  final VoidCallback? onToggleMute;
+  final VoidCallback? onToggleSpeaker;
+  final VoidCallback? onSwitchCamera;
 
   @override
   Widget build(BuildContext context) {
@@ -228,62 +366,68 @@ class _ActiveCallView extends StatelessWidget {
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: IconButton(
-              onPressed: () => unawaited(onEnd()),
+              onPressed: onEnd,
               icon: const Icon(Icons.close_rounded, color: Colors.white),
               tooltip: 'إنهاء',
             ),
           ),
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _AvatarPlaceholder(
-                  url: remote?.avatarUrl,
-                  label: remote?.displayName ?? 'مكالمة جارية',
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  remote?.displayName ?? 'مكالمة جارية',
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
+            child: session.type == DmCallType.video
+                ? _VideoCallBody(
+                    session: session,
+                    callClient: callClient,
+                    remote: remote,
+                    statusLabel: statusLabel,
+                  )
+                : _AudioCallBody(
+                    remote: remote,
+                    statusLabel: statusLabel,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  statusLabel,
-                  style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
           ),
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _CallActionButton(
-                  icon: Icons.mic_off_rounded,
-                  label: 'كتم',
-                  onPressed: () {},
+                ValueListenableBuilder<bool>(
+                  valueListenable: callClient.isMuted,
+                  builder: (context, muted, _) {
+                    return _CallActionButton(
+                      icon: muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                      label: 'كتم',
+                      background: muted ? Colors.redAccent : Colors.white12,
+                      onPressed: onToggleMute,
+                    );
+                  },
                 ),
                 const SizedBox(width: 24),
                 _CallActionButton(
                   icon: Icons.call_end_rounded,
                   label: 'إنهاء',
                   background: Colors.redAccent,
-                  onPressed: () => unawaited(onEnd()),
+                  onPressed: onEnd,
                 ),
                 const SizedBox(width: 24),
-                _CallActionButton(
-                  icon: session.type == DmCallType.video
-                      ? Icons.videocam_off_rounded
-                      : Icons.volume_up_rounded,
-                  label: session.type == DmCallType.video ? 'فيديو' : 'مكبر',
-                  onPressed: () {},
-                ),
+                session.type == DmCallType.video
+                    ? _CallActionButton(
+                        icon: Icons.cameraswitch_rounded,
+                        label: 'فيديو',
+                        onPressed: onSwitchCamera,
+                      )
+                    : ValueListenableBuilder<bool>(
+                        valueListenable: callClient.isSpeakerEnabled,
+                        builder: (context, speakerOn, _) {
+                          return _CallActionButton(
+                            icon: speakerOn
+                                ? Icons.volume_up_rounded
+                                : Icons.hearing_rounded,
+                            label: 'مكبر',
+                            background:
+                                speakerOn ? Colors.greenAccent : Colors.white12,
+                            onPressed: onToggleSpeaker,
+                          );
+                        },
+                      ),
               ],
             ),
           ),
@@ -305,6 +449,126 @@ class _ActiveCallView extends StatelessWidget {
   }
 }
 
+class _AudioCallBody extends StatelessWidget {
+  const _AudioCallBody({required this.remote, required this.statusLabel});
+
+  final DmCallParticipant? remote;
+  final String statusLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _AvatarPlaceholder(
+          url: remote?.avatarUrl,
+          label: remote?.displayName ?? 'مكالمة جارية',
+        ),
+        const SizedBox(height: 24),
+        Text(
+          remote?.displayName ?? 'مكالمة جارية',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          statusLabel,
+          style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+}
+
+class _VideoCallBody extends StatelessWidget {
+  const _VideoCallBody({
+    required this.session,
+    required this.callClient,
+    required this.remote,
+    required this.statusLabel,
+  });
+
+  final DmCallSession session;
+  final AgoraCallClient callClient;
+  final DmCallParticipant? remote;
+  final String statusLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ValueListenableBuilder<Set<int>>(
+                  valueListenable: callClient.remoteUserIds,
+                  builder: (context, remoteUsers, _) {
+                    final remoteUid = remoteUsers.isNotEmpty ? remoteUsers.first : null;
+                    if (remoteUid != null) {
+                      return rtc_remote_view.SurfaceView(
+                        channelId: session.channelId,
+                        uid: remoteUid,
+                      );
+                    }
+                    return Container(
+                      color: Colors.black87,
+                      alignment: Alignment.center,
+                      child: Text(
+                        'بانتظار انضمام الطرف الآخر…',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.white70,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  },
+                ),
+                PositionedDirectional(
+                  top: 16,
+                  end: 16,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      width: 120,
+                      height: 160,
+                      color: Colors.black54,
+                      child: rtc_local_view.SurfaceView(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          remote?.displayName ?? 'مكالمة فيديو',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          statusLabel,
+          style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+}
+
 class _IncomingCallView extends StatelessWidget {
   const _IncomingCallView({
     required this.session,
@@ -313,8 +577,8 @@ class _IncomingCallView extends StatelessWidget {
   });
 
   final DmCallSession session;
-  final Future<void> Function() onAccept;
-  final Future<void> Function() onDecline;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
 
   @override
   Widget build(BuildContext context) {
@@ -370,13 +634,13 @@ class _IncomingCallView extends StatelessWidget {
                   background: Colors.redAccent,
                   icon: Icons.call_end_rounded,
                   label: 'رفض',
-                  onPressed: () => unawaited(onDecline()),
+                  onPressed: onDecline,
                 ),
                 _IncomingActionButton(
                   background: Colors.greenAccent,
                   icon: Icons.call_rounded,
                   label: 'قبول',
-                  onPressed: () => unawaited(onAccept()),
+                  onPressed: onAccept,
                 ),
               ],
             ),
