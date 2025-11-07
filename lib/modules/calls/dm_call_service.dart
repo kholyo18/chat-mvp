@@ -170,6 +170,7 @@ class DmCallService {
       type: type,
       initiatorId: currentUser.uid,
       participants: participants,
+      status: 'ringing',
     );
 
     final nav = navigator;
@@ -179,7 +180,11 @@ class DmCallService {
 
     await nav.push(
       MaterialPageRoute<void>(
-        builder: (_) => DmCallPage(session: session),
+        builder: (_) => DmCallPage(
+          session: session,
+          onAnswerIncomingCall: answerIncomingCall,
+          onDeclineIncomingCall: declineIncomingCall,
+        ),
         settings: RouteSettings(name: '/dm/call/${session.callId}'),
       ),
     );
@@ -338,6 +343,7 @@ class DmCallService {
       type: type,
       initiatorId: (data['initiator'] as String?) ?? '',
       participants: participants,
+      status: (data['status'] as String?) ?? 'ringing',
     );
   }
 
@@ -366,6 +372,43 @@ class DmCallService {
     return result;
   }
 
+  Future<void> answerIncomingCall(DmCallSession call) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('User must be signed in to answer calls');
+    }
+    final callRef = _firestore.collection('calls').doc(call.callId);
+    final payload = <String, dynamic>{
+      'participants.$uid.state': 'joined',
+      'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),
+      'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
+    };
+    if (call.status != 'active') {
+      payload['status'] = 'active';
+    }
+    await callRef.update(payload);
+  }
+
+  Future<void> declineIncomingCall(DmCallSession call) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('User must be signed in to decline calls');
+    }
+    final callRef = _firestore.collection('calls').doc(call.callId);
+    await callRef.update(<String, dynamic>{
+      'participants.$uid.state': 'ended',
+      'participants.$uid.leftAt': cf.FieldValue.serverTimestamp(),
+      'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
+      'status': 'ended',
+      'endedAt': cf.FieldValue.serverTimestamp(),
+    });
+    _handledIncomingCallIds.remove(call.callId);
+    final navigator = _navigatorKey?.currentState;
+    if (navigator != null) {
+      await navigator.maybePop();
+    }
+  }
+
   Future<void> _presentIncomingCall(DmCallSession session) async {
     final navigator = _navigatorKey?.currentState;
     if (navigator == null) {
@@ -384,7 +427,11 @@ class DmCallService {
       debugPrint('DmCallService: Presenting call ${session.callId}');
       await navigator.push(
         MaterialPageRoute<void>(
-          builder: (_) => DmCallPage(session: session),
+          builder: (_) => DmCallPage(
+            session: session,
+            onAnswerIncomingCall: answerIncomingCall,
+            onDeclineIncomingCall: declineIncomingCall,
+          ),
           settings: RouteSettings(name: '/dm/call/${session.callId}'),
         ),
       ).whenComplete(() {
