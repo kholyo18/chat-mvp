@@ -236,7 +236,7 @@ class AgoraCallClient {
       await engine.setVideoEncoderConfiguration(
         VideoEncoderConfiguration(
           dimensions: const VideoDimensions(width: 960, height: 540),
-          frameRate: VideoFrameRate.videoFrameRateFps30,
+          frameRate: FrameRate.frameRateFps30.value(),
           orientationMode: OrientationMode.orientationModeAdaptive,
         ),
       );
