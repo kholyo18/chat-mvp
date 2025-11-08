@@ -480,6 +480,43 @@ extension NotificationsDeepLinks on NotificationsService {
 // ---------- Navigator ----------
 final navigatorKey = GlobalKey<NavigatorState>();
 
+class _LocaleDataCache {
+  _LocaleDataCache._();
+
+  static final Map<String, Future<void>> _pending = <String, Future<void>>{};
+  static final Set<String> _initialised = <String>{};
+
+  static Future<void> ensureLocale(Locale locale) =>
+      ensureLocaleTag(locale.toLanguageTag());
+
+  static Future<void> ensureLocaleTag(String? tag) {
+    final normalised = tag?.trim();
+    if (normalised == null || normalised.isEmpty) {
+      return Future<void>.value();
+    }
+    if (_initialised.contains(normalised)) {
+      return Future<void>.value();
+    }
+    final pending = _pending[normalised];
+    if (pending != null) {
+      return pending;
+    }
+    final future = initializeDateFormatting(normalised).then<void>((_) {
+      debugPrint('[Locale] Date symbols initialised for $normalised');
+      _initialised.add(normalised);
+    }).catchError((Object error, StackTrace stack) {
+      debugPrint('[Locale] Failed to initialise date symbols for $normalised: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    }).whenComplete(() {
+      _pending.remove(normalised);
+    });
+    _pending[normalised] = future;
+    return future;
+  }
+}
+
 // ---------- Entry ----------
 // CODEX-BEGIN:BOOT_GUARD_INIT
 void main() async {
@@ -512,6 +549,9 @@ void main() async {
   try {
     await initializeDateFormatting('en');
     await initializeDateFormatting('ar');
+    await _LocaleDataCache.ensureLocaleTag(Intl.getCurrentLocale());
+    final platformLocale = WidgetsBinding.instance.platformDispatcher.locale;
+    await _LocaleDataCache.ensureLocale(platformLocale);
   } on Object catch (error) {
     _bootLog('Locale data init FAILED (continuing): $error');
   }
@@ -533,10 +573,29 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Chat Ultra',
       theme: ThemeData(useMaterial3: true),
       initialRoute: '/',
+      supportedLocales: const [
+        Locale('en'),
+        Locale('en', 'US'),
+        Locale('ar'),
+        Locale('ar', 'SA'),
+      ],
+      localeResolutionCallback: (locale, supportedLocales) {
+        if (locale != null) {
+          unawaited(_LocaleDataCache.ensureLocale(locale));
+          for (final supported in supportedLocales) {
+            if (supported.languageCode == locale.languageCode) {
+              return supported;
+            }
+          }
+          return supportedLocales.first;
+        }
+        return const Locale('en');
+      },
       routes: {
         '/': (_) => const AuthGate(),
         '/auth': (_) => const SignInPage(),
@@ -647,6 +706,16 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
     } else if (state == AppLifecycleState.paused) {
       unawaited(presence.stop(uid));
     }
+  }
+
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    super.didChangeLocales(locales);
+    if (locales == null || locales.isEmpty) {
+      return;
+    }
+    final locale = locales.first;
+    unawaited(_LocaleDataCache.ensureLocale(locale));
   }
 
   // CODEX-BEGIN:PRIVACY_PRESENCE_HELPER

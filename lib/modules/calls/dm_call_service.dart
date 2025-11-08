@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -49,6 +50,10 @@ class DmCallService {
     debugPrint('[DmCallService] $message');
   }
 
+  void _logStack(StackTrace stack) {
+    debugPrintStack(label: '[DmCallService] stack', stackTrace: stack);
+  }
+
   Future<void> startVoiceCall(
     String threadId,
     String calleeId,
@@ -63,6 +68,7 @@ class DmCallService {
       _log('startVoiceCall: callId=${session.callId} presented.');
     } catch (error, stack) {
       _log('startVoiceCall failed for threadId=$threadId calleeId=$calleeId -> $error');
+      _logStack(stack);
       _reportStartCallError(error, stack);
       _showCallErrorSnackBar(error);
       rethrow;
@@ -83,6 +89,7 @@ class DmCallService {
       _log('startVideoCall: callId=${session.callId} presented.');
     } catch (error, stack) {
       _log('startVideoCall failed for threadId=$threadId calleeId=$calleeId -> $error');
+      _logStack(stack);
       _reportStartCallError(error, stack);
       _showCallErrorSnackBar(error);
       rethrow;
@@ -137,8 +144,12 @@ class DmCallService {
     if (navigator == null) {
       throw StateError('Navigator not available for DM call presentation');
     }
+    if (!navigator.mounted) {
+      throw StateError('Navigator for DM call presentation is not mounted');
+    }
 
     final isVideoCall = type == DmCallType.video;
+    _log('Ensuring Agora engine is ready (video=$isVideoCall).');
     await _agoraClient.initEngineIfNeeded(enableVideo: isVideoCall);
 
     final callRef = _firestore.collection('calls').doc();
@@ -213,7 +224,13 @@ class DmCallService {
       },
     };
 
-    await callRef.set(callPayload);
+    try {
+      await callRef.set(callPayload);
+    } catch (error, stack) {
+      _log('Failed to create call document for threadId=$threadId: $error');
+      _logStack(stack);
+      rethrow;
+    }
 
     final participants = <DmCallParticipant>[
       DmCallParticipant(
@@ -270,6 +287,7 @@ class DmCallService {
       });
     } catch (error, stack) {
       _log('Failed to join Agora for call ${callRef.id}: $error');
+      _logStack(stack);
       if (error is AgoraCallException && error.cause is AgoraRtcException) {
         final rtcError = error.cause as AgoraRtcException;
         _log(
@@ -294,6 +312,8 @@ class DmCallService {
     required Object error,
     required StackTrace stack,
   }) async {
+    _log('Call ${session.callId} failed to start: $error');
+    _logStack(stack);
     FlutterError.reportError(
       FlutterErrorDetails(exception: error, stack: stack),
     );
@@ -329,7 +349,7 @@ class DmCallService {
     }
 
     final navigator = _navigatorKey?.currentState;
-    if (navigator != null) {
+    if (navigator != null && navigator.mounted && navigator.canPop()) {
       navigator.maybePop();
     }
   }
@@ -566,7 +586,9 @@ class DmCallService {
         postJoinPayload['status'] = 'active';
       }
       await callRef.update(postJoinPayload);
-    } catch (error) {
+    } catch (error, stack) {
+      _log('Failed to answer call ${call.callId}: $error');
+      _logStack(stack);
       final revert = <String, dynamic>{
         'participants.$uid.state': 'ringing',
         'participants.$uid.joinedAt': cf.FieldValue.delete(),
@@ -577,10 +599,10 @@ class DmCallService {
       }
       try {
         await callRef.update(revert);
-      } catch (updateError, stack) {
+      } catch (updateError, updateStack) {
         _log('Failed to revert call state after Agora error: $updateError');
         FlutterError.reportError(
-          FlutterErrorDetails(exception: updateError, stack: stack),
+          FlutterErrorDetails(exception: updateError, stack: updateStack),
         );
       }
       rethrow;
@@ -603,7 +625,7 @@ class DmCallService {
     await _teardownAgora(call.callId);
     _handledIncomingCallIds.remove(call.callId);
     final navigator = _navigatorKey?.currentState;
-    if (navigator != null) {
+    if (navigator != null && navigator.mounted && navigator.canPop()) {
       await navigator.maybePop();
     }
   }
@@ -659,6 +681,11 @@ class DmCallService {
       _handledIncomingCallIds.remove(session.callId);
       return;
     }
+    if (!navigator.mounted) {
+      _log('Navigator for incoming DM call is not mounted');
+      _handledIncomingCallIds.remove(session.callId);
+      return;
+    }
     try {
       await _pushCallPage(navigator, session);
     } catch (err, stack) {
@@ -674,6 +701,10 @@ class DmCallService {
     NavigatorState navigator,
     DmCallSession session,
   ) async {
+    if (!navigator.mounted) {
+      _log('Navigator became unmounted before presenting call ${session.callId}');
+      return;
+    }
     if (_activeCallRouteIds.contains(session.callId)) {
       _log('Call ${session.callId} is already being presented, skipping push');
       return;
@@ -706,9 +737,13 @@ class DmCallService {
 
   void _showCallErrorSnackBar(Object error) {
     final navigator = _navigatorKey?.currentState;
-    final context = navigator?.context;
-    if (context == null) {
-      _log('Unable to show SnackBar for call error: $error');
+    if (navigator == null || !navigator.mounted) {
+      _log('Unable to show SnackBar for call error because navigator is unavailable: $error');
+      return;
+    }
+    final context = navigator.context;
+    if (!context.mounted) {
+      _log('Navigator context is not mounted while handling call error: $error');
       return;
     }
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -717,6 +752,7 @@ class DmCallService {
       return;
     }
     final message = _errorMessageForCall(error);
+    _log('Showing call error SnackBar: "$message" for error: $error');
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
@@ -744,6 +780,15 @@ class DmCallService {
       return error.message.isNotEmpty
           ? error.message
           : 'فشل بدء المكالمة، حاول مجددًا.';
+    }
+    if (error is StateError) {
+      final message = error.message.toLowerCase();
+      if (message.contains('navigator')) {
+        return 'تعذر فتح شاشة المكالمة. يرجى إعادة المحاولة من الصفحة الرئيسية.';
+      }
+      if (message.contains('signed in')) {
+        return 'يجب تسجيل الدخول لإجراء المكالمة.';
+      }
     }
     return 'فشل بدء المكالمة، حاول مجددًا.';
   }
