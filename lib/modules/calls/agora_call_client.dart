@@ -102,6 +102,18 @@ class AgoraCallClient {
     debugPrint('[AGORA] $message');
   }
 
+  String _permissionName(Permission permission) {
+    final value = permission.toString();
+    final parts = value.split('.');
+    return parts.isNotEmpty ? parts.last : value;
+  }
+
+  String _permissionStatusName(PermissionStatus status) {
+    final value = status.toString();
+    final parts = value.split('.');
+    return parts.isNotEmpty ? parts.last : value;
+  }
+
   RtcEngine _requireEngine() {
     if (_isDisposing) {
       throw AgoraCallException('Agora engine is shutting down.');
@@ -704,29 +716,38 @@ class AgoraCallClient {
 
   Future<void> _ensurePermissions({required bool isVideo}) async {
     if (kIsWeb) {
+      _log('Skipping permission check on web platform.');
       return;
     }
     if (!(Platform.isAndroid || Platform.isIOS)) {
+      _log('Skipping permission check on unsupported platform.');
       return;
     }
     final permissions = <Permission>[Permission.microphone];
     if (isVideo) {
       permissions.add(Permission.camera);
     }
+    _log('Ensuring permissions for call (video=$isVideo): ${permissions.map(_permissionName).join(', ')}');
     final missing = <Permission>[];
     for (final permission in permissions) {
       final status = await permission.status;
+      _log('Permission ${_permissionName(permission)} current status: ${_permissionStatusName(status)}');
       if (status.isGranted) {
         continue;
       }
       final result = await permission.request();
+      _log('Permission ${_permissionName(permission)} request result: ${_permissionStatusName(result)}');
       if (!result.isGranted) {
         missing.add(permission);
       }
     }
     if (missing.isNotEmpty) {
+      _log(
+        'Missing permissions after request: ${missing.map(_permissionName).join(', ')}',
+      );
       throw AgoraPermissionException(missing);
     }
+    _log('All required permissions granted (video=$isVideo).');
   }
 
   int _resolveLocalUid() {
