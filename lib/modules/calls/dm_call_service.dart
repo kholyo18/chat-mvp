@@ -148,9 +148,12 @@ class DmCallService {
 
     final callRef = _firestore.collection('calls').doc();
     final now = cf.FieldValue.serverTimestamp();
+    // Use a stable per-call channel so caller and callee always join the same
+    // Agora room without racing to generate different identifiers.
     final channelId = 'dm_call_${callRef.id}';
     final callerAgoraUid = _agoraClient.agoraUidForUser(currentUser.uid);
     final calleeAgoraUid = _agoraClient.agoraUidForUser(otherUserId);
+    final callToken = _normalizeToken(AgoraConfig.token);
 
     UserProfile? otherProfile;
     try {
@@ -211,7 +214,7 @@ class DmCallService {
           currentUser.uid: callerAgoraUid,
           otherUserId: calleeAgoraUid,
         },
-        if (AgoraConfig.token != null) 'token': AgoraConfig.token,
+        if (callToken != null) 'token': callToken,
       },
     };
 
@@ -223,7 +226,7 @@ class DmCallService {
       );
       await _agoraClient.joinDmCall(
         channelId: channelId,
-        token: AgoraConfig.token,
+        token: callToken,
         uid: callerAgoraUid,
         isVideo: type == DmCallType.video,
       );
@@ -275,7 +278,7 @@ class DmCallService {
       initiatorId: currentUser.uid,
       participants: participants,
       status: 'ringing',
-      agoraToken: AgoraConfig.token,
+      agoraToken: callToken,
     );
 
     unawaited(
@@ -513,7 +516,8 @@ class DmCallService {
       debugPrint(
         'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId} (localUid=$localAgoraUid)',
       );
-      final token = call.agoraToken ?? AgoraConfig.token;
+      final token =
+          _normalizeToken(call.agoraToken) ?? _normalizeToken(AgoraConfig.token);
       await _agoraClient.joinDmCall(
         channelId: call.channelId,
         token: token,
@@ -604,6 +608,14 @@ class DmCallService {
         FlutterErrorDetails(exception: err, stack: stack),
       );
     }
+  }
+
+  String? _normalizeToken(String? token) {
+    final trimmed = token?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
   }
 
   Future<void> _presentIncomingCall(DmCallSession session) async {
