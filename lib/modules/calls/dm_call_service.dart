@@ -262,6 +262,7 @@ class DmCallService {
         uid: callerAgoraUid,
         withVideo: isVideoCall,
       );
+      _log('Joined Agora channel $channelId for call ${callRef.id} (uid=$callerAgoraUid).');
       await callRef.update(<String, dynamic>{
         'participants.${currentUser.uid}.state': 'joined',
         'participants.${currentUser.uid}.joinedAt': cf.FieldValue.serverTimestamp(),
@@ -556,6 +557,7 @@ class DmCallService {
         uid: localAgoraUid,
         withVideo: isVideoCall,
       );
+      _log('Answered call ${call.callId} by joining ${call.channelId} (uid=$localAgoraUid).');
       final postJoinPayload = <String, dynamic>{
         'participants.$uid.state': 'joined',
         'participants.$uid.joinedAt': cf.FieldValue.serverTimestamp(),

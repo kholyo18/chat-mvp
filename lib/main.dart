@@ -31,6 +31,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'package:flutter/services.dart'; // للروابط العميقة/الحافظة/الاذونات
 // (للمعاينة لاحقًا قد نستخدم url_launcher/file_picker/cached_network_image إن أضفتها في pubspec)
@@ -507,6 +508,13 @@ void main() async {
     FlutterError.presentError(details);
     debugPrint('FlutterError: ${details.exceptionAsString()}');
   };
+
+  try {
+    await initializeDateFormatting('en');
+    await initializeDateFormatting('ar');
+  } on Object catch (error) {
+    _bootLog('Locale data init FAILED (continuing): $error');
+  }
 
   await runZonedGuarded(() async {
     // تفعيل كاش Firestore للأداء (يمكن تخصيصه أكثر):
