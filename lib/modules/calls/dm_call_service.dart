@@ -291,8 +291,11 @@ class DmCallService {
     required cf.DocumentReference<Map<String, dynamic>> callRef,
     required DmCallSession session,
     required Object error,
-    required StackTrace _stack,
+    required StackTrace stack,
   }) async {
+    FlutterError.reportError(
+      FlutterErrorDetails(exception: error, stack: stack),
+    );
     try {
       await callRef.update(<String, dynamic>{
         'status': 'ended',

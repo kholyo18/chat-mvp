@@ -413,7 +413,7 @@ class AgoraCallClient {
       isSpeakerEnabled.value = false;
     }
 
-    final resolvedToken = _effectiveToken(token);
+    final String? resolvedToken = _effectiveToken(token);
     final logTokenState = resolvedToken == null ? 'none' : 'provided';
     _log(
       'Joining channel: $channelId, uid=$uid, withVideo=$withVideo, token=$logTokenState',
