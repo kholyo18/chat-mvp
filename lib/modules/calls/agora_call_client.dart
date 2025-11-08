@@ -318,21 +318,43 @@ class AgoraCallClient {
       }
     }
 
-    final joinFuture = _performJoin(
-      channelId: channelId,
-      token: token,
-      uid: uid,
-      withVideo: withVideo,
-    );
-    _ongoingJoin = joinFuture;
-    _joiningChannelId = channelId;
-    try {
-      await joinFuture;
-    } finally {
-      if (identical(_ongoingJoin, joinFuture)) {
-        _ongoingJoin = null;
-        _joiningChannelId = null;
+    AgoraCallException? lastJoinError;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final joinFuture = _performJoin(
+        channelId: channelId,
+        token: token,
+        uid: uid,
+        withVideo: withVideo,
+      );
+      _ongoingJoin = joinFuture;
+      _joiningChannelId = channelId;
+      final attemptNumber = attempt + 1;
+      try {
+        _log(
+          'joinChannel attempt $attemptNumber for $channelId (uid=$uid, video=$withVideo)',
+        );
+        await joinFuture;
+        return;
+      } on AgoraCallException catch (error) {
+        lastJoinError = error;
+        final shouldRetry = attempt == 0 && _shouldRetryJoinError(error);
+        if (!shouldRetry) {
+          rethrow;
+        }
+        _log(
+          'joinChannel attempt $attemptNumber for $channelId failed with retryable error ${error.agoraErrorCode}, retrying...',
+        );
+        await _resetEngineAfterJoinFailure(enableVideo: withVideo);
+      } finally {
+        if (identical(_ongoingJoin, joinFuture)) {
+          _ongoingJoin = null;
+          _joiningChannelId = null;
+        }
       }
+    }
+
+    if (lastJoinError != null) {
+      throw lastJoinError;
     }
   }
 
@@ -471,6 +493,68 @@ class AgoraCallClient {
         _isJoining = false;
       }
     }
+  }
+
+  bool _shouldRetryJoinError(AgoraCallException error) {
+    final code = error.agoraErrorCode ??
+        (error.cause is AgoraRtcException
+            ? (error.cause as AgoraRtcException).code
+            : null);
+    if (code == null) {
+      return false;
+    }
+    final normalizedCode = code < 0 ? -code : code;
+    return normalizedCode == ErrorCodeType.errNotReady.value();
+  }
+
+  Future<void> _resetEngineAfterJoinFailure({required bool enableVideo}) async {
+    final engine = _engine;
+    if (engine == null) {
+      _log('No Agora engine instance to reset after join failure.');
+      return;
+    }
+    _log('Resetting Agora engine after failed join attempt.');
+    try {
+      await engine.leaveChannel();
+    } catch (error) {
+      _log('leaveChannel during reset failed: $error');
+    }
+    try {
+      await engine.stopPreview();
+    } catch (error) {
+      _log('stopPreview during reset failed: $error');
+    }
+    try {
+      await engine.disableVideo();
+    } catch (error) {
+      _log('disableVideo during reset failed: $error');
+    }
+    try {
+      await engine.release();
+    } catch (error) {
+      _log('Failed to release Agora engine during reset: $error');
+    }
+    _engine = null;
+    _isInitialized = false;
+    _isEngineReleased = true;
+    _isJoined = false;
+    _isJoining = false;
+    _isVideoCall = false;
+    _currentChannelId = null;
+    _localUid = null;
+    _lastJoinResultCode = null;
+    _lastEngineErrorCode = null;
+    isMuted.value = false;
+    isSpeakerEnabled.value = false;
+    isLocalUserJoined.value = false;
+    remoteUserIds.value = <int>{};
+    _initializationFuture = null;
+    _ongoingJoin = null;
+    _joiningChannelId = null;
+    _disposeFuture = null;
+    _isDisposing = false;
+    _log('Agora engine reset complete. Reinitializing...');
+    await _ensureEngineInitialized(enableVideo: enableVideo);
   }
 
   Future<void> leaveChannel() => _leaveChannel(awaitOngoingJoin: true);
