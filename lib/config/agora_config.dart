@@ -6,5 +6,5 @@ class AgoraConfig {
 
   /// For testing we rely on the App ID only (no token required).
   /// Keep this `null` to allow "App ID only" sessions in the Agora console.
-  static const String? token = null;
+  static const String? token = "";
 }
