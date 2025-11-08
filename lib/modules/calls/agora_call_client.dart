@@ -296,7 +296,7 @@ class AgoraCallClient {
 
   Future<void> joinChannel({
     required String channelId,
-    required String? token,
+    String? token,
     required int uid,
     required bool withVideo,
   }) async {
@@ -353,7 +353,7 @@ class AgoraCallClient {
 
   Future<void> _performJoin({
     required String channelId,
-    required String? token,
+    String? token,
     required int uid,
     required bool withVideo,
   }) async {
