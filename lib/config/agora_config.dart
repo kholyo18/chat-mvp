@@ -6,7 +6,7 @@ class AgoraConfig {
 
   /// TODO: replace with the real Agora App ID from console.agora.io before
   /// shipping the application.
-  static const String _appId = 'b748af12acfd485997d1061d8e544783';
+  static const String _appId = 'e3e2e02f2a934ba68bc472b2b70d7d5c';
 
   /// Normalised, trimmed App ID. Throws if the App ID is missing to avoid
   /// hitting the Agora SDK with an invalid configuration.
