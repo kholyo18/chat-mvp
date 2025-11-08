@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
 import '../../models/user_profile.dart';
@@ -43,41 +45,105 @@ class DmCallService {
   final Set<String> _activeCallRouteIds = <String>{};
   final AgoraCallClient _agoraClient = AgoraCallClient.instance;
 
+  Future<void> startVoiceCall(
+    String threadId,
+    String calleeId,
+  ) async {
+    debugPrint(
+      'DmCallService.startVoiceCall: threadId=$threadId calleeId=$calleeId',
+    );
+    try {
+      final session = await _startCall(
+        threadId: threadId,
+        otherUserId: calleeId,
+        type: DmCallType.voice,
+      );
+      debugPrint(
+        'DmCallService.startVoiceCall: callId=${session.callId} ready, navigating to page.',
+      );
+    } catch (error, stack) {
+      debugPrint(
+        'DmCallService.startVoiceCall: failed for threadId=$threadId calleeId=$calleeId -> $error',
+      );
+      _reportStartCallError(error, stack);
+      _showCallErrorSnackBar(error);
+      rethrow;
+    }
+  }
+
+  Future<void> startVideoCall(
+    String threadId,
+    String calleeId,
+  ) async {
+    debugPrint(
+      'DmCallService.startVideoCall: threadId=$threadId calleeId=$calleeId',
+    );
+    try {
+      final session = await _startCall(
+        threadId: threadId,
+        otherUserId: calleeId,
+        type: DmCallType.video,
+      );
+      debugPrint(
+        'DmCallService.startVideoCall: callId=${session.callId} ready, navigating to page.',
+      );
+    } catch (error, stack) {
+      debugPrint(
+        'DmCallService.startVideoCall: failed for threadId=$threadId calleeId=$calleeId -> $error',
+      );
+      _reportStartCallError(error, stack);
+      _showCallErrorSnackBar(error);
+      rethrow;
+    }
+  }
+
+  @Deprecated('Use startVoiceCall instead')
   Future<void> startVoiceCallWithUser(
     String threadId,
     String otherUserId, {
     NavigatorState? navigator,
   }) async {
-    await _startCall(
-      threadId: threadId,
-      otherUserId: otherUserId,
-      type: DmCallType.voice,
-      navigator: navigator,
-    );
+    assert(() {
+      if (navigator != null) {
+        debugPrint(
+          'DmCallService.startVoiceCallWithUser: navigator parameter is deprecated and will be ignored.',
+        );
+      }
+      return true;
+    }());
+    await startVoiceCall(threadId, otherUserId);
   }
 
+  @Deprecated('Use startVideoCall instead')
   Future<void> startVideoCallWithUser(
     String threadId,
     String otherUserId, {
     NavigatorState? navigator,
   }) async {
-    await _startCall(
-      threadId: threadId,
-      otherUserId: otherUserId,
-      type: DmCallType.video,
-      navigator: navigator,
-    );
+    assert(() {
+      if (navigator != null) {
+        debugPrint(
+          'DmCallService.startVideoCallWithUser: navigator parameter is deprecated and will be ignored.',
+        );
+      }
+      return true;
+    }());
+    await startVideoCall(threadId, otherUserId);
   }
 
-  Future<void> _startCall({
+  Future<DmCallSession> _startCall({
     required String threadId,
     required String otherUserId,
     required DmCallType type,
-    NavigatorState? navigator,
   }) async {
     final currentUser = _auth.currentUser;
     if (currentUser == null) {
       throw StateError('User must be signed in to start a call');
+    }
+
+    final navigator = _navigatorKey?.currentState;
+    if (navigator == null) {
+      throw StateError('Navigator not available for DM call presentation');
     }
 
     final callRef = _firestore.collection('calls').doc();
@@ -167,9 +233,12 @@ class DmCallService {
       });
     } catch (error, stack) {
       debugPrint('DmCallService: Failed to join Agora for call ${callRef.id}: $error');
-      FlutterError.reportError(
-        FlutterErrorDetails(exception: error, stack: stack),
-      );
+      if (error is AgoraCallException && error.cause is AgoraRtcException) {
+        final rtcError = error.cause as AgoraRtcException;
+        debugPrint(
+          'DmCallService: AgoraRtcException for call ${callRef.id}: code=${rtcError.code} message=${rtcError.message}',
+        );
+      }
       try {
         await callRef.delete();
       } catch (deleteError, deleteStack) {
@@ -209,22 +278,18 @@ class DmCallService {
       agoraToken: AgoraConfig.token,
     );
 
-    final nav = navigator;
-    if (nav == null) {
-      throw StateError('No navigator available to present the call screen');
-    }
-
-    await nav.push(
-      MaterialPageRoute<void>(
-        builder: (_) => DmCallPage(
-          session: session,
-          onAnswerIncomingCall: answerIncomingCall,
-          onDeclineIncomingCall: declineIncomingCall,
-          onTerminateCall: terminateCall,
-        ),
-        settings: RouteSettings(name: '/dm/call/${session.callId}'),
-      ),
+    unawaited(
+      _pushCallPage(navigator, session).catchError((Object error, StackTrace stack) {
+        debugPrint(
+          'DmCallService: Failed to push call route ${session.callId}: $error',
+        );
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stack),
+        );
+      }),
     );
+
+    return session;
   }
 
   /// Starts listening for incoming DM calls targeting [uid].
@@ -548,15 +613,30 @@ class DmCallService {
       _handledIncomingCallIds.remove(session.callId);
       return;
     }
+    try {
+      await _pushCallPage(navigator, session);
+    } catch (err, stack) {
+      _handledIncomingCallIds.remove(session.callId);
+      debugPrint('Failed to present DM call: $err');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: err, stack: stack),
+      );
+    }
+  }
+
+  Future<void> _pushCallPage(
+    NavigatorState navigator,
+    DmCallSession session,
+  ) async {
     if (_activeCallRouteIds.contains(session.callId)) {
       debugPrint(
         'DmCallService: Call ${session.callId} is already being presented, skipping push',
       );
       return;
     }
+    _activeCallRouteIds.add(session.callId);
+    debugPrint('DmCallService: Navigating to call ${session.callId}');
     try {
-      _activeCallRouteIds.add(session.callId);
-      debugPrint('DmCallService: Presenting call ${session.callId}');
       await navigator.push(
         MaterialPageRoute<void>(
           builder: (_) => DmCallPage(
@@ -567,17 +647,61 @@ class DmCallService {
           ),
           settings: RouteSettings(name: '/dm/call/${session.callId}'),
         ),
-      ).whenComplete(() {
-        _activeCallRouteIds.remove(session.callId);
-        debugPrint('DmCallService: Call ${session.callId} route dismissed');
-      });
-    } catch (err, stack) {
-      _handledIncomingCallIds.remove(session.callId);
-      debugPrint('Failed to present DM call: $err');
-      FlutterError.reportError(
-        FlutterErrorDetails(exception: err, stack: stack),
       );
+    } finally {
+      _activeCallRouteIds.remove(session.callId);
+      debugPrint('DmCallService: Call ${session.callId} route dismissed');
     }
+  }
+
+  void _reportStartCallError(Object error, StackTrace stack) {
+    FlutterError.reportError(
+      FlutterErrorDetails(exception: error, stack: stack),
+    );
+  }
+
+  void _showCallErrorSnackBar(Object error) {
+    final navigator = _navigatorKey?.currentState;
+    final context = navigator?.context;
+    if (context == null) {
+      debugPrint('DmCallService: Unable to show SnackBar for call error: $error');
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) {
+      debugPrint('DmCallService: No ScaffoldMessenger available to show call error');
+      return;
+    }
+    final message = _errorMessageForCall(error);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  String _errorMessageForCall(Object error) {
+    if (error is AgoraPermissionException) {
+      final labels = error.missingPermissions
+          .map((permission) {
+            switch (permission) {
+              case Permission.camera:
+                return 'الكاميرا';
+              case Permission.microphone:
+                return 'الميكروفون';
+              default:
+                return 'الصلاحيات المطلوبة';
+            }
+          })
+          .toSet()
+          .toList();
+      final labelText = labels.isEmpty ? 'الصلاحيات المطلوبة' : labels.join(' و ');
+      return 'يرجى منح صلاحية $labelText للمتابعة في المكالمة.';
+    }
+    if (error is AgoraCallException) {
+      return error.message.isNotEmpty
+          ? error.message
+          : 'فشل بدء المكالمة، حاول مجددًا.';
+    }
+    return 'فشل بدء المكالمة، حاول مجددًا.';
   }
 
   /// Stops any active listeners used for incoming calls.
