@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
-import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
@@ -49,23 +49,26 @@ enum AgoraRemoteUserEventType { joined, left }
 
 /// Thin wrapper around [RtcEngine] to manage the DM call lifecycle.
 class AgoraCallClient {
-  AgoraCallClient._internal();
+  AgoraCallClient._();
 
   factory AgoraCallClient() => instance;
 
-  static final AgoraCallClient instance = AgoraCallClient._internal();
+  static final AgoraCallClient instance = AgoraCallClient._();
 
   RtcEngine? _engine;
   bool _isInitialized = false;
+  bool _isEngineReleased = false;
   bool _isJoined = false;
   bool _isJoining = false;
   bool _isVideoCall = false;
+  bool _isDisposing = false;
   String? _currentChannelId;
   int? _localUid;
   int? _lastJoinResultCode;
   int? _lastEngineErrorCode;
   Future<void>? _initializationFuture;
   Future<void>? _ongoingJoin;
+  Future<void>? _disposeFuture;
   String? _joiningChannelId;
 
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
@@ -91,13 +94,17 @@ class AgoraCallClient {
 
   RtcEngine? get maybeEngine => _engine;
 
-  Future<void> init() => _ensureEngineInitialized(enableVideo: false);
+  Future<void> initEngineIfNeeded({required bool enableVideo}) =>
+      _ensureEngineInitialized(enableVideo: enableVideo);
 
   void _log(String message) {
     debugPrint('[AGORA] $message');
   }
 
   RtcEngine _requireEngine() {
+    if (_isDisposing) {
+      throw AgoraCallException('Agora engine is shutting down.');
+    }
     final engine = _engine;
     if (engine == null) {
       throw AgoraCallException('Agora engine is not initialized');
@@ -105,32 +112,50 @@ class AgoraCallClient {
     return engine;
   }
 
-  void _validateAppId() {
-    final appId = AgoraConfig.appId.trim();
-    if (appId.isEmpty || appId == 'YOUR_AGORA_APP_ID') {
+  String _obtainAppId() {
+    try {
+      return AgoraConfig.appId;
+    } on FlutterError catch (error) {
+      _log('Agora App ID validation failed: ${error.message}');
       throw AgoraCallException(
         'إعدادات الاتصال غير مكتملة. يرجى التحقق من App ID الخاص بخدمة Agora.',
+        cause: error,
       );
     }
   }
 
   Future<void> _ensureEngineInitialized({required bool enableVideo}) async {
-    if (_engine != null) {
+    if (_isDisposing) {
+      final disposeFuture = _disposeFuture;
+      if (disposeFuture != null) {
+        _log('Waiting for engine dispose to finish before reinitializing.');
+        await disposeFuture;
+      }
+    }
+
+    final existingEngine = _engine;
+    if (existingEngine != null && !_isEngineReleased) {
       if (enableVideo) {
-        await _engine!.enableVideo();
+        await existingEngine.enableVideo();
       }
       return;
     }
+
     if (_initializationFuture != null) {
+      _log('Awaiting in-flight Agora engine initialization.');
       await _initializationFuture;
       if (enableVideo) {
         await _engine?.enableVideo();
       }
       return;
     }
-    _validateAppId();
-    _log('Initializing Agora engine...');
-    final future = _createAndInitializeEngine(enableVideo: enableVideo);
+
+    final appId = _obtainAppId();
+    _log('Initializing Agora engine (enableVideo=$enableVideo)...');
+    final future = _createAndInitializeEngine(
+      appId: appId,
+      enableVideo: enableVideo,
+    );
     _initializationFuture = future;
     try {
       await future;
@@ -141,19 +166,37 @@ class AgoraCallClient {
     }
   }
 
-  Future<void> _createAndInitializeEngine({required bool enableVideo}) async {
+  Future<void> _createAndInitializeEngine({
+    required String appId,
+    required bool enableVideo,
+  }) async {
     final engine = createAgoraRtcEngine();
-    await engine.initialize(
-      const RtcEngineContext(appId: AgoraConfig.appId),
-    );
+    try {
+      await engine.initialize(
+        RtcEngineContext(
+          appId: appId,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+        ),
+      );
+    } on AgoraRtcException catch (error) {
+      _log('Failed to initialize Agora engine: code=${error.code} message=${error.message}');
+      throw AgoraCallException(
+        'تعذر تهيئة خدمة المكالمات، يرجى المحاولة مرة أخرى.',
+        cause: error,
+        agoraErrorCode: error.code,
+      );
+    } catch (error) {
+      _log('Unexpected error while initializing Agora engine: $error');
+      throw AgoraCallException(
+        'تعذر تهيئة خدمة المكالمات، يرجى المحاولة مرة أخرى.',
+        cause: error,
+      );
+    }
+
     await engine.enableAudio();
     if (enableVideo) {
       await engine.enableVideo();
     }
-    await engine.setChannelProfile(
-      ChannelProfileType.channelProfileCommunication,
-    );
-    await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
 
     engine.registerEventHandler(
       RtcEngineEventHandler(
@@ -162,6 +205,7 @@ class AgoraCallClient {
             'onJoinChannelSuccess: ${connection.channelId} uid=${connection.localUid} elapsed=$elapsed',
           );
           _isJoined = true;
+          _isJoining = false;
           _currentChannelId = connection.channelId;
           _localUid = connection.localUid;
           isLocalUserJoined.value = true;
@@ -230,14 +274,15 @@ class AgoraCallClient {
 
     _engine = engine;
     _isInitialized = true;
+    _isEngineReleased = false;
     _log('Agora engine initialized.');
   }
 
-  Future<void> joinDmCall({
+  Future<void> joinChannel({
     required String channelId,
     required String? token,
     required int uid,
-    required bool isVideo,
+    required bool withVideo,
   }) async {
     if (channelId.trim().isEmpty) {
       throw AgoraCallException('معرّف قناة الاتصال غير صالح.');
@@ -245,6 +290,7 @@ class AgoraCallClient {
 
     if (_ongoingJoin != null) {
       if (_joiningChannelId == channelId) {
+        _log('Join already in progress for channel $channelId');
         return _ongoingJoin!;
       }
       try {
@@ -260,7 +306,7 @@ class AgoraCallClient {
       channelId: channelId,
       token: token,
       uid: uid,
-      isVideo: isVideo,
+      withVideo: withVideo,
     );
     _ongoingJoin = joinFuture;
     _joiningChannelId = channelId;
@@ -280,14 +326,12 @@ class AgoraCallClient {
     required bool isVideo,
   }) async {
     final uid = _resolveLocalUid();
-    final trimmedToken = AgoraConfig.token?.trim();
-    final effectiveToken =
-        (trimmedToken != null && trimmedToken.isNotEmpty) ? trimmedToken : null;
-    await joinDmCall(
+    final effectiveToken = _effectiveToken(AgoraConfig.token);
+    await joinChannel(
       channelId: channelId,
       token: effectiveToken,
       uid: uid,
-      isVideo: isVideo,
+      withVideo: isVideo,
     );
   }
 
@@ -295,15 +339,20 @@ class AgoraCallClient {
     required String channelId,
     required String? token,
     required int uid,
-    required bool isVideo,
+    required bool withVideo,
   }) async {
     _lastJoinResultCode = null;
     _lastEngineErrorCode = null;
 
-    await _ensurePermissions(isVideo: isVideo);
-    await _ensureEngineInitialized(enableVideo: isVideo);
+    await _ensurePermissions(isVideo: withVideo);
+    await _ensureEngineInitialized(enableVideo: withVideo);
 
     final engine = _requireEngine();
+
+    if (_isDisposing) {
+      _log('Cannot join channel $channelId while engine is disposing.');
+      throw AgoraCallException('خدمة المكالمات غير متاحة حالياً، حاول مجددًا لاحقاً.');
+    }
 
     if (_isJoining && _currentChannelId == channelId) {
       _log('Join already in progress for $channelId');
@@ -314,11 +363,11 @@ class AgoraCallClient {
       return;
     }
     if (_isJoined && _currentChannelId != channelId) {
-      await _leaveCurrentCall(awaitOngoingJoin: false);
+      await _leaveChannel(awaitOngoingJoin: false);
     }
 
     _isJoining = true;
-    _isVideoCall = isVideo;
+    _isVideoCall = withVideo;
     _currentChannelId = channelId;
     _localUid = uid;
 
@@ -328,9 +377,8 @@ class AgoraCallClient {
 
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
-    await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
 
-    if (isVideo) {
+    if (withVideo) {
       await engine.enableVideo();
       await engine.setVideoEncoderConfiguration(
         VideoEncoderConfiguration(
@@ -349,30 +397,28 @@ class AgoraCallClient {
       isSpeakerEnabled.value = false;
     }
 
-    final trimmedToken = token?.trim();
-    final effectiveToken =
-        (trimmedToken != null && trimmedToken.isNotEmpty) ? trimmedToken : null;
-    final isTokenEmpty = effectiveToken == null || effectiveToken.isEmpty;
+    final resolvedToken = _effectiveToken(token);
+    final logTokenState = resolvedToken == null ? 'none' : 'provided';
     _log(
-      'joining channel: $channelId, uid=$uid, video=$isVideo, tokenEmpty=$isTokenEmpty',
+      'joining channel: $channelId, uid=$uid, video=$withVideo, token=$logTokenState',
     );
 
     try {
       await engine.joinChannel(
-        token: effectiveToken ?? '',
+        token: resolvedToken ?? '',
         channelId: channelId,
         uid: uid,
         options: ChannelMediaOptions(
           channelProfile: ChannelProfileType.channelProfileCommunication,
           clientRoleType: ClientRoleType.clientRoleBroadcaster,
           publishMicrophoneTrack: true,
-          publishCameraTrack: isVideo,
+          publishCameraTrack: withVideo,
           autoSubscribeAudio: true,
-          autoSubscribeVideo: isVideo,
+          autoSubscribeVideo: withVideo,
         ),
       );
       _lastJoinResultCode = 0;
-      _log('joinChannel completed for $channelId');
+      _log('joinChannel request issued for $channelId');
     } on AgoraRtcException catch (error) {
       _lastJoinResultCode = error.code;
       _currentChannelId = null;
@@ -404,14 +450,17 @@ class AgoraCallClient {
         cause: error,
       );
     } finally {
-      _isJoining = false;
+      if (!_isJoined) {
+        _isJoining = false;
+      }
     }
   }
 
-  Future<void> leaveCurrentCall() => _leaveCurrentCall(awaitOngoingJoin: true);
+  Future<void> leaveChannel() => _leaveChannel(awaitOngoingJoin: true);
 
-  Future<void> _leaveCurrentCall({required bool awaitOngoingJoin}) async {
-    if (_engine == null) {
+  Future<void> _leaveChannel({required bool awaitOngoingJoin}) async {
+    final engine = _engine;
+    if (engine == null) {
       return;
     }
     if (awaitOngoingJoin && _ongoingJoin != null) {
@@ -423,7 +472,6 @@ class AgoraCallClient {
     }
 
     _log('Leaving Agora channel (channel=$_currentChannelId)');
-    final engine = _requireEngine();
     if (_isJoined || _isJoining) {
       try {
         await engine.leaveChannel();
@@ -448,14 +496,23 @@ class AgoraCallClient {
     remoteUserIds.value = <int>{};
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose() {
+    if (_disposeFuture != null) {
+      return _disposeFuture!;
+    }
     final engine = _engine;
     if (engine == null) {
-      return;
+      return Future.value();
     }
-    try {
-      await leaveCurrentCall();
-    } finally {
+
+    _log('Disposing Agora engine...');
+    _isDisposing = true;
+    final future = () async {
+      try {
+        await leaveChannel();
+      } catch (error) {
+        _log('Error while leaving channel during dispose: $error');
+      }
       try {
         await engine.release();
       } catch (error) {
@@ -463,10 +520,17 @@ class AgoraCallClient {
       }
       _engine = null;
       _isInitialized = false;
+      _isEngineReleased = true;
+      _isDisposing = false;
       _initializationFuture = null;
       _ongoingJoin = null;
       _joiningChannelId = null;
-    }
+      _disposeFuture = null;
+      _log('Agora engine disposed.');
+    }();
+
+    _disposeFuture = future;
+    return future;
   }
 
   String _localizedMessageForError(ErrorCodeType code, {int? rawCode}) {
@@ -588,5 +652,21 @@ class AgoraCallClient {
       return 1;
     }
     return hash;
+  }
+
+  String? _normalizeToken(String? token) {
+    final trimmed = token?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  String? _effectiveToken(String? override) {
+    final normalizedOverride = _normalizeToken(override);
+    if (normalizedOverride != null) {
+      return normalizedOverride;
+    }
+    return _normalizeToken(AgoraConfig.token);
   }
 }
