@@ -45,26 +45,24 @@ class DmCallService {
   final Set<String> _activeCallRouteIds = <String>{};
   final AgoraCallClient _agoraClient = AgoraCallClient.instance;
 
+  void _log(String message) {
+    debugPrint('[DmCallService] $message');
+  }
+
   Future<void> startVoiceCall(
     String threadId,
     String calleeId,
   ) async {
-    debugPrint(
-      'DmCallService.startVoiceCall: threadId=$threadId calleeId=$calleeId',
-    );
+    _log('startVoiceCall: threadId=$threadId calleeId=$calleeId');
     try {
       final session = await _startCall(
         threadId: threadId,
         otherUserId: calleeId,
         type: DmCallType.voice,
       );
-      debugPrint(
-        'DmCallService.startVoiceCall: callId=${session.callId} ready, navigating to page.',
-      );
+      _log('startVoiceCall: callId=${session.callId} presented.');
     } catch (error, stack) {
-      debugPrint(
-        'DmCallService.startVoiceCall: failed for threadId=$threadId calleeId=$calleeId -> $error',
-      );
+      _log('startVoiceCall failed for threadId=$threadId calleeId=$calleeId -> $error');
       _reportStartCallError(error, stack);
       _showCallErrorSnackBar(error);
       rethrow;
@@ -75,22 +73,16 @@ class DmCallService {
     String threadId,
     String calleeId,
   ) async {
-    debugPrint(
-      'DmCallService.startVideoCall: threadId=$threadId calleeId=$calleeId',
-    );
+    _log('startVideoCall: threadId=$threadId calleeId=$calleeId');
     try {
       final session = await _startCall(
         threadId: threadId,
         otherUserId: calleeId,
         type: DmCallType.video,
       );
-      debugPrint(
-        'DmCallService.startVideoCall: callId=${session.callId} ready, navigating to page.',
-      );
+      _log('startVideoCall: callId=${session.callId} presented.');
     } catch (error, stack) {
-      debugPrint(
-        'DmCallService.startVideoCall: failed for threadId=$threadId calleeId=$calleeId -> $error',
-      );
+      _log('startVideoCall failed for threadId=$threadId calleeId=$calleeId -> $error');
       _reportStartCallError(error, stack);
       _showCallErrorSnackBar(error);
       rethrow;
@@ -165,7 +157,7 @@ class DmCallService {
         otherProfile = UserProfile.fromJson(snap.data()!);
       }
     } catch (err, stack) {
-      debugPrint('Failed to load callee profile: $err');
+      _log('Failed to load callee profile: $err');
       FlutterError.reportError(
         FlutterErrorDetails(exception: err, stack: stack),
       );
@@ -223,39 +215,6 @@ class DmCallService {
 
     await callRef.set(callPayload);
 
-    try {
-      debugPrint(
-        'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
-      );
-      await _agoraClient.joinChannel(
-        channelId: channelId,
-        token: callToken,
-        uid: callerAgoraUid,
-        withVideo: isVideoCall,
-      );
-      await callRef.update(<String, dynamic>{
-        'participants.${currentUser.uid}.state': 'joined',
-        'participants.${currentUser.uid}.joinedAt': cf.FieldValue.serverTimestamp(),
-      });
-    } catch (error, stack) {
-      debugPrint('DmCallService: Failed to join Agora for call ${callRef.id}: $error');
-      if (error is AgoraCallException && error.cause is AgoraRtcException) {
-        final rtcError = error.cause as AgoraRtcException;
-        debugPrint(
-          'DmCallService: AgoraRtcException for call ${callRef.id}: code=${rtcError.code} message=${rtcError.message}',
-        );
-      }
-      try {
-        await callRef.delete();
-      } catch (deleteError, deleteStack) {
-        debugPrint('DmCallService: Failed to delete call ${callRef.id} after Agora error: $deleteError');
-        FlutterError.reportError(
-          FlutterErrorDetails(exception: deleteError, stack: deleteStack),
-        );
-      }
-      rethrow;
-    }
-
     final participants = <DmCallParticipant>[
       DmCallParticipant(
         uid: currentUser.uid,
@@ -286,16 +245,89 @@ class DmCallService {
 
     unawaited(
       _pushCallPage(navigator, session).catchError((Object error, StackTrace stack) {
-        debugPrint(
-          'DmCallService: Failed to push call route ${session.callId}: $error',
-        );
+        _log('Failed to push call route ${session.callId}: $error');
         FlutterError.reportError(
           FlutterErrorDetails(exception: error, stack: stack),
         );
       }),
     );
 
+    try {
+      _log(
+        'Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
+      );
+      await _agoraClient.joinChannel(
+        channelId: channelId,
+        token: callToken,
+        uid: callerAgoraUid,
+        withVideo: isVideoCall,
+      );
+      await callRef.update(<String, dynamic>{
+        'participants.${currentUser.uid}.state': 'joined',
+        'participants.${currentUser.uid}.joinedAt': cf.FieldValue.serverTimestamp(),
+        'status': 'ringing',
+      });
+    } catch (error, stack) {
+      _log('Failed to join Agora for call ${callRef.id}: $error');
+      if (error is AgoraCallException && error.cause is AgoraRtcException) {
+        final rtcError = error.cause as AgoraRtcException;
+        _log(
+          'AgoraRtcException for call ${callRef.id}: code=${rtcError.code} message=${rtcError.message}',
+        );
+      }
+      await _handleCallStartFailure(
+        callRef: callRef,
+        session: session,
+        error: error,
+        stack: stack,
+      );
+      rethrow;
+    }
+
     return session;
+  }
+
+  Future<void> _handleCallStartFailure({
+    required cf.DocumentReference<Map<String, dynamic>> callRef,
+    required DmCallSession session,
+    required Object error,
+    required StackTrace _stack,
+  }) async {
+    try {
+      await callRef.update(<String, dynamic>{
+        'status': 'ended',
+        'endedAt': cf.FieldValue.serverTimestamp(),
+        'participants.${session.initiatorId}.state': 'failed',
+        'participants.${session.initiatorId}.endedAt': cf.FieldValue.serverTimestamp(),
+      });
+    } catch (updateError, updateStack) {
+      _log('Failed to mark call ${session.callId} as ended after Agora error: $updateError');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: updateError, stack: updateStack),
+      );
+      try {
+        await callRef.delete();
+      } catch (deleteError, deleteStack) {
+        _log('Failed to delete call ${session.callId} after Agora error: $deleteError');
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: deleteError, stack: deleteStack),
+        );
+      }
+    }
+
+    try {
+      await _agoraClient.leaveChannel();
+    } catch (leaveError, leaveStack) {
+      _log('Error while leaving Agora channel after failure: $leaveError');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: leaveError, stack: leaveStack),
+      );
+    }
+
+    final navigator = _navigatorKey?.currentState;
+    if (navigator != null) {
+      navigator.maybePop();
+    }
   }
 
   /// Starts listening for incoming DM calls targeting [uid].
@@ -304,7 +336,7 @@ class DmCallService {
     required GlobalKey<NavigatorState> navigatorKey,
   }) {
     if (uid.isEmpty) {
-      debugPrint('DmCallService: startListening aborted due to empty uid');
+      _log('startListening aborted due to empty uid');
       return;
     }
     final alreadyListening =
@@ -312,12 +344,12 @@ class DmCallService {
     final navigatorUnchanged = identical(_navigatorKey, navigatorKey);
     _navigatorKey = navigatorKey;
     if (alreadyListening && navigatorUnchanged) {
-      debugPrint('DmCallService: listener already active for uid=$uid');
+      _log('listener already active for uid=$uid');
       return;
     }
     stopListening();
     _listeningUid = uid;
-    debugPrint('DmCallService: Subscribing for incoming DM calls (uid=$uid)');
+    _log('Subscribing for incoming DM calls (uid=$uid)');
     final query = _firestore
         .collection('calls')
         .where('mode', isEqualTo: 'dm')
@@ -326,7 +358,7 @@ class DmCallService {
     _incomingCallsSubscription = query.snapshots().listen(
       (snapshot) => _handleIncomingSnapshot(snapshot, uid),
       onError: (error, stack) {
-        debugPrint('DmCallService incoming call listener error: $error');
+        _log('incoming call listener error: $error');
         FlutterError.reportError(
           FlutterErrorDetails(exception: error, stack: stack),
         );
@@ -337,7 +369,7 @@ class DmCallService {
   /// Cancels the incoming calls listener, if active.
   void stopListening() {
     if (_incomingCallsSubscription != null) {
-      debugPrint('DmCallService: Stopping incoming call listener');
+      _log('Stopping incoming call listener');
     }
     _incomingCallsSubscription?.cancel();
     _incomingCallsSubscription = null;
@@ -351,62 +383,54 @@ class DmCallService {
     String targetUid,
   ) {
     final docIds = snapshot.docs.map((doc) => doc.id).join(', ');
-    debugPrint(
-      'DmCallService: Snapshot for $targetUid has ${snapshot.docs.length} docs [$docIds]',
-    );
+    _log('Snapshot for $targetUid has ${snapshot.docs.length} docs [$docIds]');
     if (_listeningUid != targetUid) {
-      debugPrint(
-        'DmCallService: Ignoring snapshot for stale uid=$targetUid (listening=$_listeningUid)',
-      );
+      _log('Ignoring snapshot for stale uid=$targetUid (listening=$_listeningUid)');
       return;
     }
     for (final change in snapshot.docChanges) {
       final doc = change.doc;
       final callId = doc.id;
       if (change.type == cf.DocumentChangeType.removed) {
-        debugPrint('DmCallService: Call $callId removed from ringing snapshot');
+        _log('Call $callId removed from ringing snapshot');
         _handledIncomingCallIds.remove(callId);
         _activeCallRouteIds.remove(callId);
         continue;
       }
       final data = doc.data();
       if (data == null) {
-        debugPrint('DmCallService: Skipping $callId because data is null');
+        _log('Skipping $callId because data is null');
         continue;
       }
       final status = (data['status'] as String?) ?? 'ringing';
       final endedAt = data['endedAt'];
       if (endedAt != null) {
-        debugPrint('DmCallService: Ignoring $callId because endedAt=$endedAt');
+        _log('Ignoring $callId because endedAt=$endedAt');
         _handledIncomingCallIds.remove(callId);
         continue;
       }
       if (status != 'ringing') {
-        debugPrint('DmCallService: Ignoring $callId with status=$status');
+        _log('Ignoring $callId with status=$status');
         _handledIncomingCallIds.remove(callId);
         continue;
       }
       if (_handledIncomingCallIds.contains(callId)) {
-        debugPrint('DmCallService: Call $callId already handled');
+        _log('Call $callId already handled');
         continue;
       }
       final participantsRaw = data['participants'];
       if (participantsRaw is! Map<String, dynamic>) {
-        debugPrint('DmCallService: Call $callId has invalid participants payload');
+        _log('Call $callId has invalid participants payload');
         continue;
       }
       final participantRaw = participantsRaw[targetUid];
       if (participantRaw is! Map<String, dynamic>) {
-        debugPrint(
-          'DmCallService: Call $callId does not include participant data for $targetUid',
-        );
+        _log('Call $callId does not include participant data for $targetUid');
         continue;
       }
       final role = (participantRaw['role'] as String?)?.toLowerCase();
       if (role != 'callee') {
-        debugPrint(
-          'DmCallService: Call $callId ignored because participant role is $role',
-        );
+        _log('Call $callId ignored because participant role is $role');
         continue;
       }
       final participantsDescription = participantsRaw.entries
@@ -421,12 +445,12 @@ class DmCallService {
             return entry.key;
           })
           .join(', ');
-      debugPrint(
-        'DmCallService: Incoming ringing call $callId for $targetUid participants=[$participantsDescription]',
+      _log(
+        'Incoming ringing call $callId for $targetUid participants=[$participantsDescription]',
       );
       final session = _sessionFromData(callId, data);
       if (session == null) {
-        debugPrint('DmCallService: Failed to build session for call $callId');
+        _log('Failed to build session for call $callId');
         continue;
       }
       _handledIncomingCallIds.add(callId);
@@ -518,8 +542,8 @@ class DmCallService {
     };
     await callRef.update(preJoinPayload);
     try {
-      debugPrint(
-        'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId} (localUid=$localAgoraUid)',
+      _log(
+        'Answering call ${call.callId} by joining channel ${call.channelId} (localUid=$localAgoraUid)',
       );
       final token =
           _normalizeToken(call.agoraToken) ?? _normalizeToken(AgoraConfig.token);
@@ -549,7 +573,7 @@ class DmCallService {
       try {
         await callRef.update(revert);
       } catch (updateError, stack) {
-        debugPrint('DmCallService: Failed to revert call state after Agora error: $updateError');
+        _log('Failed to revert call state after Agora error: $updateError');
         FlutterError.reportError(
           FlutterErrorDetails(exception: updateError, stack: stack),
         );
@@ -608,7 +632,7 @@ class DmCallService {
     try {
       await _agoraClient.leaveChannel();
     } catch (err, stack) {
-      debugPrint('DmCallService: Failed to teardown Agora call: $err');
+      _log('Failed to teardown Agora call: $err');
       FlutterError.reportError(
         FlutterErrorDetails(exception: err, stack: stack),
       );
@@ -626,7 +650,7 @@ class DmCallService {
   Future<void> _presentIncomingCall(DmCallSession session) async {
     final navigator = _navigatorKey?.currentState;
     if (navigator == null) {
-      debugPrint('DmCallService: No navigator to present incoming DM call');
+      _log('No navigator to present incoming DM call');
       _handledIncomingCallIds.remove(session.callId);
       return;
     }
@@ -634,7 +658,7 @@ class DmCallService {
       await _pushCallPage(navigator, session);
     } catch (err, stack) {
       _handledIncomingCallIds.remove(session.callId);
-      debugPrint('Failed to present DM call: $err');
+      _log('Failed to present DM call: $err');
       FlutterError.reportError(
         FlutterErrorDetails(exception: err, stack: stack),
       );
@@ -646,13 +670,11 @@ class DmCallService {
     DmCallSession session,
   ) async {
     if (_activeCallRouteIds.contains(session.callId)) {
-      debugPrint(
-        'DmCallService: Call ${session.callId} is already being presented, skipping push',
-      );
+      _log('Call ${session.callId} is already being presented, skipping push');
       return;
     }
     _activeCallRouteIds.add(session.callId);
-    debugPrint('DmCallService: Navigating to call ${session.callId}');
+    _log('Navigating to call ${session.callId}');
     try {
       await navigator.push(
         MaterialPageRoute<void>(
@@ -667,7 +689,7 @@ class DmCallService {
       );
     } finally {
       _activeCallRouteIds.remove(session.callId);
-      debugPrint('DmCallService: Call ${session.callId} route dismissed');
+      _log('Call ${session.callId} route dismissed');
     }
   }
 
@@ -681,12 +703,12 @@ class DmCallService {
     final navigator = _navigatorKey?.currentState;
     final context = navigator?.context;
     if (context == null) {
-      debugPrint('DmCallService: Unable to show SnackBar for call error: $error');
+      _log('Unable to show SnackBar for call error: $error');
       return;
     }
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) {
-      debugPrint('DmCallService: No ScaffoldMessenger available to show call error');
+      _log('No ScaffoldMessenger available to show call error');
       return;
     }
     final message = _errorMessageForCall(error);
