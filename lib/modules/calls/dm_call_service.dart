@@ -146,6 +146,9 @@ class DmCallService {
       throw StateError('Navigator not available for DM call presentation');
     }
 
+    final isVideoCall = type == DmCallType.video;
+    await _agoraClient.initEngineIfNeeded(enableVideo: isVideoCall);
+
     final callRef = _firestore.collection('calls').doc();
     final now = cf.FieldValue.serverTimestamp();
     // Use a stable per-call channel so caller and callee always join the same
@@ -224,11 +227,11 @@ class DmCallService {
       debugPrint(
         'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
       );
-      await _agoraClient.joinDmCall(
+      await _agoraClient.joinChannel(
         channelId: channelId,
         token: callToken,
         uid: callerAgoraUid,
-        isVideo: type == DmCallType.video,
+        withVideo: isVideoCall,
       );
       await callRef.update(<String, dynamic>{
         'participants.${currentUser.uid}.state': 'joined',
@@ -505,6 +508,8 @@ class DmCallService {
     if (call.channelId.isEmpty) {
       throw StateError('Call channelId is missing');
     }
+    final isVideoCall = call.type == DmCallType.video;
+    await _agoraClient.initEngineIfNeeded(enableVideo: isVideoCall);
     final callRef = _firestore.collection('calls').doc(call.callId);
     final shouldActivate = call.status != 'active';
     final preJoinPayload = <String, dynamic>{
@@ -518,11 +523,11 @@ class DmCallService {
       );
       final token =
           _normalizeToken(call.agoraToken) ?? _normalizeToken(AgoraConfig.token);
-      await _agoraClient.joinDmCall(
+      await _agoraClient.joinChannel(
         channelId: call.channelId,
         token: token,
         uid: localAgoraUid,
-        isVideo: call.type == DmCallType.video,
+        withVideo: isVideoCall,
       );
       final postJoinPayload = <String, dynamic>{
         'participants.$uid.state': 'joined',
@@ -601,7 +606,7 @@ class DmCallService {
 
   Future<void> _teardownAgora(String _) async {
     try {
-      await _agoraClient.leaveCurrentCall();
+      await _agoraClient.leaveChannel();
     } catch (err, stack) {
       debugPrint('DmCallService: Failed to teardown Agora call: $err');
       FlutterError.reportError(
