@@ -153,7 +153,11 @@ class DmCallService {
     final channelId = 'dm_call_${callRef.id}';
     final callerAgoraUid = _agoraClient.agoraUidForUser(currentUser.uid);
     final calleeAgoraUid = _agoraClient.agoraUidForUser(otherUserId);
-    final callToken = _normalizeToken(AgoraConfig.token);
+    final callToken = AgoraConfig.normalizedToken();
+
+    await _agoraClient.initEngineIfNeeded(
+      enableVideo: type == DmCallType.video,
+    );
 
     UserProfile? otherProfile;
     try {
@@ -224,11 +228,11 @@ class DmCallService {
       debugPrint(
         'DmCallService: Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
       );
-      await _agoraClient.joinDmCall(
+      await _agoraClient.joinChannel(
         channelId: channelId,
         token: callToken,
         uid: callerAgoraUid,
-        isVideo: type == DmCallType.video,
+        withVideo: type == DmCallType.video,
       );
       await callRef.update(<String, dynamic>{
         'participants.${currentUser.uid}.state': 'joined',
@@ -507,6 +511,10 @@ class DmCallService {
     }
     final callRef = _firestore.collection('calls').doc(call.callId);
     final shouldActivate = call.status != 'active';
+    await _agoraClient.initEngineIfNeeded(
+      enableVideo: call.type == DmCallType.video,
+    );
+
     final preJoinPayload = <String, dynamic>{
       'participants.$uid.state': 'joining',
       'ringingTargets': cf.FieldValue.arrayRemove(<String>[uid]),
@@ -516,13 +524,13 @@ class DmCallService {
       debugPrint(
         'DmCallService: Answering call ${call.callId} by joining channel ${call.channelId} (localUid=$localAgoraUid)',
       );
-      final token =
-          _normalizeToken(call.agoraToken) ?? _normalizeToken(AgoraConfig.token);
-      await _agoraClient.joinDmCall(
+      final token = AgoraConfig.normalizedToken(call.agoraToken) ??
+          AgoraConfig.normalizedToken();
+      await _agoraClient.joinChannel(
         channelId: call.channelId,
         token: token,
         uid: localAgoraUid,
-        isVideo: call.type == DmCallType.video,
+        withVideo: call.type == DmCallType.video,
       );
       final postJoinPayload = <String, dynamic>{
         'participants.$uid.state': 'joined',
@@ -601,21 +609,13 @@ class DmCallService {
 
   Future<void> _teardownAgora(String _) async {
     try {
-      await _agoraClient.leaveCurrentCall();
+      await _agoraClient.leaveChannel();
     } catch (err, stack) {
       debugPrint('DmCallService: Failed to teardown Agora call: $err');
       FlutterError.reportError(
         FlutterErrorDetails(exception: err, stack: stack),
       );
     }
-  }
-
-  String? _normalizeToken(String? token) {
-    final trimmed = token?.trim();
-    if (trimmed == null || trimmed.isEmpty) {
-      return null;
-    }
-    return trimmed;
   }
 
   Future<void> _presentIncomingCall(DmCallSession session) async {

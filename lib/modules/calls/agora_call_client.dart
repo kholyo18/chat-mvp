@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/foundation.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
@@ -47,25 +46,28 @@ class AgoraRemoteUserEvent {
 
 enum AgoraRemoteUserEventType { joined, left }
 
-/// Thin wrapper around [RtcEngine] to manage the DM call lifecycle.
+/// Singleton responsible for configuring and interacting with the Agora SDK.
 class AgoraCallClient {
-  AgoraCallClient._internal();
+  AgoraCallClient._();
 
   factory AgoraCallClient() => instance;
 
-  static final AgoraCallClient instance = AgoraCallClient._internal();
+  static final AgoraCallClient instance = AgoraCallClient._();
 
   RtcEngine? _engine;
   bool _isInitialized = false;
+  bool _isReleased = false;
   bool _isJoined = false;
   bool _isJoining = false;
   bool _isVideoCall = false;
+  bool _videoCapabilityEnabled = false;
   String? _currentChannelId;
   int? _localUid;
   int? _lastJoinResultCode;
   int? _lastEngineErrorCode;
   Future<void>? _initializationFuture;
-  Future<void>? _ongoingJoin;
+  Future<void>? _joinFuture;
+  Future<void>? _leaveFuture;
   String? _joiningChannelId;
 
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
@@ -91,45 +93,18 @@ class AgoraCallClient {
 
   RtcEngine? get maybeEngine => _engine;
 
-  Future<void> init() => _ensureEngineInitialized(enableVideo: false);
-
-  void _log(String message) {
-    debugPrint('[AGORA] $message');
-  }
-
-  RtcEngine _requireEngine() {
-    final engine = _engine;
-    if (engine == null) {
-      throw AgoraCallException('Agora engine is not initialized');
-    }
-    return engine;
-  }
-
-  void _validateAppId() {
-    final appId = AgoraConfig.appId.trim();
-    if (appId.isEmpty || appId == 'YOUR_AGORA_APP_ID') {
-      throw AgoraCallException(
-        'إعدادات الاتصال غير مكتملة. يرجى التحقق من App ID الخاص بخدمة Agora.',
-      );
-    }
-  }
-
-  Future<void> _ensureEngineInitialized({required bool enableVideo}) async {
-    if (_engine != null) {
-      if (enableVideo) {
-        await _engine!.enableVideo();
-      }
+  /// Ensures that the Agora engine exists and is configured for the requested
+  /// media capabilities.
+  Future<void> initEngineIfNeeded({required bool enableVideo}) async {
+    if (_engine != null && _isInitialized && !_isReleased) {
+      await _ensureVideoCapability(enableVideo: enableVideo);
       return;
     }
     if (_initializationFuture != null) {
       await _initializationFuture;
-      if (enableVideo) {
-        await _engine?.enableVideo();
-      }
+      await _ensureVideoCapability(enableVideo: enableVideo);
       return;
     }
-    _validateAppId();
-    _log('Initializing Agora engine...');
     final future = _createAndInitializeEngine(enableVideo: enableVideo);
     _initializationFuture = future;
     try {
@@ -141,114 +116,31 @@ class AgoraCallClient {
     }
   }
 
-  Future<void> _createAndInitializeEngine({required bool enableVideo}) async {
-    final engine = createAgoraRtcEngine();
-    await engine.initialize(
-      const RtcEngineContext(appId: AgoraConfig.appId),
-    );
-    await engine.enableAudio();
-    if (enableVideo) {
-      await engine.enableVideo();
-    }
-    await engine.setChannelProfile(
-      ChannelProfileType.channelProfileCommunication,
-    );
-    await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
-
-    engine.registerEventHandler(
-      RtcEngineEventHandler(
-        onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
-          _log(
-            'onJoinChannelSuccess: ${connection.channelId} uid=${connection.localUid} elapsed=$elapsed',
-          );
-          _isJoined = true;
-          _currentChannelId = connection.channelId;
-          _localUid = connection.localUid;
-          isLocalUserJoined.value = true;
-        },
-        onLeaveChannel: (RtcConnection connection, RtcStats stats) {
-          _log('onLeaveChannel: ${connection.channelId}');
-          _isJoined = false;
-          _isJoining = false;
-          _currentChannelId = null;
-          _localUid = null;
-          _isVideoCall = false;
-          isLocalUserJoined.value = false;
-          isMuted.value = false;
-          isSpeakerEnabled.value = false;
-          remoteUserIds.value = <int>{};
-        },
-        onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
-          _log(
-            'onUserJoined: ${connection.channelId} remoteUid=$remoteUid elapsed=$elapsed',
-          );
-          final next = <int>{...remoteUserIds.value, remoteUid};
-          remoteUserIds.value = next;
-          _remoteUserEventsController.add(
-            AgoraRemoteUserEvent(
-              uid: remoteUid,
-              type: AgoraRemoteUserEventType.joined,
-            ),
-          );
-        },
-        onUserOffline: (
-          RtcConnection connection,
-          int remoteUid,
-          UserOfflineReasonType reason,
-        ) {
-          _log(
-            'onUserOffline: ${connection.channelId} remoteUid=$remoteUid reason=${reason.name}',
-          );
-          final next = <int>{...remoteUserIds.value}..remove(remoteUid);
-          remoteUserIds.value = next;
-          _remoteUserEventsController.add(
-            AgoraRemoteUserEvent(
-              uid: remoteUid,
-              type: AgoraRemoteUserEventType.left,
-            ),
-          );
-        },
-        onConnectionStateChanged: (
-          RtcConnection connection,
-          ConnectionStateType state,
-          ConnectionChangedReasonType reason,
-        ) {
-          _log(
-            'Connection state changed: ${state.name} (reason=${reason.name}, channel=${connection.channelId})',
-          );
-        },
-        onConnectionLost: (RtcConnection connection) {
-          _log('Connection lost for ${connection.channelId}');
-        },
-        onError: (ErrorCodeType error, String message) {
-          final code = error.value();
-          _lastEngineErrorCode = code;
-          _log('AGORA onError: code=$code message=$message type=${error.name}');
-        },
-      ),
-    );
-
-    _engine = engine;
-    _isInitialized = true;
-    _log('Agora engine initialized.');
-  }
-
-  Future<void> joinDmCall({
+  /// Joins the provided Agora [channelId].
+  Future<void> joinChannel({
     required String channelId,
-    required String? token,
+    String? token,
     required int uid,
-    required bool isVideo,
+    required bool withVideo,
   }) async {
-    if (channelId.trim().isEmpty) {
+    final trimmedChannel = channelId.trim();
+    if (trimmedChannel.isEmpty) {
       throw AgoraCallException('معرّف قناة الاتصال غير صالح.');
     }
 
-    if (_ongoingJoin != null) {
-      if (_joiningChannelId == channelId) {
-        return _ongoingJoin!;
+    await _ensurePermissions(isVideo: withVideo);
+    await initEngineIfNeeded(enableVideo: withVideo);
+
+    final engine = _requireEngine();
+
+    if (_joinFuture != null) {
+      if (_joiningChannelId == trimmedChannel) {
+        _log('Join already in progress for $trimmedChannel, awaiting existing operation.');
+        await _joinFuture;
+        return;
       }
       try {
-        await _ongoingJoin;
+        await _joinFuture;
       } catch (error, stack) {
         FlutterError.reportError(
           FlutterErrorDetails(exception: error, stack: stack),
@@ -256,82 +148,260 @@ class AgoraCallClient {
       }
     }
 
-    final joinFuture = _performJoin(
-      channelId: channelId,
-      token: token,
-      uid: uid,
-      isVideo: isVideo,
-    );
-    _ongoingJoin = joinFuture;
-    _joiningChannelId = channelId;
-    try {
-      await joinFuture;
-    } finally {
-      if (identical(_ongoingJoin, joinFuture)) {
-        _ongoingJoin = null;
-        _joiningChannelId = null;
-      }
+    if (_isJoined && _currentChannelId == trimmedChannel) {
+      _log('Already joined channel $trimmedChannel');
+      return;
     }
-  }
 
-  @visibleForTesting
-  Future<void> startCall({
-    required String channelId,
-    required bool isVideo,
-  }) async {
-    final uid = _resolveLocalUid();
-    final trimmedToken = AgoraConfig.token?.trim();
-    final effectiveToken =
-        (trimmedToken != null && trimmedToken.isNotEmpty) ? trimmedToken : null;
-    await joinDmCall(
-      channelId: channelId,
-      token: effectiveToken,
-      uid: uid,
-      isVideo: isVideo,
-    );
-  }
+    if (_isJoined && _currentChannelId != trimmedChannel) {
+      await leaveChannel();
+    }
 
-  Future<void> _performJoin({
-    required String channelId,
-    required String? token,
-    required int uid,
-    required bool isVideo,
-  }) async {
     _lastJoinResultCode = null;
     _lastEngineErrorCode = null;
-
-    await _ensurePermissions(isVideo: isVideo);
-    await _ensureEngineInitialized(enableVideo: isVideo);
-
-    final engine = _requireEngine();
-
-    if (_isJoining && _currentChannelId == channelId) {
-      _log('Join already in progress for $channelId');
-      return;
-    }
-    if (_isJoined && _currentChannelId == channelId) {
-      _log('Already joined channel $channelId');
-      return;
-    }
-    if (_isJoined && _currentChannelId != channelId) {
-      await _leaveCurrentCall(awaitOngoingJoin: false);
-    }
-
     _isJoining = true;
-    _isVideoCall = isVideo;
-    _currentChannelId = channelId;
+    _isVideoCall = withVideo;
+    _currentChannelId = trimmedChannel;
     _localUid = uid;
+    _joiningChannelId = trimmedChannel;
 
     isMuted.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
 
+    await _prepareMediaForJoin(engine, withVideo: withVideo);
+
+    final effectiveToken = _resolveEffectiveToken(token);
+    _log(
+      'Joining Agora channel: id=$trimmedChannel uid=$uid video=$withVideo '
+      'tokenProvided=${effectiveToken != null}',
+    );
+
+    final joinOperation = engine.joinChannel(
+      token: effectiveToken ?? '',
+      channelId: trimmedChannel,
+      uid: uid,
+      options: ChannelMediaOptions(
+        channelProfile: ChannelProfileType.channelProfileCommunication,
+        clientRoleType: ClientRoleType.clientRoleBroadcaster,
+        publishMicrophoneTrack: true,
+        publishCameraTrack: withVideo,
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: withVideo,
+      ),
+    );
+    _joinFuture = joinOperation;
+
+    try {
+      await joinOperation;
+      _lastJoinResultCode = 0;
+      _log('joinChannel completed for $trimmedChannel');
+    } on AgoraRtcException catch (error) {
+      await _handleJoinFailureCleanup(engine, withVideo: withVideo);
+      _lastJoinResultCode = error.code;
+      _log(
+        'joinChannel failed: code=${error.code} message=${error.message ?? 'unknown'}',
+      );
+      _resetAfterJoinFailure();
+      throw AgoraCallException(
+        _localizedMessageForError(
+          _errorCodeTypeFromValue(error.code),
+          rawCode: error.code,
+        ),
+        cause: error,
+        agoraErrorCode: error.code,
+      );
+    } catch (error) {
+      await _handleJoinFailureCleanup(engine, withVideo: withVideo);
+      _log('joinChannel failed with unexpected error: $error');
+      _resetAfterJoinFailure();
+      throw AgoraCallException(
+        'تعذر الاتصال بالمكالمة. حاول مرة أخرى.',
+        cause: error,
+      );
+    } finally {
+      if (identical(_joinFuture, joinOperation)) {
+        _joinFuture = null;
+      }
+      _joiningChannelId = null;
+      _isJoining = false;
+    }
+  }
+
+  /// Leaves the currently joined Agora channel, if any.
+  Future<void> leaveChannel() async {
+    final engine = _engine;
+    if (engine == null) {
+      _log('leaveChannel skipped: engine is null');
+      return;
+    }
+    if (_leaveFuture != null) {
+      _log('leaveChannel already in progress, awaiting existing operation.');
+      await _leaveFuture;
+      return;
+    }
+    if (_joinFuture != null) {
+      _log('Awaiting ongoing join before leaving.');
+      try {
+        await _joinFuture;
+      } catch (_) {
+        // Ignore join errors when leaving.
+      }
+    }
+
+    final leaveFuture = _performLeave(engine);
+    _leaveFuture = leaveFuture;
+    try {
+      await leaveFuture;
+    } finally {
+      if (identical(_leaveFuture, leaveFuture)) {
+        _leaveFuture = null;
+      }
+    }
+  }
+
+  Future<void> dispose() async {
+    final engine = _engine;
+    if (engine == null) {
+      return;
+    }
+    _log('Releasing Agora engine.');
+    try {
+      await leaveChannel();
+    } catch (error, stack) {
+      _log('Error while leaving channel during dispose: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    }
+    try {
+      await engine.release();
+    } catch (error) {
+      _log('Failed to release Agora engine: $error');
+    }
+    _engine = null;
+    _isInitialized = false;
+    _isReleased = true;
+    _initializationFuture = null;
+    _joinFuture = null;
+    _leaveFuture = null;
+    _joiningChannelId = null;
+    _resetState();
+  }
+
+  Future<void> toggleMute() async {
+    final engine = _requireEngine();
+    final next = !isMuted.value;
+    isMuted.value = next;
+    await engine.muteLocalAudioStream(next);
+    _log('Local audio ${next ? 'muted' : 'unmuted'}');
+  }
+
+  Future<void> toggleSpeakerphone() async {
+    final engine = _requireEngine();
+    final next = !isSpeakerEnabled.value;
+    isSpeakerEnabled.value = next;
+    await engine.setEnableSpeakerphone(next);
+    _log('Speakerphone ${next ? 'enabled' : 'disabled'}');
+  }
+
+  Future<void> switchCamera() async {
+    if (!_isVideoCall) {
+      throw AgoraCallException('Video is not enabled');
+    }
+    final engine = _requireEngine();
+    await engine.switchCamera();
+    _log('Camera switched');
+  }
+
+  Future<void> toggleVideoEnabled() async {
+    final engine = _requireEngine();
+    _isVideoCall = !_isVideoCall;
+    if (_isVideoCall) {
+      await engine.enableVideo();
+      await engine.startPreview();
+      await engine.setEnableSpeakerphone(true);
+      isSpeakerEnabled.value = true;
+      _videoCapabilityEnabled = true;
+    } else {
+      await engine.stopPreview();
+      await engine.disableVideo();
+      await engine.setEnableSpeakerphone(false);
+      isSpeakerEnabled.value = false;
+      _videoCapabilityEnabled = false;
+    }
+  }
+
+  Future<void> _ensurePermissions({required bool isVideo}) async {
+    if (kIsWeb) {
+      return;
+    }
+    if (!(Platform.isAndroid || Platform.isIOS)) {
+      return;
+    }
+    final permissions = <Permission>[Permission.microphone];
+    if (isVideo) {
+      permissions.add(Permission.camera);
+    }
+    final missing = <Permission>[];
+    for (final permission in permissions) {
+      final status = await permission.status;
+      if (status.isGranted) {
+        continue;
+      }
+      final result = await permission.request();
+      if (!result.isGranted) {
+        missing.add(permission);
+      }
+    }
+    if (missing.isNotEmpty) {
+      throw AgoraPermissionException(missing);
+    }
+  }
+
+  int agoraUidForUser(String userId) => _stableAgoraUid(userId);
+
+  // region internal helpers
+
+  void _log(String message) {
+    debugPrint('[Agora] $message');
+  }
+
+  RtcEngine _requireEngine() {
+    final engine = _engine;
+    if (engine == null || _isReleased) {
+      throw AgoraCallException('Agora engine is not initialized');
+    }
+    return engine;
+  }
+
+  Future<void> _ensureVideoCapability({required bool enableVideo}) async {
+    final engine = _engine;
+    if (engine == null) {
+      return;
+    }
+    if (enableVideo && !_videoCapabilityEnabled) {
+      await engine.enableVideo();
+      _videoCapabilityEnabled = true;
+      _log('Video capability enabled for upcoming call.');
+    } else if (!enableVideo && _videoCapabilityEnabled && !_isVideoCall) {
+      await engine.disableVideo();
+      _videoCapabilityEnabled = false;
+      _log('Video capability disabled (audio call).');
+    }
+  }
+
+  Future<void> _prepareMediaForJoin(
+    RtcEngine engine, {
+    required bool withVideo,
+  }) async {
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
-    await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
-
-    if (isVideo) {
-      await engine.enableVideo();
+    if (withVideo) {
+      if (!_videoCapabilityEnabled) {
+        await engine.enableVideo();
+        _videoCapabilityEnabled = true;
+      }
       await engine.setVideoEncoderConfiguration(
         VideoEncoderConfiguration(
           dimensions: const VideoDimensions(width: 960, height: 540),
@@ -343,130 +413,216 @@ class AgoraCallClient {
       await engine.setEnableSpeakerphone(true);
       isSpeakerEnabled.value = true;
     } else {
+      if (_videoCapabilityEnabled) {
+        await engine.disableVideo();
+        _videoCapabilityEnabled = false;
+      }
       await engine.stopPreview();
-      await engine.disableVideo();
       await engine.setEnableSpeakerphone(false);
       isSpeakerEnabled.value = false;
     }
+  }
 
-    final trimmedToken = token?.trim();
-    final effectiveToken =
-        (trimmedToken != null && trimmedToken.isNotEmpty) ? trimmedToken : null;
-    final isTokenEmpty = effectiveToken == null || effectiveToken.isEmpty;
-    _log(
-      'joining channel: $channelId, uid=$uid, video=$isVideo, tokenEmpty=$isTokenEmpty',
-    );
-
-    try {
-      await engine.joinChannel(
-        token: effectiveToken ?? '',
-        channelId: channelId,
-        uid: uid,
-        options: ChannelMediaOptions(
-          channelProfile: ChannelProfileType.channelProfileCommunication,
-          clientRoleType: ClientRoleType.clientRoleBroadcaster,
-          publishMicrophoneTrack: true,
-          publishCameraTrack: isVideo,
-          autoSubscribeAudio: true,
-          autoSubscribeVideo: isVideo,
-        ),
-      );
-      _lastJoinResultCode = 0;
-      _log('joinChannel completed for $channelId');
-    } on AgoraRtcException catch (error) {
-      _lastJoinResultCode = error.code;
-      _currentChannelId = null;
-      _isJoined = false;
-      _localUid = null;
-      isLocalUserJoined.value = false;
-      remoteUserIds.value = <int>{};
-      final errorCode = _errorCodeTypeFromValue(error.code);
-      _log(
-        'join failed: code=${error.code} message=${error.message ?? 'unknown'}',
-      );
-      throw AgoraCallException(
-        _localizedMessageForError(
-          errorCode,
-          rawCode: error.code,
-        ),
-        cause: error,
-        agoraErrorCode: error.code,
-      );
-    } catch (error) {
-      _currentChannelId = null;
-      _isJoined = false;
-      _localUid = null;
-      isLocalUserJoined.value = false;
-      remoteUserIds.value = <int>{};
-      _log('joinChannel failed with unexpected error: $error');
-      throw AgoraCallException(
-        'تعذر الاتصال بالمكالمة. حاول مرة أخرى.',
-        cause: error,
-      );
-    } finally {
-      _isJoining = false;
+  Future<void> _handleJoinFailureCleanup(
+    RtcEngine engine, {
+    required bool withVideo,
+  }) async {
+    if (withVideo) {
+      await engine.stopPreview().catchError((_) {});
+      await engine.disableVideo().catchError((_) {});
+      await engine.setEnableSpeakerphone(false).catchError((_) {});
+      isSpeakerEnabled.value = false;
+      _videoCapabilityEnabled = false;
     }
   }
 
-  Future<void> leaveCurrentCall() => _leaveCurrentCall(awaitOngoingJoin: true);
-
-  Future<void> _leaveCurrentCall({required bool awaitOngoingJoin}) async {
-    if (_engine == null) {
-      return;
-    }
-    if (awaitOngoingJoin && _ongoingJoin != null) {
-      try {
-        await _ongoingJoin;
-      } catch (_) {
-        // Ignore join errors when leaving.
-      }
-    }
-
-    _log('Leaving Agora channel (channel=$_currentChannelId)');
-    final engine = _requireEngine();
-    if (_isJoined || _isJoining) {
-      try {
-        await engine.leaveChannel();
-      } catch (error) {
-        _log('leaveChannel error: $error');
-        rethrow;
-      }
-    }
-    if (_isVideoCall) {
-      await engine.stopPreview();
-    }
-    await engine.disableVideo();
-
+  void _resetState() {
     _isJoined = false;
     _isJoining = false;
     _isVideoCall = false;
     _currentChannelId = null;
     _localUid = null;
+    _lastJoinResultCode = null;
+    _lastEngineErrorCode = null;
+    _videoCapabilityEnabled = false;
     isMuted.value = false;
     isSpeakerEnabled.value = false;
     isLocalUserJoined.value = false;
     remoteUserIds.value = <int>{};
   }
 
-  Future<void> dispose() async {
-    final engine = _engine;
-    if (engine == null) {
+  void _resetAfterJoinFailure() {
+    _isJoined = false;
+    _isJoining = false;
+    _isVideoCall = false;
+    _currentChannelId = null;
+    _localUid = null;
+    isLocalUserJoined.value = false;
+    isMuted.value = false;
+    isSpeakerEnabled.value = false;
+    _videoCapabilityEnabled = false;
+    remoteUserIds.value = <int>{};
+  }
+
+  Future<void> _performLeave(RtcEngine engine) async {
+    if (!_isJoined && !_isJoining) {
+      _log('leaveChannel called but client was not joined.');
+      _resetState();
       return;
     }
+    _log('Leaving Agora channel $_currentChannelId');
     try {
-      await leaveCurrentCall();
+      await engine.leaveChannel();
+      _log('leaveChannel completed for $_currentChannelId');
+    } on AgoraRtcException catch (error) {
+      _lastEngineErrorCode = error.code;
+      _log(
+        'leaveChannel AgoraRtcException code=${error.code} message=${error.message}',
+      );
+      throw AgoraCallException(
+        'تعذر مغادرة المكالمة، حاول مرة أخرى.',
+        cause: error,
+        agoraErrorCode: error.code,
+      );
+    } catch (error) {
+      _log('leaveChannel unexpected error: $error');
+      throw AgoraCallException(
+        'تعذر مغادرة المكالمة، حاول مرة أخرى.',
+        cause: error,
+      );
     } finally {
-      try {
-        await engine.release();
-      } catch (error) {
-        _log('Failed to release engine $error');
+      if (_isVideoCall) {
+        await engine.stopPreview().catchError((_) {});
       }
-      _engine = null;
-      _isInitialized = false;
-      _initializationFuture = null;
-      _ongoingJoin = null;
-      _joiningChannelId = null;
+      await engine.disableVideo().catchError((_) {});
+      _resetState();
     }
+  }
+
+  Future<void> _createAndInitializeEngine({required bool enableVideo}) async {
+    _log('Initializing Agora engine (enableVideo=$enableVideo)...');
+    final String appId;
+    try {
+      appId = AgoraConfig.ensureValidAppId();
+    } on FlutterError catch (error) {
+      _log('Agora configuration invalid: ${error.message}');
+      throw AgoraCallException(
+        'إعدادات مكالمات Agora غير متاحة حالياً. يرجى المحاولة لاحقًا.',
+        cause: error,
+      );
+    }
+
+    final engine = createAgoraRtcEngine();
+    try {
+      await engine.initialize(
+        RtcEngineContext(
+          appId: appId,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+        ),
+      );
+      await engine.enableAudio();
+      if (enableVideo) {
+        await engine.enableVideo();
+        _videoCapabilityEnabled = true;
+      } else {
+        await engine.disableVideo();
+        _videoCapabilityEnabled = false;
+      }
+      engine.registerEventHandler(_createEventHandler());
+      _engine = engine;
+      _isInitialized = true;
+      _isReleased = false;
+      _log('Agora engine initialized successfully.');
+    } on AgoraRtcException catch (error) {
+      _log('Agora initialization failed code=${error.code} message=${error.message}');
+      await engine.release().catchError((_) {});
+      throw AgoraCallException(
+        'تعذّر تهيئة مكالمات Agora. حاول مرة أخرى لاحقًا.',
+        cause: error,
+        agoraErrorCode: error.code,
+      );
+    } catch (error) {
+      _log('Unexpected error while initializing Agora: $error');
+      await engine.release().catchError((_) {});
+      throw AgoraCallException(
+        'تعذّر تهيئة مكالمات Agora. حاول مرة أخرى لاحقًا.',
+        cause: error,
+      );
+    }
+  }
+
+  RtcEngineEventHandler _createEventHandler() {
+    return RtcEngineEventHandler(
+      onJoinChannelSuccess: (RtcConnection connection, int elapsed) {
+        _log(
+          'onJoinChannelSuccess: channel=${connection.channelId} uid=${connection.localUid} elapsed=$elapsed',
+        );
+        _isJoined = true;
+        _isJoining = false;
+        _currentChannelId = connection.channelId;
+        _localUid = connection.localUid;
+        isLocalUserJoined.value = true;
+      },
+      onLeaveChannel: (RtcConnection connection, RtcStats stats) {
+        _log('onLeaveChannel: channel=${connection.channelId}');
+        _resetState();
+      },
+      onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
+        _log(
+          'onUserJoined: channel=${connection.channelId} uid=$remoteUid elapsed=$elapsed',
+        );
+        final next = <int>{...remoteUserIds.value, remoteUid};
+        remoteUserIds.value = next;
+        _remoteUserEventsController.add(
+          AgoraRemoteUserEvent(
+            uid: remoteUid,
+            type: AgoraRemoteUserEventType.joined,
+          ),
+        );
+      },
+      onUserOffline: (
+        RtcConnection connection,
+        int remoteUid,
+        UserOfflineReasonType reason,
+      ) {
+        _log(
+          'onUserOffline: channel=${connection.channelId} uid=$remoteUid reason=${reason.name}',
+        );
+        final next = <int>{...remoteUserIds.value}..remove(remoteUid);
+        remoteUserIds.value = next;
+        _remoteUserEventsController.add(
+          AgoraRemoteUserEvent(
+            uid: remoteUid,
+            type: AgoraRemoteUserEventType.left,
+          ),
+        );
+      },
+      onError: (ErrorCodeType error, String message) {
+        final code = error.value();
+        _lastEngineErrorCode = code;
+        _log('Agora error code=$code type=${error.name} message=$message');
+      },
+      onConnectionStateChanged: (
+        RtcConnection connection,
+        ConnectionStateType state,
+        ConnectionChangedReasonType reason,
+      ) {
+        _log(
+          'Connection state changed: ${state.name} (reason=${reason.name}, channel=${connection.channelId})',
+        );
+      },
+      onConnectionLost: (RtcConnection connection) {
+        _log('Connection lost for channel ${connection.channelId}');
+      },
+    );
+  }
+
+  String? _resolveEffectiveToken(String? token) {
+    final override = AgoraConfig.normalizedToken(token);
+    if (override != null) {
+      return override;
+    }
+    return AgoraConfig.normalizedToken();
   }
 
   String _localizedMessageForError(ErrorCodeType code, {int? rawCode}) {
@@ -499,85 +655,6 @@ class AgoraCallClient {
     }
   }
 
-  Future<void> toggleMute() async {
-    final engine = _requireEngine();
-    final next = !isMuted.value;
-    isMuted.value = next;
-    await engine.muteLocalAudioStream(next);
-  }
-
-  Future<void> toggleSpeakerphone() async {
-    final engine = _requireEngine();
-    final next = !isSpeakerEnabled.value;
-    isSpeakerEnabled.value = next;
-    await engine.setEnableSpeakerphone(next);
-  }
-
-  Future<void> switchCamera() async {
-    if (!_isVideoCall) {
-      throw AgoraCallException('Video is not enabled');
-    }
-    final engine = _requireEngine();
-    await engine.switchCamera();
-  }
-
-  Future<void> toggleVideoEnabled() async {
-    final engine = _requireEngine();
-    _isVideoCall = !_isVideoCall;
-    if (_isVideoCall) {
-      await engine.enableVideo();
-      await engine.startPreview();
-      await engine.setEnableSpeakerphone(true);
-      isSpeakerEnabled.value = true;
-    } else {
-      await engine.stopPreview();
-      await engine.disableVideo();
-      await engine.setEnableSpeakerphone(false);
-      isSpeakerEnabled.value = false;
-    }
-  }
-
-  Future<void> _ensurePermissions({required bool isVideo}) async {
-    if (kIsWeb) {
-      return;
-    }
-    if (!(Platform.isAndroid || Platform.isIOS)) {
-      return;
-    }
-    final permissions = <Permission>[Permission.microphone];
-    if (isVideo) {
-      permissions.add(Permission.camera);
-    }
-    final missing = <Permission>[];
-    for (final permission in permissions) {
-      final status = await permission.status;
-      if (status.isGranted) {
-        continue;
-      }
-      final result = await permission.request();
-      if (!result.isGranted) {
-        missing.add(permission);
-      }
-    }
-    if (missing.isNotEmpty) {
-      throw AgoraPermissionException(missing);
-    }
-  }
-
-  int _resolveLocalUid() {
-    final firebaseUser = FirebaseAuth.instance.currentUser;
-    if (firebaseUser == null) {
-      throw AgoraCallException(
-        'يجب تسجيل الدخول لإجراء المكالمة.',
-      );
-    }
-    final uid = _stableAgoraUid(firebaseUser.uid);
-    _localUid = uid;
-    return uid;
-  }
-
-  int agoraUidForUser(String userId) => _stableAgoraUid(userId);
-
   int _stableAgoraUid(String uid) {
     final bytes = utf8.encode(uid);
     var hash = 0;
@@ -589,4 +666,6 @@ class AgoraCallClient {
     }
     return hash;
   }
+
+  // endregion
 }
