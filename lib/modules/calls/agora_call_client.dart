@@ -414,6 +414,7 @@ class AgoraCallClient {
     }
 
     final String? resolvedToken = _effectiveToken(token);
+    final String joinToken = resolvedToken ?? '';
     final logTokenState = resolvedToken == null ? 'none' : 'provided';
     _log(
       'Joining channel: $channelId, uid=$uid, withVideo=$withVideo, token=$logTokenState',
@@ -421,7 +422,7 @@ class AgoraCallClient {
 
     try {
       await engine.joinChannel(
-        token: resolvedToken,
+        token: joinToken,
         channelId: channelId,
         uid: uid,
         options: ChannelMediaOptions(
