@@ -94,7 +94,7 @@ class AgoraCallClient {
   Future<void> init() => _ensureEngineInitialized(enableVideo: false);
 
   void _log(String message) {
-    debugPrint('AgoraCallClient: $message');
+    debugPrint('[AGORA] $message');
   }
 
   RtcEngine _requireEngine() {
@@ -280,9 +280,12 @@ class AgoraCallClient {
     required bool isVideo,
   }) async {
     final uid = _resolveLocalUid();
+    final trimmedToken = AgoraConfig.token?.trim();
+    final effectiveToken =
+        (trimmedToken != null && trimmedToken.isNotEmpty) ? trimmedToken : null;
     await joinDmCall(
       channelId: channelId,
-      token: AgoraConfig.token,
+      token: effectiveToken,
       uid: uid,
       isVideo: isVideo,
     );
@@ -347,15 +350,16 @@ class AgoraCallClient {
     }
 
     final trimmedToken = token?.trim();
-    final hasToken = trimmedToken?.isNotEmpty == true;
-    final effectiveToken = hasToken ? trimmedToken! : '';
+    final effectiveToken =
+        (trimmedToken != null && trimmedToken.isNotEmpty) ? trimmedToken : null;
+    final isTokenEmpty = effectiveToken == null || effectiveToken.isEmpty;
     _log(
-      'Joining Agora channel: id=$channelId uid=$uid isVideo=$isVideo tokenProvided=$hasToken',
+      'joining channel: $channelId, uid=$uid, video=$isVideo, tokenEmpty=$isTokenEmpty',
     );
 
     try {
       await engine.joinChannel(
-        token: effectiveToken,
+        token: effectiveToken ?? '',
         channelId: channelId,
         uid: uid,
         options: ChannelMediaOptions(
@@ -377,7 +381,9 @@ class AgoraCallClient {
       isLocalUserJoined.value = false;
       remoteUserIds.value = <int>{};
       final errorCode = _errorCodeTypeFromValue(error.code);
-      _log('joinChannel failed: code=${error.code} message=${error.message}');
+      _log(
+        'join failed: code=${error.code} message=${error.message ?? 'unknown'}',
+      );
       throw AgoraCallException(
         _localizedMessageForError(
           errorCode,
@@ -470,6 +476,8 @@ class AgoraCallClient {
       return 'لا يوجد اتصال بالشبكة. تحقق من الإنترنت ثم حاول مرة أخرى.';
     }
     switch (intCode) {
+      case 3:
+        return 'مشكلة في إعدادات مكالمات Agora (App ID / Token). يرجى المحاولة لاحقًا.';
       case 101:
         return 'معرّف تطبيق Agora غير صالح. يرجى التحقق من الإعدادات.';
       case 102:
