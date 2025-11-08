@@ -70,6 +70,7 @@ class AgoraCallClient {
   Future<void>? _ongoingJoin;
   Future<void>? _disposeFuture;
   String? _joiningChannelId;
+  bool _hasLoggedAppId = false;
 
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isSpeakerEnabled = ValueNotifier<bool>(false);
@@ -114,7 +115,12 @@ class AgoraCallClient {
 
   String _obtainAppId() {
     try {
-      return AgoraConfig.appId;
+      final value = AgoraConfig.appId;
+      if (!_hasLoggedAppId) {
+        _hasLoggedAppId = true;
+        _log('Using Agora App ID ${_maskAppId(value)}');
+      }
+      return value;
     } on FlutterError catch (error) {
       _log('Agora App ID validation failed: ${error.message}');
       throw AgoraCallException(
@@ -122,6 +128,16 @@ class AgoraCallClient {
         cause: error,
       );
     }
+  }
+
+  String _maskAppId(String appId) {
+    final trimmed = appId.trim();
+    if (trimmed.length <= 6) {
+      return '***';
+    }
+    final prefix = trimmed.substring(0, 3);
+    final suffix = trimmed.substring(trimmed.length - 3);
+    return '$prefix***$suffix';
   }
 
   Future<void> _ensureEngineInitialized({required bool enableVideo}) async {
@@ -275,7 +291,7 @@ class AgoraCallClient {
     _engine = engine;
     _isInitialized = true;
     _isEngineReleased = false;
-    _log('Agora engine initialized.');
+    _log('Agora engine initialized (appId=${_maskAppId(appId)}).');
   }
 
   Future<void> joinChannel({
@@ -400,12 +416,12 @@ class AgoraCallClient {
     final resolvedToken = _effectiveToken(token);
     final logTokenState = resolvedToken == null ? 'none' : 'provided';
     _log(
-      'joining channel: $channelId, uid=$uid, video=$withVideo, token=$logTokenState',
+      'Joining channel: $channelId, uid=$uid, withVideo=$withVideo, token=$logTokenState',
     );
 
     try {
       await engine.joinChannel(
-        token: resolvedToken ?? '',
+        token: resolvedToken,
         channelId: channelId,
         uid: uid,
         options: ChannelMediaOptions(
