@@ -172,9 +172,14 @@ class _DmCallPageState extends State<DmCallPage> {
       });
     }
     try {
+      debugPrint('DmCallPage: Attempting to join call ${session.callId}');
       await callback(session);
+      debugPrint('DmCallPage: Successfully joined call ${session.callId}');
     } on AgoraPermissionException catch (err) {
       _showAgoraErrorSnackBar(_permissionErrorMessage(err));
+      if (mounted) {
+        Navigator.of(context).maybePop();
+      }
     } on AgoraCallException catch (err, stack) {
       _logError(err, stack);
       final errorCode = _resolveAgoraErrorCode(err);
@@ -183,7 +188,16 @@ class _DmCallPageState extends State<DmCallPage> {
           'DM CALL ACCEPT FAILED: agoraError=$errorCode, message=${err.message}',
         );
       }
+      if (err.cause is AgoraRtcException) {
+        final rtcError = err.cause as AgoraRtcException;
+        debugPrint(
+          'DmCallPage: AgoraRtcException while joining call ${session.callId}: code=${rtcError.code} message=${rtcError.message}',
+        );
+      }
       _showAgoraErrorSnackBar(err.message);
+      if (mounted) {
+        Navigator.of(context).maybePop();
+      }
     } catch (err, stack) {
       _logError(err, stack);
       final errorCode = _resolveAgoraErrorCode();
@@ -191,7 +205,10 @@ class _DmCallPageState extends State<DmCallPage> {
         debugPrint(
           'DM CALL ACCEPT FAILED: agoraError=$errorCode, message=$err',
         );
-        _showOperationFailedSnackBar('تعذر قبول المكالمة، حاول مرة أخرى.');
+      }
+      _showOperationFailedSnackBar('تعذر الانضمام إلى المكالمة، حاول مرة أخرى.');
+      if (mounted) {
+        Navigator.of(context).maybePop();
       }
     } finally {
       if (mounted) {

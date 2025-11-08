@@ -216,58 +216,29 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
       return;
     }
     try {
-      final nav = Navigator.of(context);
       if (isVideo) {
-        await _callService.startVideoCallWithUser(
+        await _callService.startVideoCall(
           threadId,
           otherUid,
-          navigator: nav,
         );
       } else {
-        await _callService.startVoiceCallWithUser(
+        await _callService.startVoiceCall(
           threadId,
           otherUid,
-          navigator: nav,
         );
       }
+    } on AgoraPermissionException catch (err, stack) {
+      debugPrint(
+        'Failed to start DM call due to permissions: missing=${err.missingPermissions}',
+      );
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: err, stack: stack),
+      );
     } catch (err, stack) {
       debugPrint('Failed to start DM call: $err');
       FlutterError.reportError(
         FlutterErrorDetails(exception: err, stack: stack),
       );
-      if (err is AgoraPermissionException) {
-        debugPrint(
-          'DM CALL START FAILED: missingPermissions=${err.missingPermissions}',
-        );
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(content: Text('يرجى منح صلاحيات المكالمة للمتابعة.')),
-        );
-        return;
-      }
-      final agoraClient = AgoraCallClient.instance;
-      final agoraException = err is AgoraCallException ? err : null;
-      final agoraCode = agoraException?.agoraErrorCode;
-      final engineCode = agoraClient.lastEngineErrorCode;
-      final joinResult = agoraClient.lastJoinResultCode;
-      final resolvedCode = () {
-        if (agoraCode != null && agoraCode != 0) {
-          return agoraCode;
-        }
-        if (engineCode != null && engineCode != 0) {
-          return engineCode;
-        }
-        if (joinResult != null && joinResult != 0) {
-          return joinResult;
-        }
-        return agoraCode ?? engineCode ?? joinResult;
-      }();
-      if (resolvedCode != null && resolvedCode != 0) {
-        final message = agoraException?.message ?? 'فشل بدء المكالمة، حاول مجددًا';
-        debugPrint('DM CALL START FAILED: agoraError=$resolvedCode, message=$message');
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(content: Text('فشل بدء المكالمة، حاول مجددًا')),
-        );
-      }
     }
   }
 }
