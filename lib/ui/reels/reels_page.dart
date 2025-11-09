@@ -42,6 +42,7 @@ class _ReelsPageState extends State<ReelsPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'reelsCreateFab',
         onPressed: _openCreateReel,
         icon: const Icon(Icons.add_rounded),
         label: const Text('إنشاء ريل'),

@@ -1006,6 +1006,7 @@ class LoginPage extends StatelessWidget {
         ),
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'loginCoinsFab',
         onPressed: () => Navigator.of(context).pushNamed('/buy-coins'),
         child: const Icon(Icons.monetization_on),
       ),
@@ -1105,6 +1106,7 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'homeAddStoryFab',
         // CODEX-BEGIN:ADMIN_BLOCK_HOME_FAB
         onPressed: blocked
             ? showBlockedSnack
@@ -2439,6 +2441,7 @@ class RoomsTab extends StatelessWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'roomsListCreateFab',
         onPressed: () => _createRoomDialog(context),
         icon: const Icon(Icons.add_circle_rounded),
         label: const Text('غرفة جديدة'),
@@ -3312,6 +3315,7 @@ class _RoomPageState extends State<RoomPage> {
         recording: _recording,
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'roomsPageCreateFab',
         onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed('/rooms/create'),
         child: const Icon(Icons.add_rounded),
       ),
@@ -6406,6 +6410,7 @@ class _InboxPageState extends State<InboxPage> {
         child: content,
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'inboxNewChatFab',
         // CODEX-BEGIN:ADMIN_BLOCK_INBOX_FAB
         onPressed: blocked
             ? showBlockedSnack
@@ -8691,6 +8696,7 @@ class _CommentBarState extends State<_CommentBar> {
             ),
             const SizedBox(width: 8),
             FloatingActionButton.small(
+              heroTag: 'postCommentSendFab',
               onPressed: _send,
               child: _busy ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2)) : const Icon(Icons.send_rounded),
             )
@@ -8811,6 +8817,7 @@ class _GlobalSearchPageState extends State<GlobalSearchPage> with SingleTickerPr
       ),
       floatingActionButton: q.text.trim().isEmpty
           ? FloatingActionButton.extended(
+              heroTag: 'globalSearchSuggestionsFab',
               onPressed: ()=> _fillQuickExamples(q, setState),
               icon: const Icon(Icons.lightbulb_rounded),
               label: const Text('اقتراحات'),
