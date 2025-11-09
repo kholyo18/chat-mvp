@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../navigation/app_navigator.dart';
 import '../../services/auth_service.dart';
 
 class SignInPage extends StatefulWidget {
@@ -85,15 +86,28 @@ class _SignInPageState extends State<SignInPage> {
         _passwordCtrl.text,
       );
       final user = credential.user;
-      if (!mounted) return;
+      if (!context.mounted) return;
       if (user != null && !user.emailVerified) {
-        Navigator.of(context).pushReplacementNamed('/auth/verify-email');
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final navigator = navigatorKey.currentState;
+          if (navigator != null && navigator.mounted) {
+            navigator.pushReplacementNamed('/auth/verify-email');
+          }
+        });
       } else {
-        Navigator.of(context).maybePop();
+        final navigator = navigatorKey.currentState;
+        if (navigator != null && navigator.mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final nav = navigatorKey.currentState;
+            if (nav != null && nav.mounted && nav.canPop()) {
+              nav.pop();
+            }
+          });
+        }
       }
     } on FirebaseAuthException catch (e) {
       final friendly = _mapAuthError(e.code);
-      if (!mounted) return;
+      if (!context.mounted) return;
       setState(() => _errorMessage = friendly);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(friendly)));
@@ -101,13 +115,13 @@ class _SignInPageState extends State<SignInPage> {
       if (kDebugMode) {
         print('Email sign-in error: $e\n$st');
       }
-      if (!mounted) return;
+      if (!context.mounted) return;
       const fallback = 'حدث خطأ غير متوقع. حاول لاحقًا.';
       setState(() => _errorMessage = fallback);
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text(fallback)));
     } finally {
-      if (mounted) {
+      if (context.mounted) {
         setState(() => _loadingEmail = false);
       }
     }
@@ -118,18 +132,25 @@ class _SignInPageState extends State<SignInPage> {
     setState(() => _loadingGoogle = true);
     try {
       final userCredential = await AuthService.signInWithGoogle();
-      if (userCredential?.user != null && mounted) {
-        Navigator.of(context).maybePop();
+      final user = userCredential.user;
+      if (!context.mounted) return;
+      if (user != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final navigator = navigatorKey.currentState;
+          if (navigator != null && navigator.mounted && navigator.canPop()) {
+            navigator.popUntil((route) => route.isFirst);
+          }
+        });
       }
     } catch (e, st) {
       if (kDebugMode) {
         print('Google Sign-In error: $e\n$st');
       }
-      if (!mounted) return;
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('فشل تسجيل الدخول: $e')));
     } finally {
-      if (mounted) setState(() => _loadingGoogle = false);
+      if (context.mounted) setState(() => _loadingGoogle = false);
     }
   }
 

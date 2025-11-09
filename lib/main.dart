@@ -85,6 +85,7 @@ import 'widgets/common/vip_chip.dart';
 import 'modules/vip/vip_style.dart';
 import 'widgets/vip/vip_entry_overlay.dart';
 import 'widgets/common/verified_badge.dart';
+import 'navigation/app_navigator.dart';
 
 // CODEX-BEGIN:BOOT_GUARD_TYPES
 class _BootStatus {
@@ -478,7 +479,6 @@ extension NotificationsDeepLinks on NotificationsService {
 }
 
 // ---------- Navigator ----------
-final navigatorKey = GlobalKey<NavigatorState>();
 
 class _LocaleDataCache {
   _LocaleDataCache._();
@@ -790,21 +790,26 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                   : td,
               initialRoute: '/',
               routes: {
-                '/': (_) => SplashPage(onReady: (u) async {
-                      final user = await _.read<AppUser>().autoLogin();
+                '/': (context) => SplashPage(onReady: (ctx, _) async {
+                      final appUser = ctx.read<AppUser>();
+                      final user = await appUser.autoLogin();
+                      if (!ctx.mounted) return;
                       // CODEX-BEGIN:PRIVACY_BOOTSTRAP
                       final settingsService = UserSettingsService();
                       final privacySettings = await settingsService.fetchPrivacy(user.uid);
+                      if (!ctx.mounted) return;
                       _lastPresenceVisible = privacySettings.showOnline;
                       if (privacySettings.showOnline) {
                         await presence.start(user.uid);
                       } else {
                         await presence.stop(user.uid);
                       }
+                      if (!ctx.mounted) return;
                       // CODEX-END:PRIVACY_BOOTSTRAP
                       await fcm.init(user.uid);
+                      if (!ctx.mounted) return;
                       // تطبيق إعدادات الترجمة من الوثيقة
-                      final tr = _.read<TranslatorService>();
+                      final tr = ctx.read<TranslatorService>();
                       // CODEX-BEGIN:TRANSLATOR_SETTINGS_BOOT
                       final settingsSnap = await cf.FirebaseFirestore.instance
                           .collection('users')
@@ -812,12 +817,21 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                           .collection('settings')
                           .doc('app')
                           .get();
+                      if (!ctx.mounted) return;
                       final settingsData = settingsSnap.data();
                       if (settingsData != null) {
                         tr.applyRemoteSettings(settingsData);
                       }
                       // CODEX-END:TRANSLATOR_SETTINGS_BOOT
-                      navigatorKey.currentState?.pushReplacementNamed('/home');
+                      final navigator = navigatorKey.currentState;
+                      if (navigator != null && navigator.mounted) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          final nav = navigatorKey.currentState;
+                          if (nav != null && nav.mounted) {
+                            nav.pushReplacementNamed('/home');
+                          }
+                        });
+                      }
                     }),
                 '/home': (_) => const HomePage(),
                 '/login': (_) => const LoginPage(),
@@ -931,17 +945,37 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
 }
 
 // ---------- صفحات أساس ----------
-class SplashPage extends StatelessWidget {
-  final Future<void> Function(User?) onReady;
+class SplashPage extends StatefulWidget {
+  final Future<void> Function(BuildContext context, User?) onReady;
   const SplashPage({super.key, required this.onReady});
-  Future<void> _boot() async {
-    final u = FirebaseAuth.instance.currentUser;
-    await Future.delayed(const Duration(milliseconds: 200));
-    await onReady(u);
+
+  @override
+  State<SplashPage> createState() => _SplashPageState();
+}
+
+class _SplashPageState extends State<SplashPage> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_boot());
   }
+
+  Future<void> _boot() async {
+    try {
+      final u = FirebaseAuth.instance.currentUser;
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      await widget.onReady(context, u);
+    } catch (error, stack) {
+      debugPrint('SplashPage boot error: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack, library: 'SplashPage'),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    _boot();
     return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
