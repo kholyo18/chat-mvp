@@ -354,7 +354,8 @@ class DmCallService {
 
     final navigator = _navigatorKey?.currentState;
     if (navigator != null && navigator.mounted && navigator.canPop()) {
-      navigator.maybePop();
+      final callRouteName = '/dm/call/${session.callId}';
+      navigator.popUntil((route) => route.settings.name != callRouteName);
     }
   }
 
