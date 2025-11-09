@@ -130,14 +130,27 @@ class _SignInPageState extends State<SignInPage> {
   Future<void> _handleGoogle() async {
     if (_loadingGoogle) return;
     setState(() => _loadingGoogle = true);
+    debugPrint('[SignInPage] Google sign-in started');
     try {
       final userCredential = await AuthService.signInWithGoogle();
+      if (!mounted) {
+        debugPrint('[SignInPage] Widget disposed before handling Google sign-in result');
+        return;
+      }
       final user = userCredential.user;
       if (user != null) {
+        debugPrint('[SignInPage] Google sign-in succeeded for uid: ${user.uid}');
         try {
           final navigator = await waitForRootNavigator();
-          if (navigator.mounted && navigator.canPop()) {
-            navigator.popUntil((route) => route.isFirst);
+          if (!mounted) {
+            debugPrint('[SignInPage] Widget disposed before navigation after Google sign-in');
+            return;
+          }
+          if (navigator.mounted) {
+            debugPrint('[SignInPage] Navigating to /home after Google sign-in');
+            await navigator.pushReplacementNamed('/home');
+          } else {
+            debugPrint('[SignInPage] Root navigator not mounted after Google sign-in');
           }
         } on Object catch (navError, navStack) {
           if (kDebugMode) {
@@ -147,8 +160,11 @@ class _SignInPageState extends State<SignInPage> {
             FlutterErrorDetails(exception: navError, stack: navStack),
           );
         }
+      } else {
+        debugPrint('[SignInPage] Google sign-in returned without a Firebase user');
       }
     } catch (e, st) {
+      debugPrint('[SignInPage] Google sign-in failed: $e');
       if (kDebugMode) {
         print('Google Sign-In error: $e\n$st');
       }
