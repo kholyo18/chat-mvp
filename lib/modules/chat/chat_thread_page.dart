@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 
 import '../calls/agora_call_client.dart';
+import '../calls/dm_call_models.dart';
 import '../../modules/calls/dm_call_service.dart';
 import '../../modules/privacy/privacy_controller.dart';
 import '../../services/firestore_service.dart';
@@ -80,19 +81,241 @@ class _ChatThreadView extends StatelessWidget {
       textDirection: threadDirection,
       child: Scaffold(
         appBar: _ChatAppBar(threadId: threadId),
-        body: const SafeArea(
-          child: Column(
+        body: SafeArea(
+          child: Stack(
             children: [
-              Expanded(child: _MessagesList()),
-              _TypingBanner(),
-              _ReplyPreview(),
-              _Composer(),
+              const Column(
+                children: [
+                  Expanded(child: _MessagesList()),
+                  _TypingBanner(),
+                  _ReplyPreview(),
+                  _Composer(),
+                ],
+              ),
+              _MiniCallOverlay(threadId: threadId),
             ],
           ),
         ),
         backgroundColor: theme.colorScheme.surface,
       ),
     );
+  }
+}
+
+class _MiniCallOverlay extends StatelessWidget {
+  const _MiniCallOverlay({required this.threadId});
+
+  final String threadId;
+
+  @override
+  Widget build(BuildContext context) {
+    final callService = DmCallService.instance;
+    return ValueListenableBuilder<bool>(
+      valueListenable: callService.isMinimized,
+      builder: (context, minimized, _) {
+        if (!minimized) {
+          return const SizedBox.shrink();
+        }
+        return ValueListenableBuilder<DmCallSession?>(
+          valueListenable: callService.activeSession,
+          builder: (context, session, __) {
+            if (session == null || session.threadId != threadId) {
+              return const SizedBox.shrink();
+            }
+            return PositionedDirectional(
+              bottom: 16,
+              start: 16,
+              end: 16,
+              child: _MiniCallCard(session: session),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _MiniCallCard extends StatelessWidget {
+  const _MiniCallCard({required this.session});
+
+  final DmCallSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final callService = DmCallService.instance;
+    final remote = session.otherParticipant ??
+        session.caller ??
+        session.callee ??
+        (session.participants.isNotEmpty ? session.participants.first : null);
+    final avatarUrl = remote?.avatarUrl;
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(16),
+      color: theme.colorScheme.surface.withOpacity(0.95),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: theme.colorScheme.surfaceVariant,
+              backgroundImage:
+                  avatarUrl != null ? CachedNetworkImageProvider(avatarUrl) : null,
+              child: avatarUrl == null
+                  ? Icon(Icons.person,
+                      color: theme.colorScheme.onSurfaceVariant)
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    remote?.displayName ?? 'مكالمة جارية',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  ValueListenableBuilder<DmCallStatus>(
+                    valueListenable: callService.callStatus,
+                    builder: (context, status, _) {
+                      return ValueListenableBuilder<String?>(
+                        valueListenable: callService.callStatusMessage,
+                        builder: (context, message, __) {
+                          final baseLabel = callService.statusLabelFor(
+                            status,
+                            message: message,
+                          );
+                          final label =
+                              status == DmCallStatus.error ? 'خطأ: $baseLabel' : baseLabel;
+                          return Text(
+                            label,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  _MiniNetworkIndicator(
+                    qualityListenable: callService.networkQuality,
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.open_in_full_rounded),
+              color: theme.colorScheme.primary,
+              tooltip: 'عرض المكالمة',
+              onPressed: () {
+                callService.restoreCallUI();
+                unawaited(callService.reopenActiveCallUI());
+              },
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.call_end_rounded),
+              color: theme.colorScheme.error,
+              tooltip: 'إنهاء المكالمة',
+              onPressed: () {
+                unawaited(callService.terminateCall(session));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniNetworkIndicator extends StatelessWidget {
+  const _MiniNetworkIndicator({required this.qualityListenable});
+
+  final ValueListenable<CallNetworkQuality> qualityListenable;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ValueListenableBuilder<CallNetworkQuality>(
+      valueListenable: qualityListenable,
+      builder: (context, quality, _) {
+        final data = _MiniQualityData.fromQuality(quality);
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(data.icon, size: 16, color: data.color),
+            const SizedBox(width: 4),
+            Text(
+              data.label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: data.color,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _MiniQualityData {
+  const _MiniQualityData(this.label, this.icon, this.color);
+
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  static _MiniQualityData fromQuality(CallNetworkQuality quality) {
+    switch (quality) {
+      case CallNetworkQuality.excellent:
+        return _MiniQualityData(
+          'ممتاز',
+          Icons.signal_cellular_4_bar,
+          Colors.green,
+        );
+      case CallNetworkQuality.good:
+        return _MiniQualityData(
+          'جيد',
+          Icons.signal_cellular_3_bar,
+          Colors.lightGreen,
+        );
+      case CallNetworkQuality.moderate:
+        return _MiniQualityData(
+          'متوسط',
+          Icons.signal_cellular_2_bar,
+          Colors.orange,
+        );
+      case CallNetworkQuality.poor:
+        return _MiniQualityData(
+          'ضعيف',
+          Icons.signal_cellular_1_bar,
+          Colors.deepOrange,
+        );
+      case CallNetworkQuality.bad:
+        return _MiniQualityData(
+          'سيئ',
+          Icons.signal_cellular_connected_no_internet_4_bar,
+          Colors.red,
+        );
+      case CallNetworkQuality.unknown:
+      default:
+        return _MiniQualityData(
+          'غير معروف',
+          Icons.signal_cellular_null,
+          Colors.grey,
+        );
+    }
   }
 }
 

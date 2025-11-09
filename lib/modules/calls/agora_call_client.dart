@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
+import 'dm_call_models.dart';
 
 /// Base class for Agora related errors surfaced to the UI layer.
 class AgoraCallException implements Exception {
@@ -77,6 +78,12 @@ class AgoraCallClient {
   final ValueNotifier<bool> isLocalUserJoined = ValueNotifier<bool>(false);
   final ValueNotifier<Set<int>> remoteUserIds =
       ValueNotifier<Set<int>>(<int>{});
+  final ValueNotifier<CallNetworkQuality> networkQuality =
+      ValueNotifier<CallNetworkQuality>(CallNetworkQuality.unknown);
+  final ValueNotifier<ConnectionStateType> connectionState =
+      ValueNotifier<ConnectionStateType>(
+    ConnectionStateType.connectionStateDisconnected,
+  );
 
   final StreamController<AgoraRemoteUserEvent> _remoteUserEventsController =
       StreamController<AgoraRemoteUserEvent>.broadcast();
@@ -244,6 +251,7 @@ class AgoraCallClient {
           _currentChannelId = connection.channelId;
           _localUid = connection.localUid;
           isLocalUserJoined.value = true;
+          connectionState.value = ConnectionStateType.connectionStateConnected;
         },
         onLeaveChannel: (RtcConnection connection, RtcStats stats) {
           _log('onLeaveChannel: ${connection.channelId}');
@@ -256,6 +264,8 @@ class AgoraCallClient {
           isMuted.value = false;
           isSpeakerEnabled.value = false;
           remoteUserIds.value = <int>{};
+          connectionState.value = ConnectionStateType.connectionStateDisconnected;
+          networkQuality.value = CallNetworkQuality.unknown;
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           _log(
@@ -296,14 +306,33 @@ class AgoraCallClient {
           _log(
             'Connection state changed: ${state.name} (reason=${reason.name}, channel=${connection.channelId})',
           );
+          connectionState.value = state;
         },
         onConnectionLost: (RtcConnection connection) {
           _log('Connection lost for ${connection.channelId}');
+          connectionState.value = ConnectionStateType.connectionStateReconnecting;
         },
         onError: (ErrorCodeType error, String message) {
           final code = error.value();
           _lastEngineErrorCode = code;
           _log('AGORA onError: code=$code message=$message type=${error.name}');
+        },
+        onNetworkQuality: (
+          RtcConnection connection,
+          int remoteUid,
+          NetworkQuality txQuality,
+          NetworkQuality rxQuality,
+        ) {
+          if (remoteUid == 0 || remoteUid == (connection.localUid ?? 0)) {
+            _log(
+              'Network quality: tx=${txQuality.name} rx=${rxQuality.name} (channel=${connection.channelId})',
+            );
+            _handleNetworkQualityUpdate(txQuality, rxQuality);
+          }
+        },
+        onLastmileQuality: (NetworkQuality quality) {
+          _log('Lastmile quality: ${quality.name}');
+          _handleNetworkQualityUpdate(quality, quality);
         },
       ),
     );
@@ -510,6 +539,7 @@ class AgoraCallClient {
           autoSubscribeVideo: withVideo,
         ),
       );
+      connectionState.value = ConnectionStateType.connectionStateConnecting;
       _lastJoinResultCode = 0;
       _log('joinChannel request issued for $channelId');
       debugPrint(
@@ -522,6 +552,7 @@ class AgoraCallClient {
       _localUid = null;
       isLocalUserJoined.value = false;
       remoteUserIds.value = <int>{};
+      connectionState.value = ConnectionStateType.connectionStateDisconnected;
       final errorCode = _errorCodeTypeFromValue(error.code);
       _log(
         'join failed: code=${error.code} message=${error.message ?? 'unknown'}',
@@ -540,6 +571,7 @@ class AgoraCallClient {
       _localUid = null;
       isLocalUserJoined.value = false;
       remoteUserIds.value = <int>{};
+      connectionState.value = ConnectionStateType.connectionStateDisconnected;
       _log('joinChannel failed with unexpected error: $error');
       throw AgoraCallException(
         'تعذر الاتصال بالمكالمة. حاول مرة أخرى.',
@@ -776,6 +808,65 @@ class AgoraCallClient {
       await engine.disableVideo();
       await engine.setEnableSpeakerphone(false);
       isSpeakerEnabled.value = false;
+    }
+  }
+
+  void _handleNetworkQualityUpdate(
+    NetworkQuality txQuality,
+    NetworkQuality rxQuality,
+  ) {
+    final tx = _mapNetworkQuality(txQuality);
+    final rx = _mapNetworkQuality(rxQuality);
+    final merged = _mergeNetworkQuality(tx, rx);
+    if (networkQuality.value != merged) {
+      networkQuality.value = merged;
+    }
+  }
+
+  CallNetworkQuality _mapNetworkQuality(NetworkQuality quality) {
+    switch (quality) {
+      case NetworkQuality.unknown:
+        return CallNetworkQuality.unknown;
+      case NetworkQuality.excellent:
+        return CallNetworkQuality.excellent;
+      case NetworkQuality.good:
+        return CallNetworkQuality.good;
+      case NetworkQuality.poor:
+        return CallNetworkQuality.moderate;
+      case NetworkQuality.bad:
+        return CallNetworkQuality.poor;
+      case NetworkQuality.vbad:
+        return CallNetworkQuality.bad;
+      case NetworkQuality.down:
+        return CallNetworkQuality.bad;
+    }
+  }
+
+  CallNetworkQuality _mergeNetworkQuality(
+    CallNetworkQuality tx,
+    CallNetworkQuality rx,
+  ) {
+    CallNetworkQuality worse = tx;
+    if (_qualityRank(rx) > _qualityRank(worse)) {
+      worse = rx;
+    }
+    return worse;
+  }
+
+  int _qualityRank(CallNetworkQuality quality) {
+    switch (quality) {
+      case CallNetworkQuality.excellent:
+        return 0;
+      case CallNetworkQuality.good:
+        return 1;
+      case CallNetworkQuality.moderate:
+        return 2;
+      case CallNetworkQuality.poor:
+        return 3;
+      case CallNetworkQuality.bad:
+        return 4;
+      case CallNetworkQuality.unknown:
+        return 5;
     }
   }
 

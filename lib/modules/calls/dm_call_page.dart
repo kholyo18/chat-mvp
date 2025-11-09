@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'agora_call_client.dart';
 import 'dm_call_models.dart';
+import 'dm_call_service.dart';
 
 typedef DmCallTerminateCallback = Future<void> Function(
   DmCallSession session, {
@@ -36,8 +37,10 @@ class _DmCallPageState extends State<DmCallPage> {
   StreamSubscription<cf.DocumentSnapshot<Map<String, dynamic>>>? _callSub;
   bool _endedLocally = false;
   final AgoraCallClient _callClient = AgoraCallClient.instance;
+  final DmCallService _callService = DmCallService.instance;
   DmCallSession? _latestSession;
   bool _isProcessingJoin = false;
+  bool _keepAliveAfterPop = false;
 
   @override
   void initState() {
@@ -45,12 +48,14 @@ class _DmCallPageState extends State<DmCallPage> {
     _callRef = cf.FirebaseFirestore.instance.collection('calls').doc(widget.session.callId);
     _callSub = _callRef.snapshots().listen(_handleSnapshot, onError: _logError);
     _latestSession = widget.session;
+    _callService.restoreCallUI();
+    _callService.updateActiveSessionFromUi(widget.session);
   }
 
   @override
   void dispose() {
     _callSub?.cancel();
-    if (!_endedLocally) {
+    if (!_endedLocally && !_keepAliveAfterPop) {
       final session = _latestSession ?? widget.session;
       unawaited(_terminateCall(session, silent: true));
     }
@@ -221,6 +226,18 @@ class _DmCallPageState extends State<DmCallPage> {
     }
   }
 
+  void _handleMinimize(DmCallSession session) {
+    if (_keepAliveAfterPop) {
+      return;
+    }
+    _keepAliveAfterPop = true;
+    _callService.minimizeCallUI();
+    _callService.updateActiveSessionFromUi(session);
+    if (mounted) {
+      Navigator.of(context).maybePop();
+    }
+  }
+
   Future<void> _handleDecline(DmCallSession session) async {
     final callback = widget.onDeclineIncomingCall;
     if (callback == null) {
@@ -297,9 +314,11 @@ class _DmCallPageState extends State<DmCallPage> {
               status: status,
             );
             _latestSession = session;
+            _callService.updateActiveSessionFromUi(session);
             return _CallContent(
               session: session,
               callClient: _callClient,
+              callService: _callService,
               onEnd: () => unawaited(_handleEnd(session)),
               onAccept: widget.onAnswerIncomingCall == null
                   ? null
@@ -313,6 +332,7 @@ class _DmCallPageState extends State<DmCallPage> {
                   ? () => unawaited(_handleSwitchCamera())
                   : null,
               isProcessingAccept: _isProcessingJoin,
+              onMinimize: () => _handleMinimize(session),
             );
           },
         ),
@@ -353,6 +373,7 @@ class _CallContent extends StatelessWidget {
   const _CallContent({
     required this.session,
     required this.callClient,
+    required this.callService,
     required this.onEnd,
     this.onAccept,
     this.onDecline,
@@ -360,10 +381,12 @@ class _CallContent extends StatelessWidget {
     this.onToggleSpeaker,
     this.onSwitchCamera,
     this.isProcessingAccept = false,
+    this.onMinimize,
   });
 
   final DmCallSession session;
   final AgoraCallClient callClient;
+  final DmCallService callService;
   final VoidCallback onEnd;
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
@@ -371,6 +394,7 @@ class _CallContent extends StatelessWidget {
   final VoidCallback? onToggleSpeaker;
   final VoidCallback? onSwitchCamera;
   final bool isProcessingAccept;
+  final VoidCallback? onMinimize;
 
   @override
   Widget build(BuildContext context) {
@@ -385,10 +409,12 @@ class _CallContent extends StatelessWidget {
     return _ActiveCallView(
       session: session,
       callClient: callClient,
+      callService: callService,
       onEnd: onEnd,
       onToggleMute: onToggleMute,
       onToggleSpeaker: onToggleSpeaker,
       onSwitchCamera: onSwitchCamera,
+      onMinimize: onMinimize,
     );
   }
 }
@@ -397,18 +423,22 @@ class _ActiveCallView extends StatelessWidget {
   const _ActiveCallView({
     required this.session,
     required this.callClient,
+    required this.callService,
     required this.onEnd,
     this.onToggleMute,
     this.onToggleSpeaker,
     this.onSwitchCamera,
+    this.onMinimize,
   });
 
   final DmCallSession session;
   final AgoraCallClient callClient;
+  final DmCallService callService;
   final VoidCallback onEnd;
   final VoidCallback? onToggleMute;
   final VoidCallback? onToggleSpeaker;
   final VoidCallback? onSwitchCamera;
+  final VoidCallback? onMinimize;
 
   @override
   Widget build(BuildContext context) {
@@ -422,26 +452,44 @@ class _ActiveCallView extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: IconButton(
-              onPressed: onEnd,
-              icon: const Icon(Icons.close_rounded, color: Colors.white),
-              tooltip: 'إنهاء',
-            ),
+          Row(
+            children: [
+              IconButton(
+                onPressed: onEnd,
+                icon: const Icon(Icons.close_rounded, color: Colors.white),
+                tooltip: 'إنهاء',
+              ),
+              Expanded(
+                child: Align(
+                  alignment: AlignmentDirectional.center,
+                  child: _CallStatusIndicators(callService: callService),
+                ),
+              ),
+              if (onMinimize != null)
+                IconButton(
+                  onPressed: onMinimize,
+                  icon: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: Colors.white,
+                  ),
+                  tooltip: 'تصغير',
+                )
+              else
+                const SizedBox(width: 48),
+            ],
           ),
           Expanded(
-            child: ValueListenableBuilder<bool>(
-              valueListenable: callClient.isLocalUserJoined,
-              builder: (context, localJoined, _) {
-                return ValueListenableBuilder<Set<int>>(
-                  valueListenable: callClient.remoteUserIds,
-                  builder: (context, remoteUsers, __) {
-                    final statusLabel = _statusLabel(
-                      localJoined: localJoined,
-                      remoteUsers: remoteUsers,
-                      callStatus: session.status,
-                    );
+            child: ValueListenableBuilder<DmCallStatus>(
+              valueListenable: callService.callStatus,
+              builder: (context, status, _) {
+                return ValueListenableBuilder<String?>(
+                  valueListenable: callService.callStatusMessage,
+                  builder: (context, message, __) {
+                    final baseLabel =
+                        callService.statusLabelFor(status, message: message);
+                    final statusLabel = status == DmCallStatus.error
+                        ? 'خطأ: $baseLabel'
+                        : baseLabel;
                     return session.type == DmCallType.video
                         ? _VideoCallBody(
                             session: session,
@@ -509,23 +557,170 @@ class _ActiveCallView extends StatelessWidget {
       ),
     );
   }
+}
 
-  String _statusLabel({
-    required bool localJoined,
-    required Set<int> remoteUsers,
-    required String callStatus,
-  }) {
-    if (callStatus == 'ended') {
-      return 'انتهت المكالمة';
-    }
-    if (!localJoined) {
-      return 'جارٍ الاتصال…';
-    }
-    if (remoteUsers.isEmpty) {
-      return 'بانتظار انضمام الطرف الآخر…';
-    }
-    return 'متصل';
+class _CallStatusIndicators extends StatelessWidget {
+  const _CallStatusIndicators({required this.callService});
+
+  final DmCallService callService;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<DmCallStatus>(
+      valueListenable: callService.callStatus,
+      builder: (context, status, _) {
+        return ValueListenableBuilder<String?>(
+          valueListenable: callService.callStatusMessage,
+          builder: (context, message, __) {
+            final baseLabel = callService.statusLabelFor(
+              status,
+              message: message,
+            );
+            final displayLabel = status == DmCallStatus.error
+                ? 'خطأ: $baseLabel'
+                : baseLabel;
+            final color = _statusColor(status);
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: color.withOpacity(0.6)),
+                  ),
+                  child: Text(
+                    displayLabel,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: color,
+                          fontWeight: FontWeight.w600,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                _NetworkQualityBadge(
+                  qualityListenable: callService.networkQuality,
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
+
+  Color _statusColor(DmCallStatus status) {
+    switch (status) {
+      case DmCallStatus.connected:
+        return Colors.greenAccent;
+      case DmCallStatus.ringing:
+      case DmCallStatus.connecting:
+      case DmCallStatus.reconnecting:
+        return Colors.orangeAccent;
+      case DmCallStatus.ended:
+        return Colors.grey.shade400;
+      case DmCallStatus.error:
+        return Colors.redAccent;
+      case DmCallStatus.idle:
+      default:
+        return Colors.blueGrey.shade200;
+    }
+  }
+}
+
+class _NetworkQualityBadge extends StatelessWidget {
+  const _NetworkQualityBadge({required this.qualityListenable});
+
+  final ValueListenable<CallNetworkQuality> qualityListenable;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<CallNetworkQuality>(
+      valueListenable: qualityListenable,
+      builder: (context, quality, _) {
+        final data = _qualityData(quality);
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: data.color.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(data.icon, size: 16, color: data.color),
+              const SizedBox(width: 4),
+              Text(
+                data.label,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: data.color,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  _QualityIndicatorData _qualityData(CallNetworkQuality quality) {
+    switch (quality) {
+      case CallNetworkQuality.excellent:
+        return _QualityIndicatorData(
+          label: 'ممتاز',
+          icon: Icons.signal_cellular_4_bar,
+          color: Colors.greenAccent,
+        );
+      case CallNetworkQuality.good:
+        return _QualityIndicatorData(
+          label: 'جيد',
+          icon: Icons.signal_cellular_3_bar,
+          color: Colors.lightGreenAccent,
+        );
+      case CallNetworkQuality.moderate:
+        return _QualityIndicatorData(
+          label: 'متوسط',
+          icon: Icons.signal_cellular_2_bar,
+          color: Colors.orangeAccent,
+        );
+      case CallNetworkQuality.poor:
+        return _QualityIndicatorData(
+          label: 'ضعيف',
+          icon: Icons.signal_cellular_1_bar,
+          color: Colors.deepOrangeAccent,
+        );
+      case CallNetworkQuality.bad:
+        return _QualityIndicatorData(
+          label: 'سيئ',
+          icon: Icons.signal_cellular_connected_no_internet_4_bar,
+          color: Colors.redAccent,
+        );
+      case CallNetworkQuality.unknown:
+      default:
+        return _QualityIndicatorData(
+          label: 'غير معروف',
+          icon: Icons.signal_cellular_null,
+          color: Colors.grey,
+        );
+    }
+  }
+}
+
+class _QualityIndicatorData {
+  const _QualityIndicatorData({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
 }
 
 class _AudioCallBody extends StatelessWidget {

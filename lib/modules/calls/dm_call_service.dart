@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart' as cf;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
@@ -20,7 +21,21 @@ class DmCallService {
     cf.FirebaseFirestore? firestore,
     FirebaseAuth? auth,
   })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+        _auth = auth ?? FirebaseAuth.instance {
+    networkQuality.value = _agoraClient.networkQuality.value;
+    _networkQualityListener = () {
+      networkQuality.value = _agoraClient.networkQuality.value;
+    };
+    _agoraClient.networkQuality.addListener(_networkQualityListener!);
+    _connectionStateListener = () {
+      _handleConnectionStateChanged(
+        _agoraClient.connectionState.value,
+      );
+    };
+    _agoraClient.connectionState.addListener(_connectionStateListener!);
+    _remoteUserEventsSubscription =
+        _agoraClient.remoteUserEvents.listen(_handleRemoteUserEvent);
+  }
 
   factory DmCallService({
     cf.FirebaseFirestore? firestore,
@@ -46,6 +61,23 @@ class DmCallService {
   final Set<String> _handledIncomingCallIds = <String>{};
   final Set<String> _activeCallRouteIds = <String>{};
   final AgoraCallClient _agoraClient = AgoraCallClient.instance;
+  final ValueNotifier<DmCallStatus> callStatus =
+      ValueNotifier<DmCallStatus>(DmCallStatus.idle);
+  final ValueNotifier<String?> callStatusMessage =
+      ValueNotifier<String?>(null);
+  final ValueNotifier<CallNetworkQuality> networkQuality =
+      ValueNotifier<CallNetworkQuality>(CallNetworkQuality.unknown);
+  final ValueNotifier<bool> isMinimized = ValueNotifier<bool>(false);
+  final ValueNotifier<DmCallSession?> activeSession =
+      ValueNotifier<DmCallSession?>(null);
+
+  StreamSubscription<AgoraRemoteUserEvent>? _remoteUserEventsSubscription;
+  StreamSubscription<cf.DocumentSnapshot<Map<String, dynamic>>>?
+      _activeCallSubscription;
+  VoidCallback? _networkQualityListener;
+  VoidCallback? _connectionStateListener;
+  Timer? _ringtoneTimer;
+  String? _ringtoneCallId;
 
   void _log(String message) {
     debugPrint('[DmCallService] $message');
@@ -53,6 +85,233 @@ class DmCallService {
 
   void _logStack(StackTrace stack) {
     debugPrintStack(label: '[DmCallService] stack', stackTrace: stack);
+  }
+
+  void _handleRemoteUserEvent(AgoraRemoteUserEvent event) {
+    if (activeSession.value == null) {
+      return;
+    }
+    switch (event.type) {
+      case AgoraRemoteUserEventType.joined:
+        _setCallStatus(DmCallStatus.connected);
+        break;
+      case AgoraRemoteUserEventType.left:
+        if (callStatus.value == DmCallStatus.connected) {
+          _setCallStatus(DmCallStatus.reconnecting);
+        }
+        break;
+    }
+  }
+
+  void _handleConnectionStateChanged(ConnectionStateType state) {
+    if (activeSession.value == null && state != ConnectionStateType.connectionStateConnecting) {
+      return;
+    }
+    switch (state) {
+      case ConnectionStateType.connectionStateConnecting:
+        if (callStatus.value != DmCallStatus.ended &&
+            callStatus.value != DmCallStatus.error) {
+          _setCallStatus(DmCallStatus.connecting);
+        }
+        break;
+      case ConnectionStateType.connectionStateConnected:
+        _setCallStatus(DmCallStatus.connected);
+        break;
+      case ConnectionStateType.connectionStateReconnecting:
+        _setCallStatus(DmCallStatus.reconnecting);
+        break;
+      case ConnectionStateType.connectionStateFailed:
+        _setCallStatus(
+          DmCallStatus.error,
+          message: 'تعذر الاتصال بالشبكة. حاول مرة أخرى.',
+        );
+        break;
+      case ConnectionStateType.connectionStateDisconnected:
+        if (activeSession.value != null &&
+            callStatus.value != DmCallStatus.idle &&
+            callStatus.value != DmCallStatus.ended) {
+          _setCallStatus(DmCallStatus.ended);
+        }
+        if (activeSession.value != null) {
+          _resetAfterCallEnd();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  void _setCallStatus(DmCallStatus status, {String? message}) {
+    if (callStatus.value == status && callStatusMessage.value == message) {
+      return;
+    }
+    _log('Status changed to ${status.name}${message != null ? ' ($message)' : ''}');
+    callStatus.value = status;
+    callStatusMessage.value = message;
+  }
+
+  void _initializeActiveCallSession(DmCallSession session) {
+    _stopIncomingRingtone();
+    activeSession.value = session;
+    _applyStatusFromSession(session);
+    _activeCallSubscription?.cancel();
+    _activeCallSubscription = _firestore
+        .collection('calls')
+        .doc(session.callId)
+        .snapshots()
+        .listen(
+      (snapshot) => _handleActiveCallSnapshot(snapshot),
+      onError: (error, stack) {
+        _log('Active call listener error: $error');
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stack),
+        );
+      },
+    );
+  }
+
+  void _handleActiveCallSnapshot(
+    cf.DocumentSnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    final data = snapshot.data();
+    if (data == null) {
+      return;
+    }
+    final updated = _sessionFromData(snapshot.id, data);
+    if (updated != null) {
+      activeSession.value = updated;
+      _applyStatusFromSession(updated);
+      if (updated.status == 'ended') {
+        _handleRemoteCallEnded();
+      }
+    }
+  }
+
+  void _applyStatusFromSession(DmCallSession session) {
+    if (callStatus.value == DmCallStatus.error && session.status != 'ended') {
+      return;
+    }
+    switch (session.status) {
+      case 'ended':
+        _setCallStatus(DmCallStatus.ended);
+        break;
+      case 'ringing':
+        _setCallStatus(DmCallStatus.ringing);
+        break;
+      default:
+        if (_agoraClient.remoteUserIds.value.isNotEmpty) {
+          _setCallStatus(DmCallStatus.connected);
+        } else {
+          _setCallStatus(DmCallStatus.connecting);
+        }
+        break;
+    }
+  }
+
+  void _handleRemoteCallEnded() {
+    if (callStatus.value != DmCallStatus.ended) {
+      _setCallStatus(DmCallStatus.ended);
+    }
+    _stopIncomingRingtone();
+    unawaited(_agoraClient.leaveChannel());
+    _resetAfterCallEnd();
+  }
+
+  void _resetAfterCallEnd() {
+    _activeCallSubscription?.cancel();
+    _activeCallSubscription = null;
+    if (activeSession.value != null) {
+      activeSession.value = null;
+    }
+    if (isMinimized.value) {
+      isMinimized.value = false;
+    }
+    networkQuality.value = CallNetworkQuality.unknown;
+    _stopIncomingRingtone();
+  }
+
+  void _startIncomingRingtone(String callId) {
+    if (_ringtoneCallId == callId && _ringtoneTimer != null) {
+      return;
+    }
+    if (activeSession.value != null) {
+      return;
+    }
+    _stopIncomingRingtone();
+    _ringtoneCallId = callId;
+    unawaited(SystemSound.play(SystemSoundType.notification));
+    _ringtoneTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      unawaited(SystemSound.play(SystemSoundType.notification));
+    });
+  }
+
+  void _stopIncomingRingtone() {
+    _ringtoneTimer?.cancel();
+    _ringtoneTimer = null;
+    _ringtoneCallId = null;
+  }
+
+  void minimizeCallUI() {
+    if (activeSession.value == null) {
+      return;
+    }
+    if (!isMinimized.value) {
+      isMinimized.value = true;
+    }
+  }
+
+  void restoreCallUI() {
+    if (isMinimized.value) {
+      isMinimized.value = false;
+    }
+  }
+
+  Future<void> reopenActiveCallUI() async {
+    final session = activeSession.value;
+    if (session == null) {
+      return;
+    }
+    restoreCallUI();
+    NavigatorState? navigator = _navigatorKey?.currentState;
+    if (navigator == null || !navigator.mounted) {
+      navigator = await waitForAuthenticatedNavigator();
+      if (!identical(_navigatorKey, authenticatedNavigatorKey)) {
+        _navigatorKey = authenticatedNavigatorKey;
+      }
+    }
+    if (navigator.mounted) {
+      await _pushCallPage(navigator, session);
+    }
+  }
+
+  void updateActiveSessionFromUi(DmCallSession session) {
+    final current = activeSession.value;
+    if (current == null || current.callId != session.callId) {
+      return;
+    }
+    activeSession.value = session;
+    _applyStatusFromSession(session);
+  }
+
+  String statusLabelFor(DmCallStatus status, {String? message}) {
+    switch (status) {
+      case DmCallStatus.idle:
+        return 'غير متصل';
+      case DmCallStatus.ringing:
+        return 'يرن…';
+      case DmCallStatus.connecting:
+        return 'جارٍ الاتصال…';
+      case DmCallStatus.connected:
+        return 'متصل';
+      case DmCallStatus.reconnecting:
+        return 'جارٍ إعادة الاتصال…';
+      case DmCallStatus.ended:
+        return 'انتهت المكالمة';
+      case DmCallStatus.error:
+        return message?.isNotEmpty == true
+            ? message!
+            : 'حدث خطأ في الاتصال';
+    }
   }
 
   Future<void> startVoiceCall(
@@ -264,6 +523,8 @@ class DmCallService {
       agoraToken: callToken,
     );
 
+    _initializeActiveCallSession(session);
+
     unawaited(
       _pushCallPage(navigator, session).catchError((Object error, StackTrace stack) {
         _log('Failed to push call route ${session.callId}: $error');
@@ -277,6 +538,7 @@ class DmCallService {
       _log(
         'Initiating ${type == DmCallType.video ? 'video' : 'voice'} call $channelId (callId=${callRef.id}, localUid=$callerAgoraUid, remoteUid=$calleeAgoraUid)',
       );
+      _setCallStatus(DmCallStatus.connecting);
       await _agoraClient.joinChannel(
         channelId: channelId,
         token: callToken,
@@ -298,6 +560,10 @@ class DmCallService {
           'AgoraRtcException for call ${callRef.id}: code=${rtcError.code} message=${rtcError.message}',
         );
       }
+      _setCallStatus(
+        DmCallStatus.error,
+        message: _errorMessageForCall(error),
+      );
       await _handleCallStartFailure(
         callRef: callRef,
         session: session,
@@ -357,6 +623,7 @@ class DmCallService {
       final callRouteName = '/dm/call/${session.callId}';
       navigator.popUntil((route) => route.settings.name != callRouteName);
     }
+    _resetAfterCallEnd();
   }
 
   /// Starts listening for incoming DM calls targeting [uid].
@@ -405,6 +672,7 @@ class DmCallService {
     _handledIncomingCallIds.clear();
     _activeCallRouteIds.clear();
     _listeningUid = null;
+    _stopIncomingRingtone();
   }
 
   void _handleIncomingSnapshot(
@@ -424,6 +692,9 @@ class DmCallService {
         _log('Call $callId removed from ringing snapshot');
         _handledIncomingCallIds.remove(callId);
         _activeCallRouteIds.remove(callId);
+        if (_ringtoneCallId == callId) {
+          _stopIncomingRingtone();
+        }
         continue;
       }
       final data = doc.data();
@@ -436,11 +707,17 @@ class DmCallService {
       if (endedAt != null) {
         _log('Ignoring $callId because endedAt=$endedAt');
         _handledIncomingCallIds.remove(callId);
+        if (_ringtoneCallId == callId) {
+          _stopIncomingRingtone();
+        }
         continue;
       }
       if (status != 'ringing') {
         _log('Ignoring $callId with status=$status');
         _handledIncomingCallIds.remove(callId);
+        if (_ringtoneCallId == callId) {
+          _stopIncomingRingtone();
+        }
         continue;
       }
       if (_handledIncomingCallIds.contains(callId)) {
@@ -483,6 +760,7 @@ class DmCallService {
         continue;
       }
       _handledIncomingCallIds.add(callId);
+      _startIncomingRingtone(callId);
       _presentIncomingCall(session);
     }
   }
@@ -566,6 +844,7 @@ class DmCallService {
     }
     final isVideoCall = call.type == DmCallType.video;
     await _agoraClient.initEngineIfNeeded(enableVideo: isVideoCall);
+    _initializeActiveCallSession(call);
     final callRef = _firestore.collection('calls').doc(call.callId);
     final shouldActivate = call.status != 'active';
     final preJoinPayload = <String, dynamic>{
@@ -579,6 +858,7 @@ class DmCallService {
       );
       final token =
           _normalizeToken(call.agoraToken) ?? _normalizeToken(AgoraConfig.token);
+      _setCallStatus(DmCallStatus.connecting);
       await _agoraClient.joinChannel(
         channelId: call.channelId,
         token: token,
@@ -613,6 +893,11 @@ class DmCallService {
           FlutterErrorDetails(exception: updateError, stack: updateStack),
         );
       }
+      _setCallStatus(
+        DmCallStatus.error,
+        message: _errorMessageForCall(error),
+      );
+      _resetAfterCallEnd();
       rethrow;
     }
   }
@@ -622,6 +907,7 @@ class DmCallService {
     if (uid == null) {
       throw StateError('User must be signed in to decline calls');
     }
+    _stopIncomingRingtone();
     final callRef = _firestore.collection('calls').doc(call.callId);
     await callRef.update(<String, dynamic>{
       'participants.$uid.state': 'ended',
@@ -631,6 +917,8 @@ class DmCallService {
       'endedAt': cf.FieldValue.serverTimestamp(),
     });
     await _teardownAgora(call.callId);
+    _setCallStatus(DmCallStatus.ended);
+    _resetAfterCallEnd();
     _handledIncomingCallIds.remove(call.callId);
     final navigator = _navigatorKey?.currentState;
     if (navigator != null && navigator.mounted && navigator.canPop()) {
@@ -643,6 +931,7 @@ class DmCallService {
     bool remoteEnded = false,
   }) async {
     final uid = _auth.currentUser?.uid;
+    _stopIncomingRingtone();
     final updates = <String, dynamic>{
       'ringingTargets': <String>[],
     };
@@ -660,6 +949,8 @@ class DmCallService {
       }
     } finally {
       await _teardownAgora(session.callId);
+      _setCallStatus(DmCallStatus.ended);
+      _resetAfterCallEnd();
     }
   }
 
@@ -817,6 +1108,26 @@ class DmCallService {
   void dispose() {
     unawaited(_agoraClient.dispose());
     stopListening();
+    _remoteUserEventsSubscription?.cancel();
+    _remoteUserEventsSubscription = null;
+    _activeCallSubscription?.cancel();
+    _activeCallSubscription = null;
+    final networkListener = _networkQualityListener;
+    if (networkListener != null) {
+      _agoraClient.networkQuality.removeListener(networkListener);
+      _networkQualityListener = null;
+    }
+    final connectionListener = _connectionStateListener;
+    if (connectionListener != null) {
+      _agoraClient.connectionState.removeListener(connectionListener);
+      _connectionStateListener = null;
+    }
+    _stopIncomingRingtone();
+    callStatus.value = DmCallStatus.idle;
+    callStatusMessage.value = null;
+    networkQuality.value = CallNetworkQuality.unknown;
+    activeSession.value = null;
+    isMinimized.value = false;
     _navigatorKey = null;
   }
 }
