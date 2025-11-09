@@ -221,7 +221,14 @@ class AgoraCallClient {
       );
     }
 
+    await engine.setChannelProfile(ChannelProfileType.channelProfileCommunication);
+    await engine.setAudioProfile(
+      AudioProfileType.audioProfileMusicStandard,
+      scenario: AudioScenarioType.audioScenarioCommunication,
+    );
     await engine.enableAudio();
+    await engine.setDefaultMuteAllRemoteAudioStreams(false);
+    debugPrint('[AgoraCallClient] Audio engine configured for 1:1 COMMUNICATION');
     if (enableVideo) {
       await engine.enableVideo();
     }
@@ -262,6 +269,7 @@ class AgoraCallClient {
               type: AgoraRemoteUserEventType.joined,
             ),
           );
+          unawaited(_ensureRemoteAudioUnmuted(remoteUid));
         },
         onUserOffline: (
           RtcConnection connection,
@@ -370,6 +378,32 @@ class AgoraCallClient {
     }
   }
 
+  Future<void> _ensureRemoteAudioUnmuted(int uid) async {
+    final engine = _engine;
+    if (engine == null) {
+      _log('Cannot unmute remote user $uid: engine not initialized.');
+      return;
+    }
+    try {
+      await engine.muteRemoteAudioStream(uid, false);
+      debugPrint('[AgoraCallClient] muteRemoteAudioStream(uid: $uid, mute: false)');
+    } catch (error, stack) {
+      _log('Failed to unmute remote audio stream for $uid: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    }
+    try {
+      await engine.adjustPlaybackSignalVolume(100);
+      debugPrint('[AgoraCallClient] adjustPlaybackSignalVolume(100) for remote uid=$uid');
+    } catch (error, stack) {
+      _log('Failed to adjust playback volume for $uid: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    }
+  }
+
   @visibleForTesting
   Future<void> startCall({
     required String channelId,
@@ -428,9 +462,10 @@ class AgoraCallClient {
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
     await engine.muteAllRemoteAudioStreams(false);
+    debugPrint('[AgoraCallClient] muteAllRemoteAudioStreams(false)');
     await engine.adjustPlaybackSignalVolume(100);
     debugPrint(
-      '[AgoraCallClient] Audio configured: local muted = false, remote muted = false, playback volume = 100',
+      '[AgoraCallClient] Audio unmuted: local=false, remoteAll=false, playback=100',
     );
 
     if (withVideo) {
