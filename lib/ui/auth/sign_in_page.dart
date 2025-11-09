@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../../navigation/app_navigator.dart';
 import '../../services/auth_service.dart';
 
 class SignInPage extends StatefulWidget {
@@ -140,25 +139,20 @@ class _SignInPageState extends State<SignInPage> {
       final user = userCredential.user;
       if (user != null) {
         debugPrint('[SignInPage] Google sign-in succeeded for uid: ${user.uid}');
-        try {
-          final navigator = await waitForRootNavigator();
-          if (!mounted) {
-            debugPrint('[SignInPage] Widget disposed before navigation after Google sign-in');
-            return;
-          }
-          if (navigator.mounted) {
-            debugPrint('[SignInPage] Navigating to /home after Google sign-in');
-            await navigator.pushReplacementNamed('/home');
-          } else {
-            debugPrint('[SignInPage] Root navigator not mounted after Google sign-in');
-          }
-        } on Object catch (navError, navStack) {
-          if (kDebugMode) {
-            print('Navigator not ready after Google Sign-In: $navError');
-          }
-          FlutterError.reportError(
-            FlutterErrorDetails(exception: navError, stack: navStack),
-          );
+        if (!mounted) {
+          debugPrint('[SignInPage] Widget disposed before attempting navigation');
+          return;
+        }
+        final navigator = Navigator.of(context);
+        if (!navigator.mounted) {
+          debugPrint('[SignInPage] Navigator from context is not mounted after Google sign-in');
+          return;
+        }
+        debugPrint('[SignInPage] Navigating to /home after Google sign-in');
+        await navigator.pushReplacementNamed('/home');
+        if (!mounted) {
+          debugPrint('[SignInPage] Widget disposed after navigation to /home');
+          return;
         }
       } else {
         debugPrint('[SignInPage] Google sign-in returned without a Firebase user');
