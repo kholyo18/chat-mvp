@@ -823,14 +823,22 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                         tr.applyRemoteSettings(settingsData);
                       }
                       // CODEX-END:TRANSLATOR_SETTINGS_BOOT
-                      final navigator = navigatorKey.currentState;
-                      if (navigator != null && navigator.mounted) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          final nav = navigatorKey.currentState;
-                          if (nav != null && nav.mounted) {
-                            nav.pushReplacementNamed('/home');
-                          }
-                        });
+                      try {
+                        final navigator = await waitForRootNavigator();
+                        if (navigator.mounted) {
+                          await navigator.pushReplacementNamed('/home');
+                        }
+                      } on Object catch (navError, navStack) {
+                        _bootLog('Splash navigation failed: $navError');
+                        FlutterError.reportError(
+                          FlutterErrorDetails(
+                            exception: navError,
+                            stack: navStack,
+                            informationCollector: () sync* {
+                              yield ErrorDescription('while routing to /home');
+                            },
+                          ),
+                        );
                       }
                     }),
                 '/home': (_) => const HomePage(),
