@@ -427,6 +427,11 @@ class AgoraCallClient {
 
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
+    await engine.muteAllRemoteAudioStreams(false);
+    await engine.adjustPlaybackSignalVolume(100);
+    debugPrint(
+      '[AgoraCallClient] Audio configured: local muted = false, remote muted = false, playback volume = 100',
+    );
 
     if (withVideo) {
       await engine.enableVideo();
