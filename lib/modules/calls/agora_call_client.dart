@@ -438,13 +438,9 @@ class AgoraCallClient {
         ),
       );
       await engine.startPreview();
-      await engine.setEnableSpeakerphone(true);
-      isSpeakerEnabled.value = true;
+      await _setSpeakerphoneSafely(engine: engine, enabled: true);
     } else {
-      await engine.stopPreview();
-      await engine.disableVideo();
-      await engine.setEnableSpeakerphone(false);
-      isSpeakerEnabled.value = false;
+      await _setSpeakerphoneSafely(engine: engine, enabled: false);
     }
 
     final String? resolvedToken = _effectiveToken(token);
@@ -452,6 +448,9 @@ class AgoraCallClient {
     final logTokenState = resolvedToken == null ? 'none' : 'provided';
     _log(
       'Joining channel: $channelId, uid=$uid, withVideo=$withVideo, token=$logTokenState',
+    );
+    debugPrint(
+      '[AgoraCallClient] joinChannel(channel: $channelId, uid: $uid, withVideo: $withVideo)',
     );
 
     try {
@@ -470,6 +469,9 @@ class AgoraCallClient {
       );
       _lastJoinResultCode = 0;
       _log('joinChannel request issued for $channelId');
+      debugPrint(
+        '[AgoraCallClient] joinChannel SUCCESS (channel: $channelId, uid: $uid)',
+      );
     } on AgoraRtcException catch (error) {
       _lastJoinResultCode = error.code;
       _currentChannelId = null;
@@ -505,6 +507,26 @@ class AgoraCallClient {
         _isJoining = false;
       }
     }
+  }
+
+  Future<void> _setSpeakerphoneSafely({
+    required RtcEngine engine,
+    required bool enabled,
+  }) async {
+    try {
+      await engine.setEnableSpeakerphone(enabled);
+    } on AgoraRtcException catch (error) {
+      if (error.code == -3 ||
+          error.code == ErrorCodeType.errNotReady.value()) {
+        debugPrint(
+          '[AgoraCallClient] setEnableSpeakerphone WARN (code=${error.code}): engine not ready, continuing without speakerphone tweak.',
+        );
+        isSpeakerEnabled.value = enabled;
+        return;
+      }
+      rethrow;
+    }
+    isSpeakerEnabled.value = enabled;
   }
 
   bool _shouldRetryJoinError(AgoraCallException error) {
