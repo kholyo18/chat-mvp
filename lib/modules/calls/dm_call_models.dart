@@ -4,6 +4,27 @@ import 'package:flutter/foundation.dart';
 /// Type of DM call being placed.
 enum DmCallType { voice, video }
 
+/// High-level status of the current call lifecycle.
+enum DmCallStatus {
+  idle,
+  ringing,
+  connecting,
+  connected,
+  reconnecting,
+  ended,
+  error,
+}
+
+/// Simplified representation of Agora's network quality callbacks.
+enum CallNetworkQuality {
+  excellent,
+  good,
+  moderate,
+  poor,
+  bad,
+  unknown,
+}
+
 /// Lightweight participant descriptor for a DM call session.
 @immutable
 class DmCallParticipant {
