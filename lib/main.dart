@@ -824,7 +824,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
                       }
                       // CODEX-END:TRANSLATOR_SETTINGS_BOOT
                       try {
-                        final navigator = await waitForRootNavigator();
+                        final navigator = await waitForAuthenticatedNavigator();
                         if (navigator.mounted) {
                           await navigator.pushReplacementNamed('/home');
                         }
