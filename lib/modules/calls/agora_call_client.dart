@@ -464,7 +464,7 @@ class AgoraCallClient {
 
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
-    await engine.muteAllRemoteAudioStreams(mute: false);
+    await engine.muteAllRemoteAudioStreams(false);
     debugPrint('[AgoraCallClient] muteAllRemoteAudioStreams(false)');
     await engine.adjustPlaybackSignalVolume(100);
     debugPrint(
