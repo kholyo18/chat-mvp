@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../config/agora_config.dart';
 import '../../models/user_profile.dart';
+import '../../navigation/app_navigator.dart';
 import 'agora_call_client.dart';
 import 'dm_call_models.dart';
 import 'dm_call_page.dart';
@@ -140,9 +141,12 @@ class DmCallService {
       throw StateError('User must be signed in to start a call');
     }
 
-    final navigator = _navigatorKey?.currentState;
-    if (navigator == null) {
-      throw StateError('Navigator not available for DM call presentation');
+    NavigatorState? navigator = _navigatorKey?.currentState;
+    if (navigator == null || !navigator.mounted) {
+      navigator = await waitForAuthenticatedNavigator();
+      if (!identical(_navigatorKey, authenticatedNavigatorKey)) {
+        _navigatorKey = authenticatedNavigatorKey;
+      }
     }
     if (!navigator.mounted) {
       throw StateError('Navigator for DM call presentation is not mounted');
@@ -154,9 +158,9 @@ class DmCallService {
 
     final callRef = _firestore.collection('calls').doc();
     final now = cf.FieldValue.serverTimestamp();
-    // Use a stable per-call channel so caller and callee always join the same
+    // Use a stable per-thread channel so caller and callee always join the same
     // Agora room without racing to generate different identifiers.
-    final channelId = 'dm_call_${callRef.id}';
+    final channelId = _channelNameForThread(threadId);
     final callerAgoraUid = _agoraClient.agoraUidForUser(currentUser.uid);
     final calleeAgoraUid = _agoraClient.agoraUidForUser(otherUserId);
     final callToken = _normalizeToken(AgoraConfig.token);
@@ -487,6 +491,9 @@ class DmCallService {
     final DmCallType type = typeRaw == 'video'
         ? DmCallType.video
         : DmCallType.voice;
+    final threadIdRaw = (data['threadId'] as String?)?.trim();
+    final threadId =
+        (threadIdRaw == null || threadIdRaw.isEmpty) ? callId : threadIdRaw;
     final participantsRaw = data['participants'];
     final participants = _parseParticipants(participantsRaw);
     if (participants.isEmpty) {
@@ -508,11 +515,11 @@ class DmCallService {
       }
     }
     if (channelId.isEmpty) {
-      channelId = callId;
+      channelId = _channelNameForThread(threadId);
     }
     return DmCallSession(
       callId: callId,
-      threadId: (data['threadId'] as String?) ?? callId,
+      threadId: threadId,
       channelId: channelId,
       type: type,
       initiatorId: (data['initiator'] as String?) ?? '',
@@ -672,6 +679,18 @@ class DmCallService {
       return null;
     }
     return trimmed;
+  }
+
+  String _channelNameForThread(String threadId) {
+    const prefix = 'dm_call_';
+    const maxLength = 64;
+    final sanitized = threadId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    final safeThreadId = sanitized.isEmpty ? 'thread' : sanitized;
+    final maxThreadLength = maxLength - prefix.length;
+    final truncated = safeThreadId.length > maxThreadLength
+        ? safeThreadId.substring(0, maxThreadLength)
+        : safeThreadId;
+    return '$prefix$truncated';
   }
 
   Future<void> _presentIncomingCall(DmCallSession session) async {
