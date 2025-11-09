@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:chat_mvp/navigation/app_navigator.dart' as app_navigator;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -88,16 +89,16 @@ class _SignInPageState extends State<SignInPage> {
       if (!context.mounted) return;
       if (user != null && !user.emailVerified) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          final navigator = navigatorKey.currentState;
+          final navigator = app_navigator.navigatorKey.currentState;
           if (navigator != null && navigator.mounted) {
             navigator.pushReplacementNamed('/auth/verify-email');
           }
         });
       } else {
-        final navigator = navigatorKey.currentState;
+        final navigator = app_navigator.navigatorKey.currentState;
         if (navigator != null && navigator.mounted) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            final nav = navigatorKey.currentState;
+            final nav = app_navigator.navigatorKey.currentState;
             if (nav != null && nav.mounted && nav.canPop()) {
               nav.pop();
             }
