@@ -239,9 +239,9 @@ class DmCallService {
     }
     _stopIncomingRingtone();
     _ringtoneCallId = callId;
-    unawaited(SystemSound.play(SystemSoundType.notification));
+    unawaited(SystemSound.play(SystemSoundType.alert));
     _ringtoneTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      unawaited(SystemSound.play(SystemSoundType.notification));
+      unawaited(SystemSound.play(SystemSoundType.alert));
     });
   }
 
