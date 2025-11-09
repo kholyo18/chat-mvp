@@ -45,3 +45,25 @@ Future<NavigatorState> waitForRootNavigator({
     'NavigatorState was not ready within ${timeout.inMilliseconds}ms',
   );
 }
+
+Future<NavigatorState> waitForAuthenticatedNavigator({
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  NavigatorState? navigator = authenticatedNavigatorKey.currentState;
+  if (navigator != null && navigator.mounted) {
+    return navigator;
+  }
+
+  final DateTime deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 16));
+    navigator = authenticatedNavigatorKey.currentState;
+    if (navigator != null && navigator.mounted) {
+      return navigator;
+    }
+  }
+
+  throw StateError(
+    'Authenticated NavigatorState was not ready within ${timeout.inMilliseconds}ms',
+  );
+}
