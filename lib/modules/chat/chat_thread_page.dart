@@ -287,19 +287,19 @@ class _MiniQualityData {
       case CallNetworkQuality.good:
         return _MiniQualityData(
           'جيد',
-          Icons.signal_cellular_3_bar,
+          Icons.network_wifi,
           Colors.lightGreen,
         );
       case CallNetworkQuality.moderate:
         return _MiniQualityData(
           'متوسط',
-          Icons.signal_cellular_2_bar,
+          Icons.network_cell,
           Colors.orange,
         );
       case CallNetworkQuality.poor:
         return _MiniQualityData(
           'ضعيف',
-          Icons.signal_cellular_1_bar,
+          Icons.network_check,
           Colors.deepOrange,
         );
       case CallNetworkQuality.bad:
