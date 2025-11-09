@@ -133,14 +133,20 @@ class _SignInPageState extends State<SignInPage> {
     try {
       final userCredential = await AuthService.signInWithGoogle();
       final user = userCredential.user;
-      if (!context.mounted) return;
       if (user != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final navigator = navigatorKey.currentState;
-          if (navigator != null && navigator.mounted && navigator.canPop()) {
+        try {
+          final navigator = await waitForRootNavigator();
+          if (navigator.mounted && navigator.canPop()) {
             navigator.popUntil((route) => route.isFirst);
           }
-        });
+        } on Object catch (navError, navStack) {
+          if (kDebugMode) {
+            print('Navigator not ready after Google Sign-In: $navError');
+          }
+          FlutterError.reportError(
+            FlutterErrorDetails(exception: navError, stack: navStack),
+          );
+        }
       }
     } catch (e, st) {
       if (kDebugMode) {
