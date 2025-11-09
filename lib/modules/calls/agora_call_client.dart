@@ -222,12 +222,12 @@ class AgoraCallClient {
     }
 
     await engine.setChannelProfile(ChannelProfileType.channelProfileCommunication);
+    // Configure speech audio profile; keep default scenario to match
+    // the agora_rtc_engine version in this project.
     await engine.setAudioProfile(
-      AudioProfileType.audioProfileMusicStandard,
-      scenario: AudioScenarioType.audioScenarioCommunication,
+      profile: AudioProfileType.audioProfileSpeechStandard,
     );
     await engine.enableAudio();
-    await engine.setDefaultMuteAllRemoteAudioStreams(false);
     debugPrint('[AgoraCallClient] Audio engine configured for 1:1 COMMUNICATION');
     if (enableVideo) {
       await engine.enableVideo();
@@ -385,7 +385,10 @@ class AgoraCallClient {
       return;
     }
     try {
-      await engine.muteRemoteAudioStream(uid, false);
+      await engine.muteRemoteAudioStream(
+        uid: uid,
+        mute: false,
+      );
       debugPrint('[AgoraCallClient] muteRemoteAudioStream(uid: $uid, mute: false)');
     } catch (error, stack) {
       _log('Failed to unmute remote audio stream for $uid: $error');
@@ -461,7 +464,7 @@ class AgoraCallClient {
 
     await engine.enableAudio();
     await engine.muteLocalAudioStream(false);
-    await engine.muteAllRemoteAudioStreams(false);
+    await engine.muteAllRemoteAudioStreams(mute: false);
     debugPrint('[AgoraCallClient] muteAllRemoteAudioStreams(false)');
     await engine.adjustPlaybackSignalVolume(100);
     debugPrint(
