@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as cf;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -679,19 +680,19 @@ class _NetworkQualityBadge extends StatelessWidget {
       case CallNetworkQuality.good:
         return _QualityIndicatorData(
           label: 'جيد',
-          icon: Icons.signal_cellular_3_bar,
+          icon: Icons.network_wifi,
           color: Colors.lightGreenAccent,
         );
       case CallNetworkQuality.moderate:
         return _QualityIndicatorData(
           label: 'متوسط',
-          icon: Icons.signal_cellular_2_bar,
+          icon: Icons.network_cell,
           color: Colors.orangeAccent,
         );
       case CallNetworkQuality.poor:
         return _QualityIndicatorData(
           label: 'ضعيف',
-          icon: Icons.signal_cellular_1_bar,
+          icon: Icons.network_check,
           color: Colors.deepOrangeAccent,
         );
       case CallNetworkQuality.bad:

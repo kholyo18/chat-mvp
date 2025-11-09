@@ -320,8 +320,8 @@ class AgoraCallClient {
         onNetworkQuality: (
           RtcConnection connection,
           int remoteUid,
-          NetworkQuality txQuality,
-          NetworkQuality rxQuality,
+          QualityType txQuality,
+          QualityType rxQuality,
         ) {
           if (remoteUid == 0 || remoteUid == (connection.localUid ?? 0)) {
             _log(
@@ -330,7 +330,7 @@ class AgoraCallClient {
             _handleNetworkQualityUpdate(txQuality, rxQuality);
           }
         },
-        onLastmileQuality: (NetworkQuality quality) {
+        onLastmileQuality: (QualityType quality) {
           _log('Lastmile quality: ${quality.name}');
           _handleNetworkQualityUpdate(quality, quality);
         },
@@ -812,8 +812,8 @@ class AgoraCallClient {
   }
 
   void _handleNetworkQualityUpdate(
-    NetworkQuality txQuality,
-    NetworkQuality rxQuality,
+    QualityType txQuality,
+    QualityType rxQuality,
   ) {
     final tx = _mapNetworkQuality(txQuality);
     final rx = _mapNetworkQuality(rxQuality);
@@ -823,22 +823,24 @@ class AgoraCallClient {
     }
   }
 
-  CallNetworkQuality _mapNetworkQuality(NetworkQuality quality) {
+  CallNetworkQuality _mapNetworkQuality(QualityType quality) {
     switch (quality) {
-      case NetworkQuality.unknown:
+      case QualityType.qualityUnknown:
         return CallNetworkQuality.unknown;
-      case NetworkQuality.excellent:
+      case QualityType.qualityExcellent:
         return CallNetworkQuality.excellent;
-      case NetworkQuality.good:
+      case QualityType.qualityGood:
         return CallNetworkQuality.good;
-      case NetworkQuality.poor:
+      case QualityType.qualityPoor:
         return CallNetworkQuality.moderate;
-      case NetworkQuality.bad:
+      case QualityType.qualityBad:
         return CallNetworkQuality.poor;
-      case NetworkQuality.vbad:
+      case QualityType.qualityVbad:
+      case QualityType.qualityDown:
         return CallNetworkQuality.bad;
-      case NetworkQuality.down:
-        return CallNetworkQuality.bad;
+      case QualityType.qualityUnsupported:
+      case QualityType.qualityDetecting:
+        return CallNetworkQuality.unknown;
     }
   }
 
