@@ -465,6 +465,7 @@ class _StorePageState extends State<StorePage> with WidgetsBindingObserver {
             ),
       floatingActionButton: _error != null && _products.isNotEmpty
           ? FloatingActionButton.extended(
+              heroTag: 'storeRetryFab',
               onPressed: _refresh,
               icon: const Icon(Icons.refresh_rounded),
               label: Text(storeTr(context, 'retry')),
