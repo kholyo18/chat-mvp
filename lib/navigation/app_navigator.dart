@@ -4,9 +4,18 @@ import 'package:flutter/widgets.dart';
 final GlobalKey<NavigatorState> navigatorKey =
     GlobalKey<NavigatorState>(debugLabel: 'rootNavigator');
 
+final GlobalKey<NavigatorState> authenticatedNavigatorKey =
+    GlobalKey<NavigatorState>(debugLabel: 'authenticatedNavigator');
+
 NavigatorState? get rootNavigator => navigatorKey.currentState;
 
 BuildContext? get rootNavigatorContext => navigatorKey.currentContext;
+
+NavigatorState? get authenticatedNavigator =>
+    authenticatedNavigatorKey.currentState;
+
+BuildContext? get authenticatedNavigatorContext =>
+    authenticatedNavigatorKey.currentContext;
 
 /// Waits for the root [NavigatorState] to become available and mounted.
 ///

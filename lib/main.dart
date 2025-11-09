@@ -440,9 +440,9 @@ class NotificationsService {
         final roomId = m.data['roomId'];
         final dmId = m.data['dmId'];
         final storyUid = m.data['storyUid'];
-        if (roomId != null) navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
-        if (dmId != null) navigatorKey.currentState?.pushNamed('/dm', arguments: dmId);
-        if (storyUid != null) navigatorKey.currentState?.pushNamed('/stories', arguments: storyUid);
+        if (roomId != null) authenticatedNavigatorKey.currentState?.pushNamed('/room', arguments: roomId);
+        if (dmId != null) authenticatedNavigatorKey.currentState?.pushNamed('/dm', arguments: dmId);
+        if (storyUid != null) authenticatedNavigatorKey.currentState?.pushNamed('/stories', arguments: storyUid);
       }, onError: (Object err, StackTrace stack) {
         debugPrint('NotificationsService.onMessageOpenedApp error: $err');
         FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
@@ -463,17 +463,17 @@ extension NotificationsDeepLinks on NotificationsService {
     switch (type) {
       case 'room':
         if (roomId != null) {
-          navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
+          authenticatedNavigatorKey.currentState?.pushNamed('/room', arguments: roomId);
         }
         break;
       case 'post':
         if (roomId != null && postId != null) {
-          navigatorKey.currentState
+          authenticatedNavigatorKey.currentState
               ?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
         }
         break;
       default:
-        navigatorKey.currentState?.pushNamed('/notifications');
+        authenticatedNavigatorKey.currentState?.pushNamed('/notifications');
     }
   }
 }
@@ -661,7 +661,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
     if (currentUser != null) {
       _dmCallService.startListening(
         uid: currentUser.uid,
-        navigatorKey: navigatorKey,
+        navigatorKey: authenticatedNavigatorKey,
       );
     } else {
       _dmCallService.stopListening();
@@ -673,7 +673,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
       } else {
         _dmCallService.startListening(
           uid: user.uid,
-          navigatorKey: navigatorKey,
+          navigatorKey: authenticatedNavigatorKey,
         );
       }
     }, onError: (error) {
@@ -779,7 +779,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
           return MediaQuery(
             data: MediaQuery.of(context).copyWith(textScaleFactor: theme.textScale),
             child: MaterialApp(
-              navigatorKey: navigatorKey,
+              navigatorKey: authenticatedNavigatorKey,
               debugShowCheckedModeBanner: false,
               title: 'Chat Ultra',
               theme: theme.highContrast
@@ -1000,7 +1000,7 @@ class LoginPage extends StatelessWidget {
           icon: const Icon(Icons.login_rounded),
           onPressed: () async {
             await appUser.autoLogin();
-            navigatorKey.currentState?.pushReplacementNamed('/home');
+            authenticatedNavigatorKey.currentState?.pushReplacementNamed('/home');
           },
           label: const Text('Continue as Guest'),
         ),
@@ -1042,13 +1042,13 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('Chat Ultra'),
         actions: [
-          IconButton(onPressed: ()=> navigatorKey.currentState?.pushNamed('/search'),
+          IconButton(onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/search'),
               icon: const Icon(Icons.search_rounded)),
-          IconButton(onPressed: ()=> navigatorKey.currentState?.pushNamed('/appearance'),
+          IconButton(onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/appearance'),
               icon: const Icon(Icons.palette_rounded)),
-          IconButton(onPressed: ()=> navigatorKey.currentState?.pushNamed('/translator'),
+          IconButton(onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/translator'),
               icon: const Icon(Icons.translate_rounded)),
-          IconButton(onPressed: ()=> navigatorKey.currentState?.pushNamed('/admin'),
+          IconButton(onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/admin'),
               icon: const Icon(Icons.admin_panel_settings_rounded)),
         ],
       ),
@@ -1108,7 +1108,7 @@ class _HomePageState extends State<HomePage> {
         // CODEX-BEGIN:ADMIN_BLOCK_HOME_FAB
         onPressed: blocked
             ? showBlockedSnack
-            : () => navigatorKey.currentState?.pushNamed('/story_create'),
+            : () => authenticatedNavigatorKey.currentState?.pushNamed('/story_create'),
         // CODEX-END:ADMIN_BLOCK_HOME_FAB
         icon: const Icon(Icons.brightness_5_rounded),
         label: const Text('Add Story'),
@@ -2507,7 +2507,7 @@ class RoomsTab extends StatelessWidget {
                             );
                             return;
                           }
-                          navigatorKey.currentState?.pushNamed('/room', arguments: r.id);
+                          authenticatedNavigatorKey.currentState?.pushNamed('/room', arguments: r.id);
                         },
                         child: const Text('دخول'),
                       ),
@@ -3280,7 +3280,7 @@ class _RoomPageState extends State<RoomPage> {
             icon: const Icon(Icons.push_pin_outlined),
           ),
           IconButton(
-            onPressed: () => navigatorKey.currentState?.pushNamed(
+            onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed(
               '/room/settings',
               arguments: roomId,
             ),
@@ -3288,7 +3288,7 @@ class _RoomPageState extends State<RoomPage> {
             tooltip: 'إعدادات الغرفة',
           ),
           IconButton(
-            onPressed: () => navigatorKey.currentState?.pushNamed(
+            onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed(
               '/room/board',
               arguments: roomId,
             ),
@@ -3312,7 +3312,7 @@ class _RoomPageState extends State<RoomPage> {
         recording: _recording,
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => navigatorKey.currentState?.pushNamed('/rooms/create'),
+        onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed('/rooms/create'),
         child: const Icon(Icons.add_rounded),
       ),
     );
@@ -4592,7 +4592,7 @@ class StoriesHubPage extends StatelessWidget {
         title: const Text('Stories'),
         actions: [
           IconButton(
-            onPressed: ()=> navigatorKey.currentState?.pushNamed('/story_create'),
+            onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/story_create'),
             icon: const Icon(Icons.add_circle_outline),
             tooltip: 'إضافة ستوري',
           )
@@ -4606,7 +4606,7 @@ class StoriesHubPage extends StatelessWidget {
           if (items.isEmpty) {
             return Center(
               child: TextButton.icon(
-                onPressed: ()=> navigatorKey.currentState?.pushNamed('/story_create'),
+                onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/story_create'),
                 icon: const Icon(Icons.add),
                 label: const Text('أضف أوّل ستوري'),
               ),
@@ -4637,7 +4637,7 @@ class StoriesHubPage extends StatelessWidget {
                       return GestureDetector(
                         onTap: () {
                           if (isMe && story == null) {
-                            navigatorKey.currentState?.pushNamed('/story_create');
+                            authenticatedNavigatorKey.currentState?.pushNamed('/story_create');
                           } else {
                             Navigator.push(context, MaterialPageRoute(
                               builder: (_) => _StoriesViewer(ownerUid: owner ?? story!.ownerUid),
@@ -4862,7 +4862,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
       _replying = false;
     });
     if (result is SafeSuccess<String>) {
-      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+      authenticatedNavigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
     } else if (result is SafeFailure<String>) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(result.message)),
@@ -5250,7 +5250,7 @@ class _StoriesViewerState extends State<_StoriesViewer> {
       replying = false;
     });
     if (result is SafeSuccess<String>) {
-      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+      authenticatedNavigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
     } else if (result is SafeFailure<String>) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(result.message)),
@@ -5783,7 +5783,7 @@ class _PeopleDiscoverPageState extends State<PeopleDiscoverPage> {
     );
     if (!mounted) return;
     if (result is SafeSuccess<String>) {
-      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+      authenticatedNavigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
     } else if (result is SafeFailure<String>) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(result.message)),
@@ -6013,7 +6013,7 @@ class PublicProfilePage extends StatelessWidget {
       otherUid: uid2,
     );
     if (result is SafeSuccess<String>) {
-      navigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
+      authenticatedNavigatorKey.currentState?.pushNamed('/dm', arguments: result.value);
     } else if (result is SafeFailure<String>) {
       ScaffoldMessenger.of(ctx).showSnackBar(
         SnackBar(content: Text(result.message)),
@@ -6233,7 +6233,7 @@ class _InboxPageState extends State<InboxPage> {
     if (_threads.isEmpty) {
       return _buildPlaceholderList(
         child: TextButton.icon(
-          onPressed: () => navigatorKey.currentState?.pushNamed('/people'),
+          onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed('/people'),
           icon: const Icon(Icons.person_add_alt_1_rounded),
           label: const Text('ابدأ محادثة'),
         ),
@@ -6300,7 +6300,7 @@ class _InboxPageState extends State<InboxPage> {
               hasUnread: hasUnread,
               isLastMessageFromMe: lastSenderId == _currentUid,
               isProfileLoading: snapshot.connectionState == ConnectionState.waiting && profile == null,
-              onTap: () => navigatorKey.currentState?.pushNamed('/dm', arguments: thread.id),
+              onTap: () => authenticatedNavigatorKey.currentState?.pushNamed('/dm', arguments: thread.id),
             );
           },
         );
@@ -6409,7 +6409,7 @@ class _InboxPageState extends State<InboxPage> {
         // CODEX-BEGIN:ADMIN_BLOCK_INBOX_FAB
         onPressed: blocked
             ? showBlockedSnack
-            : () => navigatorKey.currentState?.pushNamed('/people'),
+            : () => authenticatedNavigatorKey.currentState?.pushNamed('/people'),
         // CODEX-END:ADMIN_BLOCK_INBOX_FAB
         backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Theme.of(context).colorScheme.onPrimary,
@@ -6601,7 +6601,7 @@ class ProfilePage extends StatelessWidget {
         actions: [
           IconButton(
             tooltip: 'الإعدادات',
-            onPressed: ()=> navigatorKey.currentState?.pushNamed('/privacy'),
+            onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/privacy'),
             icon: const Icon(Icons.lock_person_rounded),
           ),
           IconButton(
@@ -6733,7 +6733,7 @@ class ProfilePage extends StatelessWidget {
                           tier: vipTier,
                           label: _profileText('vip'),
                           noneLabel: _profileText('vip_none'),
-                          onTap: () => navigatorKey.currentState?.pushNamed('/vip'),
+                          onTap: () => authenticatedNavigatorKey.currentState?.pushNamed('/vip'),
                         ),
                         StreamBuilder<int>(
                           stream: walletService.coinsStream(uid),
@@ -6744,7 +6744,7 @@ class ProfilePage extends StatelessWidget {
                               coins: coins,
                               semanticsLabel:
                                   '${_profileText('coins')}: ${numberFormatter.format(coins)}',
-                              onTap: () => navigatorKey.currentState?.pushNamed('/wallet'),
+                              onTap: () => authenticatedNavigatorKey.currentState?.pushNamed('/wallet'),
                             );
                           },
                         ),
@@ -6819,19 +6819,19 @@ class ProfilePage extends StatelessWidget {
                 leading: const Icon(Icons.mail_rounded),
                 title: const Text('Inbox / الرسائل الخاصة'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: ()=> navigatorKey.currentState?.pushNamed('/inbox'),
+                onTap: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/inbox'),
               ),
               ListTile(
                 leading: const Icon(Icons.people_alt_rounded),
                 title: const Text('اكتشف أشخاص'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: ()=> navigatorKey.currentState?.pushNamed('/people'),
+                onTap: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/people'),
               ),
               ListTile(
                 leading: const Icon(Icons.verified_user_rounded),
                 title: const Text('Privacy & Safety'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: ()=> navigatorKey.currentState?.pushNamed('/privacy'),
+                onTap: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/privacy'),
               ),
               ListTile(
                 leading: const Icon(Icons.wallet_rounded),
@@ -6875,7 +6875,7 @@ class ProfilePage extends StatelessWidget {
                   navigator.pushNamedAndRemoveUntil('/auth', (_) => false);
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     final messengerContext =
-                        navigatorKey.currentContext ?? context;
+                        authenticatedNavigatorKey.currentContext ?? context;
                     ScaffoldMessenger.of(messengerContext).showSnackBar(
                       const SnackBar(
                         content: Text('تم تسجيل الخروج بنجاح ✅'),
@@ -7564,7 +7564,7 @@ class _CreateRoomPageState extends State<CreateRoomPage> {
       final id = await createRoom(name: _name.text, about: _about.text, isPublic: _public);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم إنشاء الغرفة ✅')));
-        navigatorKey.currentState?.pushReplacementNamed('/room', arguments: id);
+        authenticatedNavigatorKey.currentState?.pushReplacementNamed('/room', arguments: id);
       }
     } finally { if (mounted) setState(()=> _loading = false); }
   }
@@ -8328,7 +8328,7 @@ class RoomBoardPage extends StatelessWidget {
             tooltip: 'منشور جديد',
           ),
           IconButton(
-            onPressed: ()=> navigatorKey.currentState?.pushNamed('/room/settings', arguments: roomId),
+            onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/room/settings', arguments: roomId),
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'إعدادات الغرفة',
           ),
@@ -8406,7 +8406,7 @@ class _PostCard extends StatelessWidget {
 
     return Card(
       child: InkWell(
-        onTap: ()=> navigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId}),
+        onTap: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId}),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -8582,7 +8582,7 @@ class PostDetailPage extends StatelessWidget {
         title: const Text('تفاصيل المنشور'),
         actions: [
           IconButton(
-            onPressed: () => navigatorKey.currentState?.pushNamed('/search'),
+            onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed('/search'),
             icon: const Icon(Icons.search_rounded),
             tooltip: 'بحث',
           ),
@@ -9074,7 +9074,7 @@ class _RoomsResults extends StatelessWidget {
                 subtitle: Text('${d['about'] ?? ''}\nأعضاء: ${compactNumber((d['meta']?['members'] ?? 0) as int)}'),
                 isThreeLine: true,
                 trailing: FilledButton(
-                  onPressed: ()=> navigatorKey.currentState?.pushNamed('/room', arguments: id),
+                  onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/room', arguments: id),
                   child: const Text('دخول'),
                 ),
               ),
@@ -9196,7 +9196,7 @@ class _MessagesResults extends StatelessWidget {
                     title: Text(msg['text'] ?? ''),
                     subtitle: Text('Room: $roomId • by: ${shortUid(msg['from'] ?? '')}'),
                     trailing: Text(shortTime(msg['createdAt'] as cf.Timestamp?), style: const TextStyle(fontSize: 11, color: kGray)),
-                    onTap: ()=> navigatorKey.currentState?.pushNamed('/room', arguments: roomId),
+                    onTap: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/room', arguments: roomId),
                   ),
                 );
               },
@@ -9330,7 +9330,7 @@ class NotificationCenterPage extends StatelessWidget {
         title: const Text('مركز الإشعارات'),
         actions: [
           IconButton(
-            onPressed: ()=> navigatorKey.currentState?.pushNamed('/notify/prefs'),
+            onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/notify/prefs'),
             icon: const Icon(Icons.settings_rounded),
             tooltip: 'تفضيلات الإشعارات',
           ),
@@ -9387,9 +9387,9 @@ class NotificationCenterPage extends StatelessWidget {
                     onTap: () {
                       // Deep open
                       if (postId != null && roomId != null) {
-                        navigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
+                        authenticatedNavigatorKey.currentState?.pushNamed('/post', arguments: {'roomId': roomId, 'postId': postId});
                       } else if (roomId != null) {
-                        navigatorKey.currentState?.pushNamed('/room', arguments: roomId);
+                        authenticatedNavigatorKey.currentState?.pushNamed('/room', arguments: roomId);
                       }
                     },
                   ),
@@ -9485,7 +9485,7 @@ class _HomeInboxIcon extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         IconButton(
-          onPressed: ()=> navigatorKey.currentState?.pushNamed('/inbox'),
+          onPressed: ()=> authenticatedNavigatorKey.currentState?.pushNamed('/inbox'),
           icon: const Icon(Icons.notifications_none_rounded),
           tooltip: 'الإشعارات',
         ),
@@ -9506,8 +9506,8 @@ class _HomeInboxIcon extends StatelessWidget {
 // أضف الأيقونة إلى AppBar في HomePage:
 /// في HomePage.build داخل actions:
 /// actions: [
-///   IconButton(onPressed: () => navigatorKey.currentState?.pushNamed('/appearance'), icon: const Icon(Icons.palette_rounded)),
-///   IconButton(onPressed: () => navigatorKey.currentState?.pushNamed('/translator'), icon: const Icon(Icons.translate_rounded)),
+///   IconButton(onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed('/appearance'), icon: const Icon(Icons.palette_rounded)),
+///   IconButton(onPressed: () => authenticatedNavigatorKey.currentState?.pushNamed('/translator'), icon: const Icon(Icons.translate_rounded)),
 ///   const _HomeInboxIcon(),
 /// ],
 
@@ -9520,8 +9520,8 @@ class _HomeInboxIcon extends StatelessWidget {
 ///   await presence.start(u.uid);
 ///   await fcm.init(u.uid);
 ///   // bind badge
-///   (navigatorKey.currentContext as Element).read<NotificationBadge>().bind(u.uid);
-///   navigatorKey.currentState?.pushReplacementNamed('/home');
+///   (authenticatedNavigatorKey.currentContext as Element).read<NotificationBadge>().bind(u.uid);
+///   authenticatedNavigatorKey.currentState?.pushReplacementNamed('/home');
 /// }
 
 // ---------------------- Trigger inbox events (examples) ----------------------
