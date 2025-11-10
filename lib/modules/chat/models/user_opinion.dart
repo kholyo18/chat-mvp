@@ -9,6 +9,7 @@ class UserOpinion {
     required this.admirationPercent,
     required this.createdAt,
     required this.updatedAt,
+    this.notifyOtherUser = true,
   });
 
   final String relationshipType;
@@ -18,6 +19,7 @@ class UserOpinion {
   final int admirationPercent;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final bool notifyOtherUser;
 
   factory UserOpinion.fromMap(Map<String, dynamic> map) {
     return UserOpinion(
@@ -32,6 +34,7 @@ class UserOpinion {
           _parseDate(map['updated_at']) ??
           _parseDate(map['lastUpdated']) ??
           DateTime.now().toUtc(),
+      notifyOtherUser: (map['notifyOtherUser'] as bool?) ?? true,
     );
   }
 
@@ -45,6 +48,7 @@ class UserOpinion {
       'createdAt': Timestamp.fromDate(createdAt.toUtc()),
       'updatedAt': Timestamp.fromDate(updatedAt.toUtc()),
       'lastUpdated': Timestamp.fromDate(updatedAt.toUtc()),
+      'notifyOtherUser': notifyOtherUser,
     };
   }
 
@@ -56,6 +60,7 @@ class UserOpinion {
     int? admirationPercent,
     DateTime? createdAt,
     DateTime? updatedAt,
+    bool? notifyOtherUser,
   }) {
     return UserOpinion(
       relationshipType: relationshipType ?? this.relationshipType,
@@ -65,6 +70,7 @@ class UserOpinion {
       admirationPercent: admirationPercent ?? this.admirationPercent,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      notifyOtherUser: notifyOtherUser ?? this.notifyOtherUser,
     );
   }
 

@@ -48,6 +48,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   late Set<String> _personalityTraits;
   double _likePercentage = 100;
   DateTime? _createdAt;
+  bool _notifyOtherUser = true;
 
   late final TabController _tabController;
   late final AnimationController _introController;
@@ -61,24 +62,51 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   Timer? _saveButtonTimer;
 
   static const Map<_ConnectionMood, List<Color>> _headerGradientPalettes = {
-    _ConnectionMood.neutral: [Color(0xFFE9EDF3), Color(0xFFF5F6FA)],
-    _ConnectionMood.friendly: [Color(0xFFBCE6FF), Color(0xFFD4F8F6)],
-    _ConnectionMood.close: [Color(0xFFCFF7E5), Color(0xFFB7EED4)],
-    _ConnectionMood.romantic: [Color(0xFFFFD9E8), Color(0xFFFFC3D8)],
+    _ConnectionMood.neutral: [Color(0xFFE4E7EB), Color(0xFFF1F3F6)],
+    _ConnectionMood.friendly: [Color(0xFFE1F3FF), Color(0xFFCAE9F8)],
+    _ConnectionMood.close: [Color(0xFFE3FFF4), Color(0xFFCFF6E5)],
+    _ConnectionMood.romantic: [Color(0xFFFFE7F0), Color(0xFFFBD4E4)],
   };
 
   static const Map<_ConnectionMood, List<Color>> _backgroundGradientPalettes = {
-    _ConnectionMood.neutral: [Color(0xFFF5F6F8), Color(0xFFECEFF5)],
-    _ConnectionMood.friendly: [Color(0xFFF0F8FF), Color(0xFFE6FFFA)],
-    _ConnectionMood.close: [Color(0xFFF1FFF6), Color(0xFFE7FFF0)],
-    _ConnectionMood.romantic: [Color(0xFFFFF1F6), Color(0xFFFFE5F1)],
+    _ConnectionMood.neutral: [Color(0xFFF6F7F9), Color(0xFFEFF1F4)],
+    _ConnectionMood.friendly: [Color(0xFFF4FBFF), Color(0xFFE8F6FF)],
+    _ConnectionMood.close: [Color(0xFFF2FFF8), Color(0xFFE9FFF2)],
+    _ConnectionMood.romantic: [Color(0xFFFFF4F8), Color(0xFFFFEAF2)],
   };
 
   static const Map<_ConnectionMood, Color> _accentColors = {
     _ConnectionMood.neutral: Color(0xFF7A8899),
-    _ConnectionMood.friendly: Color(0xFF1F8AC0),
+    _ConnectionMood.friendly: Color(0xFF2F7FB6),
     _ConnectionMood.close: Color(0xFF2AA977),
     _ConnectionMood.romantic: Color(0xFFE85C8B),
+  };
+
+  static const Map<String, List<Color>> _relationshipHeaderPalettes = {
+    'none': [Color(0xFFF5F6F7), Color(0xFFEDEFF1)],
+    'friend': [Color(0xFFE4F3FF), Color(0xFFD7EEFF)],
+    'close_friend': [Color(0xFFE6FFF4), Color(0xFFD3F8E6)],
+    'lover': [Color(0xFFFFE8F0), Color(0xFFFDD5E7)],
+    'spouse': [Color(0xFFF2E9FF), Color(0xFFE4D7FF)],
+    'acquaintance': [Color(0xFFF6F4F1), Color(0xFFECE9E5)],
+  };
+
+  static const Map<String, List<Color>> _relationshipBackgroundPalettes = {
+    'none': [Color(0xFFF8F9FB), Color(0xFFF0F2F4)],
+    'friend': [Color(0xFFF4FBFF), Color(0xFFE8F6FF)],
+    'close_friend': [Color(0xFFF2FFF8), Color(0xFFE9FFF2)],
+    'lover': [Color(0xFFFFF4F8), Color(0xFFFFEAF2)],
+    'spouse': [Color(0xFFF7F2FF), Color(0xFFEFE5FF)],
+    'acquaintance': [Color(0xFFF9F7F4), Color(0xFFF1EEE9)],
+  };
+
+  static const Map<String, Color> _relationshipAccentOverrides = {
+    'none': Color(0xFF7A8899),
+    'friend': Color(0xFF2F7FB6),
+    'close_friend': Color(0xFF2AA977),
+    'lover': Color(0xFFE85C8B),
+    'spouse': Color(0xFF7A62C9),
+    'acquaintance': Color(0xFF8D8E95),
   };
 
   static const Map<String, String> _relationshipLabels = <String, String>{
@@ -164,6 +192,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     _personalityTraits = <String>{'none'};
     _likePercentage = 0;
     _createdAt = null;
+    _notifyOtherUser = true;
   }
 
   _ConnectionMood get _currentMood {
@@ -201,9 +230,13 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     return _ConnectionMood.romantic;
   }
 
-  LinearGradient _headerGradientForMood(_ConnectionMood mood) {
-    final palette =
-        _headerGradientPalettes[mood] ?? _headerGradientPalettes[_ConnectionMood.neutral]!;
+  LinearGradient _headerGradientForMood(
+    _ConnectionMood mood, {
+    String? relationshipType,
+  }) {
+    final palette = _relationshipHeaderPalettes[relationshipType] ??
+        _headerGradientPalettes[mood] ??
+        _headerGradientPalettes[_ConnectionMood.neutral]!;
     return LinearGradient(
       colors: palette,
       begin: AlignmentDirectional.topStart,
@@ -211,8 +244,12 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     );
   }
 
-  LinearGradient _backgroundGradientForMood(_ConnectionMood mood) {
-    final palette = _backgroundGradientPalettes[mood] ??
+  LinearGradient _backgroundGradientForMood(
+    _ConnectionMood mood, {
+    String? relationshipType,
+  }) {
+    final palette = _relationshipBackgroundPalettes[relationshipType] ??
+        _backgroundGradientPalettes[mood] ??
         _backgroundGradientPalettes[_ConnectionMood.neutral]!;
     return LinearGradient(
       begin: Alignment.topCenter,
@@ -231,8 +268,14 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     );
   }
 
-  Color _accentColorForMood(_ConnectionMood mood, ThemeData theme) {
-    return _accentColors[mood] ?? theme.colorScheme.primary;
+  Color _accentColorForMood(
+    _ConnectionMood mood,
+    ThemeData theme, {
+    String? relationshipType,
+  }) {
+    return _relationshipAccentOverrides[relationshipType] ??
+        _accentColors[mood] ??
+        theme.colorScheme.primary;
   }
 
   Future<void> _loadOpinions() async {
@@ -309,6 +352,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       }
       _likePercentage = opinion.admirationPercent.toDouble();
       _createdAt = opinion.createdAt;
+      _notifyOtherUser = opinion.notifyOtherUser;
       return;
     }
     _setDefaults();
@@ -324,9 +368,22 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       english: 'Your view about ${widget.displayName}',
     );
     final mood = _currentMood;
-    final backgroundGradient = _backgroundGradientForMood(mood);
-    final headerGradient = _headerGradientForMood(mood);
-    final accentColor = _accentColorForMood(mood, theme);
+    final activeRelationshipType = _tabController.index == 0
+        ? _relationshipType
+        : (_peerOpinion?.relationshipType ?? _relationshipType);
+    final backgroundGradient = _backgroundGradientForMood(
+      mood,
+      relationshipType: activeRelationshipType,
+    );
+    final headerGradient = _headerGradientForMood(
+      mood,
+      relationshipType: activeRelationshipType,
+    );
+    final accentColor = _accentColorForMood(
+      mood,
+      theme,
+      relationshipType: activeRelationshipType,
+    );
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
@@ -776,22 +833,15 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   }
 
   Widget _buildHowMuchDoYouLikeStep(BuildContext context) {
-    final Color sliderColor;
-    final String emoji;
-
-    if (_likePercentage >= 80) {
-      sliderColor = Colors.teal; // strong like, but neutral color
-      emoji = "❤️🔥";
-    } else if (_likePercentage >= 50) {
-      sliderColor = Colors.blue; // nice like
-      emoji = "😍";
-    } else if (_likePercentage > 0) {
-      sliderColor = Colors.grey; // normal
-      emoji = "🙂";
-    } else {
-      sliderColor = Colors.grey.shade400; // 0%
-      emoji = "😐";
-    }
+    final theme = Theme.of(context);
+    final descriptor = _descriptorForPercent(_likePercentage.round());
+    final sliderColor = _sliderActiveColorForValue(_likePercentage);
+    final descriptionText = _localizedText(
+      context,
+      arabic: descriptor.descriptionAr,
+      english: descriptor.descriptionEn,
+    );
+    final isHighAdmiration = _likePercentage >= 80;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -804,35 +854,73 @@ class _UserOpinionPageState extends State<UserOpinionPage>
           ),
         ),
         const SizedBox(height: 32),
-
-        // Percentage + emoji
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              "${_likePercentage.round()}%",
-              style: const TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "${_likePercentage.round()}%",
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 240),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: Text(
+                    descriptionText,
+                    key: ValueKey<String>(descriptor.descriptionAr),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            Text(
-              emoji,
-              style: const TextStyle(fontSize: 28),
+            AnimatedScale(
+              scale: isHighAdmiration ? 1.08 : 1.0,
+              duration: Duration(milliseconds: isHighAdmiration ? 360 : 220),
+              curve: isHighAdmiration ? Curves.elasticOut : Curves.easeOutCubic,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                switchInCurve:
+                    isHighAdmiration ? Curves.elasticOut : Curves.easeOutBack,
+                transitionBuilder: (child, animation) {
+                  final curved = CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutBack,
+                  );
+                  return ScaleTransition(
+                    scale: Tween<double>(begin: 0.85, end: 1.0).animate(curved),
+                    child: FadeTransition(opacity: animation, child: child),
+                  );
+                },
+                child: Text(
+                  descriptor.emoji,
+                  key: ValueKey<int>(_likePercentage.round()),
+                  style: const TextStyle(fontSize: 32),
+                ),
+              ),
             ),
           ],
         ),
         const SizedBox(height: 24),
-
-        // Simple neutral Slider (no custom track shapes, no paint overrides)
         SliderTheme(
           data: SliderTheme.of(context).copyWith(
             trackHeight: 6,
             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 0),
             activeTrackColor: sliderColor,
-            inactiveTrackColor: sliderColor.withOpacity(0.2),
+            inactiveTrackColor: Colors.grey.shade300,
             thumbColor: sliderColor,
+            activeTickMarkColor: sliderColor.withOpacity(0.8),
+            inactiveTickMarkColor: Colors.transparent,
           ),
           child: Slider(
             min: 0,
@@ -846,8 +934,76 @@ class _UserOpinionPageState extends State<UserOpinionPage>
             },
           ),
         ),
+        const SizedBox(height: 16),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _notifyOtherUser,
+          activeColor: sliderColor,
+          title: Text(
+            _localizedText(
+              context,
+              arabic: 'إرسال إشعار لهذا الشخص عندما تحفظ رأيك عنه',
+              english: 'Send a notification to this person when you save',
+            ),
+          ),
+          subtitle: Text(
+            _localizedText(
+              context,
+              arabic: 'يمكنك إلغاء التفعيل إذا أردت إبقاء رأيك سريًا الآن.',
+              english: 'Turn it off if you prefer to keep your view private for now.',
+            ),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+            ),
+          ),
+          onChanged: (value) {
+            setState(() {
+              _notifyOtherUser = value;
+            });
+          },
+        ),
       ],
     );
+  }
+
+  _LikeScaleDescriptor _descriptorForPercent(int percent) {
+    if (percent < 20) {
+      return const _LikeScaleDescriptor(
+        emoji: '😶',
+        descriptionAr: 'مجرد معرفة بسيطة',
+        descriptionEn: 'Just a simple acquaintance',
+      );
+    }
+    if (percent < 50) {
+      return const _LikeScaleDescriptor(
+        emoji: '🙂',
+        descriptionAr: 'شخص عادي',
+        descriptionEn: 'Someone ordinary to you',
+      );
+    }
+    if (percent < 80) {
+      return const _LikeScaleDescriptor(
+        emoji: '😍',
+        descriptionAr: 'شخص مميّز بالنسبة لك',
+        descriptionEn: 'Someone special to you',
+      );
+    }
+    return const _LikeScaleDescriptor(
+      emoji: '❤️‍🔥',
+      descriptionAr: 'قريب جدًا من قلبك',
+      descriptionEn: 'Extremely close to your heart',
+    );
+  }
+
+  Color _sliderActiveColorForValue(double value) {
+    const start = Color(0xFF4AAFC7);
+    const mid = Color(0xFF2FAF9A);
+    const end = Color(0xFF1E9D76);
+    final normalized = (value / 100).clamp(0.0, 1.0);
+    if (normalized <= 0.5) {
+      return Color.lerp(start, mid, normalized * 2) ?? start;
+    }
+    return Color.lerp(mid, end, (normalized - 0.5) * 2) ?? end;
   }
 
   Widget _buildStepIndicator() {
@@ -1029,6 +1185,10 @@ class _UserOpinionPageState extends State<UserOpinionPage>
         final admirationColor = _accentColorForMood(admirationMood, theme);
         final admirationGradient = _sliderGradientForMood(admirationMood);
         final updated = _formatDate(peer.updatedAt);
+        final relationshipHint =
+            _relationshipMatchHint(_relationshipType, peer.relationshipType);
+        final admirationHint =
+            _admirationMatchHint(_likePercentage.round(), peer.admirationPercent);
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           children: [
@@ -1045,6 +1205,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
                 arabic: 'أنت قلت: $myRelationshipLabel',
                 english: 'You said: $myRelationshipLabel',
               ),
+              matchingHint: relationshipHint,
             ),
             _ReadOnlyCard(
               isRtl: isRtl,
@@ -1129,6 +1290,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
                 arabic: 'أنت قلت: ${_likePercentage.round()}%',
                 english: 'You said: ${_likePercentage.round()}%',
               ),
+              matchingHint: admirationHint,
             ),
             const SizedBox(height: 16),
             Text(
@@ -1250,6 +1412,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       admirationPercent: _likePercentage.round(),
       createdAt: createdAt,
       updatedAt: now,
+      notifyOtherUser: _notifyOtherUser,
     );
     try {
       await _service.saveOpinion(
@@ -1294,7 +1457,8 @@ class _UserOpinionPageState extends State<UserOpinionPage>
           });
         }
       });
-      await Future.delayed(const Duration(milliseconds: 480));
+      final savedOpinion = opinion.copyWith(updatedAt: now);
+      await _showSummarySheet(savedOpinion);
       if (mounted) {
         Navigator.of(context).pop(true);
       }
@@ -1323,18 +1487,322 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     }
   }
 
-  String _emojiForPercent(int value) {
-    if (value <= 25) {
-      return '😐';
+  Future<void> _showSummarySheet(UserOpinion opinion) async {
+    if (!mounted) {
+      return;
     }
-    if (value <= 50) {
-      return '🙂';
-    }
-    if (value <= 75) {
-      return '😍';
-    }
-    return '❤️‍🔥';
+    final relationshipLabel =
+        _relationshipLabels[opinion.relationshipType] ?? _relationshipLabels['none']!;
+    final perceptionLabel =
+        _perceptionLabels[opinion.perception] ?? _perceptionLabels['none']!;
+    final likedValues = _mapValuesToLabels(opinion.likedThings, _likedThingsLabels);
+    final traitValues =
+        _mapValuesToLabels(opinion.personalityTraits, _personalityTraitsLabels);
+    final likedJoined = _joinValuesForSummary(likedValues);
+    final traitsJoined = _joinValuesForSummary(traitValues);
+    final admirationDescriptor = _descriptorForPercent(opinion.admirationPercent);
+    final admirationText = '${opinion.admirationPercent}%';
+    final title = _localizedText(
+      context,
+      arabic: 'وجهة نظرك عن ${widget.displayName}',
+      english: 'Your view about ${widget.displayName}',
+    );
+    final closeLabel = _localizedText(context, arabic: 'حسنًا', english: 'OK');
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final sheetTheme = Theme.of(sheetContext);
+        final isRtl = Directionality.of(sheetContext) == TextDirection.rtl;
+        final bottomPadding = MediaQuery.of(sheetContext).viewInsets.bottom + 24;
+        return FractionallySizedBox(
+          heightFactor: 0.9,
+          alignment: Alignment.bottomCenter,
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            child: Container(
+              decoration: BoxDecoration(
+                color: sheetTheme.colorScheme.surface,
+                boxShadow: [
+                  BoxShadow(
+                    color: sheetTheme.colorScheme.primary.withOpacity(0.08),
+                    blurRadius: 26,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(24, 16, 24, bottomPadding),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: sheetTheme.colorScheme.onSurface.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: Column(
+                            crossAxisAlignment:
+                                isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                style: sheetTheme.textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _localizedText(
+                                  context,
+                                  arabic: 'هذا ملخص ما اخترته عن ${widget.displayName}.',
+                                  english:
+                                      'Here’s a quick recap of what you shared about ${widget.displayName}.',
+                                ),
+                                style: sheetTheme.textTheme.bodyMedium?.copyWith(
+                                  color: sheetTheme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+                                ),
+                                textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                              ),
+                              const SizedBox(height: 18),
+                              _buildSummarySection(
+                                theme: sheetTheme,
+                                isRtl: isRtl,
+                                title: _localizedText(
+                                  context,
+                                  arabic: 'ماذا يكون هذا الشخص بالنسبة لك؟',
+                                  english: 'What is this person to you?',
+                                ),
+                                mainText: relationshipLabel,
+                                helperText: _localizedText(
+                                  context,
+                                  arabic: 'اخترت: $relationshipLabel',
+                                  english: 'You chose: $relationshipLabel',
+                                ),
+                              ),
+                              _buildSummarySection(
+                                theme: sheetTheme,
+                                isRtl: isRtl,
+                                title: _localizedText(
+                                  context,
+                                  arabic: 'نظرتك العامة لهذا الشخص',
+                                  english: 'Your overall view of this person',
+                                ),
+                                mainText: perceptionLabel,
+                                helperText: _localizedText(
+                                  context,
+                                  arabic: 'اخترت: $perceptionLabel',
+                                  english: 'You chose: $perceptionLabel',
+                                ),
+                              ),
+                              _buildSummarySection(
+                                theme: sheetTheme,
+                                isRtl: isRtl,
+                                title: _localizedText(
+                                  context,
+                                  arabic: 'ما الذي يعجبك في هذا الشخص؟',
+                                  english: 'What do you like about this person?',
+                                ),
+                                mainText: likedJoined,
+                              ),
+                              _buildSummarySection(
+                                theme: sheetTheme,
+                                isRtl: isRtl,
+                                title: _localizedText(
+                                  context,
+                                  arabic: 'صفات تحبها في هذا الشخص',
+                                  english: 'Traits you like in this person',
+                                ),
+                                mainText: traitsJoined,
+                              ),
+                              _buildSummarySection(
+                                theme: sheetTheme,
+                                isRtl: isRtl,
+                                title: _localizedText(
+                                  context,
+                                  arabic: 'كم تحب هذا الشخص؟',
+                                  english: 'How much do you like this person?',
+                                ),
+                                valueWidget: Row(
+                                  mainAxisAlignment: isRtl
+                                      ? MainAxisAlignment.end
+                                      : MainAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      admirationText,
+                                      style: sheetTheme.textTheme.titleLarge?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                      admirationDescriptor.emoji,
+                                      style: const TextStyle(fontSize: 32),
+                                    ),
+                                  ],
+                                ),
+                                helperText: _localizedText(
+                                  context,
+                                  arabic: admirationDescriptor.descriptionAr,
+                                  english: admirationDescriptor.descriptionEn,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton(
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                        child: Text(closeLabel),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
+
+  Widget _buildSummarySection({
+    required ThemeData theme,
+    required bool isRtl,
+    required String title,
+    String? mainText,
+    Widget? valueWidget,
+    String? helperText,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: isRtl ? TextAlign.right : TextAlign.left,
+          ),
+          const SizedBox(height: 8),
+          if (valueWidget != null)
+            valueWidget
+          else if (mainText != null)
+            Text(
+              mainText,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: isRtl ? TextAlign.right : TextAlign.left,
+            ),
+          if (helperText != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              helperText,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
+              ),
+              textAlign: isRtl ? TextAlign.right : TextAlign.left,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _joinValuesForSummary(List<String> values) {
+    if (values.isEmpty) {
+      return _localizedText(context, arabic: 'لا شيء', english: 'None');
+    }
+    final isArabic =
+        Localizations.maybeLocaleOf(context)?.languageCode == 'ar' ||
+            Directionality.of(context) == TextDirection.rtl;
+    final separator = isArabic ? '، ' : ', ';
+    return values.join(separator);
+  }
+
+  String? _relationshipMatchHint(String mine, String theirs) {
+    if (mine.isEmpty || theirs.isEmpty) {
+      return null;
+    }
+    final diff = (_relationshipRank(mine) - _relationshipRank(theirs)).abs();
+    if (diff == 0) {
+      return _localizedText(
+        context,
+        arabic: 'أنتم ترون بعضكما بنفس الطريقة تقريبًا 👯‍♂️',
+        english: 'You both see each other in almost the same way 👯‍♂️',
+      );
+    }
+    if (diff == 1) {
+      return _localizedText(
+        context,
+        arabic: 'نظرتكما قريبة من بعض 😊',
+        english: 'Your views are very close 😊',
+      );
+    }
+    return _localizedText(
+      context,
+      arabic: 'تبدو نظرتكما مختلفة قليلاً 😅',
+      english: 'Your perspectives seem a little different 😅',
+    );
+  }
+
+  int _relationshipRank(String value) {
+    switch (value) {
+      case 'spouse':
+        return 5;
+      case 'lover':
+        return 4;
+      case 'close_friend':
+        return 3;
+      case 'friend':
+        return 2;
+      case 'acquaintance':
+        return 1;
+      case 'none':
+      default:
+        return 0;
+    }
+  }
+
+  String? _admirationMatchHint(int mine, int theirs) {
+    final diff = (mine - theirs).abs();
+    if (diff <= 10) {
+      return _localizedText(
+        context,
+        arabic: 'درجة الإعجاب بينكما متقاربة جدًا ✨',
+        english: 'Your admiration levels are almost identical ✨',
+      );
+    }
+    if (diff <= 30) {
+      return _localizedText(
+        context,
+        arabic: 'هناك بعض الاختلاف في درجة الإعجاب 🙂',
+        english: 'There’s a bit of difference in admiration 🙂',
+      );
+    }
+    return _localizedText(
+      context,
+      arabic: 'نظرة كل واحد منكما مختلفة تمامًا 😄',
+      english: 'Each of you sees things quite differently 😄',
+    );
+  }
+
+  String _emojiForPercent(int value) => _descriptorForPercent(value).emoji;
 
   List<String> _orderedLikedThings() {
     if (_likedThings.contains('none') && _likedThings.length == 1) {
@@ -1631,6 +2099,18 @@ class _GradientProgressBar extends StatelessWidget {
   }
 }
 
+class _LikeScaleDescriptor {
+  const _LikeScaleDescriptor({
+    required this.emoji,
+    required this.descriptionAr,
+    required this.descriptionEn,
+  });
+
+  final String emoji;
+  final String descriptionAr;
+  final String descriptionEn;
+}
+
 class _ErrorCard extends StatelessWidget {
   const _ErrorCard({
     required this.message,
@@ -1682,6 +2162,7 @@ class _ReadOnlyCard extends StatelessWidget {
     this.value,
     this.valueWidget,
     this.comparison,
+    this.matchingHint,
     required this.isRtl,
   });
 
@@ -1689,6 +2170,7 @@ class _ReadOnlyCard extends StatelessWidget {
   final String? value;
   final Widget? valueWidget;
   final String? comparison;
+  final String? matchingHint;
   final bool isRtl;
 
   @override
@@ -1753,6 +2235,21 @@ class _ReadOnlyCard extends StatelessWidget {
                     key: ValueKey<String>(comparison!),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                    ),
+                    textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                  ),
+                ),
+              ],
+              if (matchingHint != null) ...[
+                const SizedBox(height: 10),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 240),
+                  child: Text(
+                    matchingHint!,
+                    key: ValueKey<String>('hint-$title-$matchingHint'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary.withOpacity(0.8),
+                      fontWeight: FontWeight.w600,
                     ),
                     textAlign: isRtl ? TextAlign.right : TextAlign.left,
                   ),
