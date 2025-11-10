@@ -43,6 +43,7 @@ import 'package:chat_mvp/modules/chat/chat_thread_list_item.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_page.dart';
 
 import 'modules/calls/dm_call_service.dart';
+import 'modules/calls/call_notification_service.dart';
 import 'services/coins_service.dart';
 import 'services/payments_service.dart';
 import 'services/invites_service.dart';
@@ -656,6 +657,12 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
   @override
   void initState() {
     super.initState();
+    unawaited(
+      CallNotificationService.instance.init(
+        onSelectCallNotification:
+            (callId) => _dmCallService.handleCallNotificationTap(callId),
+      ),
+    );
     WidgetsBinding.instance.addObserver(this);
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
@@ -693,6 +700,7 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _dmCallService.handleAppLifecycleChange(state);
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     if (state == AppLifecycleState.resumed) {
