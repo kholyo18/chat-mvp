@@ -398,6 +398,12 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
             final controller = context.read<ChatThreadController>();
             final displayName =
                 controller.otherUserProfile?.displayName ?? 'المستخدم';
+            final locale = Localizations.maybeLocaleOf(context)?.languageCode;
+            final isArabic =
+                locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
+            final opinionLabel = isArabic
+                ? 'نظرتك عن $displayName'
+                : 'Your view about $displayName';
             return [
               const PopupMenuItem(
                 value: 'profile',
@@ -405,7 +411,7 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
               ),
               PopupMenuItem(
                 value: 'opinion',
-                child: Text('الآراء عن $displayName'),
+                child: Text(opinionLabel),
               ),
               const PopupMenuItem(
                 value: 'mute',
