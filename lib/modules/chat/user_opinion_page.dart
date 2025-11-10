@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show TextDirection;
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -47,7 +46,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   late String _perception;
   late Set<String> _likedThings;
   late Set<String> _personalityTraits;
-  late int _admirationPercent;
+  double _likePercentage = 100;
   DateTime? _createdAt;
 
   late final TabController _tabController;
@@ -57,7 +56,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   late final PageController _pageController;
 
   int _currentPage = 0;
-  int _previousAdmirationPercent = 0;
+  int get _currentStep => _currentPage;
   bool _saveButtonPulsing = false;
   Timer? _saveButtonTimer;
 
@@ -163,14 +162,13 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     _perception = 'none';
     _likedThings = <String>{'none'};
     _personalityTraits = <String>{'none'};
-    _admirationPercent = 0;
-    _previousAdmirationPercent = 0;
+    _likePercentage = 0;
     _createdAt = null;
   }
 
   _ConnectionMood get _currentMood {
     final relationshipMood = _moodFromRelationship(_relationshipType);
-    final admirationMood = _moodFromPercent(_admirationPercent);
+    final admirationMood = _moodFromPercent(_likePercentage.round());
     return _ConnectionMood
         .values[math.max(relationshipMood.index, admirationMood.index)];
   }
@@ -309,8 +307,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       if (_personalityTraits.length > 1) {
         _personalityTraits.remove('none');
       }
-      _previousAdmirationPercent = opinion.admirationPercent;
-      _admirationPercent = opinion.admirationPercent;
+      _likePercentage = opinion.admirationPercent.toDouble();
       _createdAt = opinion.createdAt;
       return;
     }
@@ -564,9 +561,6 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       );
     }
     final questions = _buildQuestionSteps(context, theme, isRtl);
-    final mood = _currentMood;
-    final progressGradient = _sliderGradientForMood(mood);
-    final accentColor = _accentColorForMood(mood, theme);
     return Padding(
       padding: const EdgeInsets.only(bottom: 24),
       child: Column(
@@ -661,13 +655,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: _buildProgressBar(
-              theme: theme,
-              isRtl: isRtl,
-              totalSteps: questions.length,
-              gradient: progressGradient,
-              accentColor: accentColor,
-            ),
+            child: _buildStepIndicator(),
           ),
           const SizedBox(height: 20),
           Padding(
@@ -751,16 +739,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
           ),
       (isCurrent) => _OpinionCard(
             isRtl: isRtl,
-            title: _localizedText(
-              context,
-              arabic: 'كم تحب هذا الشخص؟',
-              english: 'How much do you like this person?',
-            ),
-            child: _buildAdmirationSlider(
-              context,
-              theme,
-              isActive: isCurrent,
-            ),
+            child: _buildHowMuchDoYouLikeStep(context),
           ),
     ];
   }
@@ -796,203 +775,113 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     );
   }
 
-  Widget _buildAdmirationSlider(
-    BuildContext context,
-    ThemeData theme, {
-    required bool isActive,
-  }) {
-    final sliderMood = _moodFromPercent(_admirationPercent);
-    final emoji = _emojiForPercent(_admirationPercent);
-    final accentColor = _accentColorForMood(sliderMood, theme);
-    final gradient = _sliderGradientForMood(sliderMood);
-    final direction = Directionality.of(context);
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeInOutCubic,
-      opacity: isActive ? 1 : 0,
-      child: AnimatedSlide(
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeInOutCubic,
-        offset: isActive ? Offset.zero : const Offset(0, 0.06),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _buildHowMuchDoYouLikeStep(BuildContext context) {
+    final Color sliderColor;
+    final String emoji;
+
+    if (_likePercentage >= 80) {
+      sliderColor = Colors.teal; // strong like, but neutral color
+      emoji = "❤️🔥";
+    } else if (_likePercentage >= 50) {
+      sliderColor = Colors.blue; // nice like
+      emoji = "😍";
+    } else if (_likePercentage > 0) {
+      sliderColor = Colors.grey; // normal
+      emoji = "🙂";
+    } else {
+      sliderColor = Colors.grey.shade400; // 0%
+      emoji = "😐";
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "How much do you like this person?",
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 32),
+
+        // Percentage + emoji
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              textDirection: direction,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                TweenAnimationBuilder<int>(
-                  tween: IntTween(
-                    begin: _previousAdmirationPercent,
-                    end: _admirationPercent,
-                  ),
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  builder: (context, value, child) => Text(
-                    '$value%',
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: SizedBox(
-                    height: 48,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        AnimatedAlign(
-                          alignment:
-                              Alignment((_admirationPercent / 100) * 2 - 1, 0),
-                          duration: const Duration(milliseconds: 260),
-                          curve: Curves.easeOutCubic,
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 220),
-                            transitionBuilder: (child, animation) {
-                              final curved = CurvedAnimation(
-                                parent: animation,
-                                curve: Curves.easeOutBack,
-                              );
-                              return FadeTransition(
-                                opacity: animation,
-                                child: ScaleTransition(
-                                  scale: Tween<double>(
-                                    begin: 0.85,
-                                    end: 1,
-                                  ).animate(curved),
-                                  child: child,
-                                ),
-                              );
-                            },
-                            child: Text(
-                              emoji,
-                              key: ValueKey<_ConnectionMood>(sliderMood),
-                              style: TextStyle(
-                                fontSize: 36,
-                                color: accentColor,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+            Text(
+              "${_likePercentage.round()}%",
+              style: const TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-            const SizedBox(height: 12),
-            TweenAnimationBuilder<Color?>(
-              tween: ColorTween(end: accentColor),
-              duration: const Duration(milliseconds: 280),
-              curve: Curves.easeInOut,
-              builder: (context, animatedColor, child) {
-                final resolvedColor = animatedColor ?? accentColor;
-                return SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 8,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 11),
-                    overlayShape:
-                        const RoundSliderOverlayShape(overlayRadius: 22),
-                    trackShape: _GradientSliderTrackShape(
-                      gradient: gradient,
-                      backgroundColor:
-                          theme.colorScheme.surfaceVariant.withOpacity(0.35),
-                    ),
-                    activeTrackColor: Colors.transparent,
-                    inactiveTrackColor: Colors.transparent,
-                    thumbColor: resolvedColor,
-                    overlayColor: resolvedColor.withOpacity(0.12),
-                  ),
-                  child: Slider(
-                    value: _admirationPercent.toDouble(),
-                    min: 0,
-                    max: 100,
-                    onChanged: (value) {
-                      setState(() {
-                        _previousAdmirationPercent = _admirationPercent;
-                        _admirationPercent = value.round();
-                      });
-                    },
-                  ),
-                );
-              },
+            Text(
+              emoji,
+              style: const TextStyle(fontSize: 28),
             ),
           ],
         ),
-      ),
+        const SizedBox(height: 24),
+
+        // Simple neutral Slider (no custom track shapes, no paint overrides)
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 6,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 0),
+            activeTrackColor: sliderColor,
+            inactiveTrackColor: sliderColor.withOpacity(0.2),
+            thumbColor: sliderColor,
+          ),
+          child: Slider(
+            min: 0,
+            max: 100,
+            divisions: 100,
+            value: _likePercentage,
+            onChanged: (value) {
+              setState(() {
+                _likePercentage = value;
+              });
+            },
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _buildProgressBar({
-    required ThemeData theme,
-    required bool isRtl,
-    required int totalSteps,
-    required LinearGradient gradient,
-    required Color accentColor,
-  }) {
-    final progress = totalSteps == 0 ? 0.0 : (_currentPage + 1) / totalSteps;
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(end: progress.clamp(0.0, 1.0)),
-      duration: const Duration(milliseconds: 360),
-      curve: Curves.easeInOutCubic,
-      builder: (context, value, child) {
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            color: theme.colorScheme.surface.withOpacity(0.86),
-            boxShadow: [
-              BoxShadow(
-                color: accentColor.withOpacity(0.1),
-                blurRadius: 18,
-                offset: const Offset(0, 12),
+  Widget _buildStepIndicator() {
+    const int totalSteps = 5; // adjust if your wizard has a different number
+    final int current = _currentStep + 1; // assuming _currentStep is 0-based
+
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(totalSteps, (index) {
+            final bool isActive = index + 1 == current;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              width: isActive ? 16 : 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: isActive ? Colors.teal : Colors.grey.shade400,
+                borderRadius: BorderRadius.circular(999),
               ),
-            ],
+            );
+          }),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "$current/$totalSteps",
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade600,
+            fontWeight: FontWeight.w500,
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: SizedBox(
-              height: 12,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: Container(
-                      color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
-                    ),
-                  ),
-                  Align(
-                    alignment:
-                        isRtl ? Alignment.centerRight : Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      alignment:
-                          isRtl ? Alignment.centerRight : Alignment.centerLeft,
-                      widthFactor: value,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(gradient: gradient),
-                      ),
-                    ),
-                  ),
-                  Center(
-                    child: AnimatedDefaultTextStyle(
-                      duration: const Duration(milliseconds: 200),
-                      style: theme.textTheme.labelLarge?.copyWith(
-                            color: theme.colorScheme.onSurface.withOpacity(0.7),
-                            fontWeight: FontWeight.w600,
-                          ) ??
-                          TextStyle(
-                            color: theme.colorScheme.onSurface.withOpacity(0.7),
-                            fontWeight: FontWeight.w600,
-                          ),
-                      child: Text('${_currentPage + 1}/$totalSteps'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+        ),
+      ],
     );
   }
 
@@ -1237,8 +1126,8 @@ class _UserOpinionPageState extends State<UserOpinionPage>
               ),
               comparison: _localizedText(
                 context,
-                arabic: 'أنت قلت: ${_admirationPercent}%',
-                english: 'You said: ${_admirationPercent}%',
+                arabic: 'أنت قلت: ${_likePercentage.round()}%',
+                english: 'You said: ${_likePercentage.round()}%',
               ),
             ),
             const SizedBox(height: 16),
@@ -1358,7 +1247,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       perception: _perception,
       likedThings: _orderedLikedThings(),
       personalityTraits: _orderedPersonalityTraits(),
-      admirationPercent: _admirationPercent,
+      admirationPercent: _likePercentage.round(),
       createdAt: createdAt,
       updatedAt: now,
     );
@@ -1550,12 +1439,12 @@ class _TabButton extends StatelessWidget {
 
 class _OpinionCard extends StatelessWidget {
   const _OpinionCard({
-    required this.title,
+    this.title,
     required this.child,
     required this.isRtl,
   });
 
-  final String title;
+  final String? title;
   final Widget child;
   final bool isRtl;
 
@@ -1563,6 +1452,7 @@ class _OpinionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final borderRadius = BorderRadius.circular(30);
+    final hasTitle = title != null && title!.trim().isNotEmpty;
     return Card(
       color: Colors.transparent,
       elevation: 0,
@@ -1594,14 +1484,16 @@ class _OpinionCard extends StatelessWidget {
             crossAxisAlignment:
                 isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
+              if (hasTitle) ...[
+                Text(
+                  title!,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
                 ),
-                textAlign: isRtl ? TextAlign.right : TextAlign.left,
-              ),
-              const SizedBox(height: 22),
+                const SizedBox(height: 22),
+              ],
               child,
             ],
           ),
@@ -1736,130 +1628,6 @@ class _GradientProgressBar extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _GradientSliderTrackShape extends SliderTrackShape {
-  const _GradientSliderTrackShape({
-    required this.gradient,
-    required this.backgroundColor,
-  });
-
-  final LinearGradient gradient;
-  final Color backgroundColor;
-
-  static const RoundedRectSliderTrackShape _baseTrackShape =
-      RoundedRectSliderTrackShape();
-
-  @override
-  Rect getPreferredRect({
-    required RenderBox parentBox,
-    Offset offset = Offset.zero,
-    required SliderThemeData sliderTheme,
-    bool isEnabled = false,
-    bool isDiscrete = false,
-  }) {
-    return _baseTrackShape.getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
-  }
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required Offset thumbCenter,
-    Offset? secondaryOffset,
-    bool isEnabled = false,
-    bool isDiscrete = false,
-    required TextDirection textDirection,
-  }) {
-    final Rect trackRect = _baseTrackShape.getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
-
-    final double trackRadiusValue = trackRect.height / 2;
-    final Radius trackRadius = Radius.circular(trackRadiusValue);
-    final RRect trackRRect = RRect.fromRectAndRadius(trackRect, trackRadius);
-
-    final Canvas canvas = context.canvas;
-    final Paint inactivePaint = Paint()
-      ..color = sliderTheme.inactiveTrackColor ?? Colors.grey.shade300;
-    canvas.drawRRect(trackRRect, inactivePaint);
-
-    final double clampedThumb = thumbCenter.dx.clamp(
-      trackRect.left,
-      trackRect.right,
-    );
-    if (clampedThumb <= trackRect.left) {
-      return;
-    }
-
-    final double? rawSecondary = secondaryOffset?.dx;
-    if (rawSecondary != null) {
-      final double clampedSecondary = rawSecondary.clamp(
-        trackRect.left,
-        trackRect.right,
-      );
-      final double secondaryStart = math.min(clampedThumb, clampedSecondary);
-      final double secondaryEnd = math.max(clampedThumb, clampedSecondary);
-      if (secondaryEnd > secondaryStart) {
-        final Rect secondaryRect = Rect.fromLTRB(
-          secondaryStart,
-          trackRect.top,
-          secondaryEnd,
-          trackRect.bottom,
-        );
-        final Paint secondaryPaint = Paint()
-          ..color = (sliderTheme.activeTrackColor ??
-                  sliderTheme.thumbColor ??
-                  backgroundColor)
-              .withOpacity(0.25);
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(secondaryRect, trackRadius),
-          secondaryPaint,
-        );
-      }
-    }
-
-    final Rect activeRect = Rect.fromLTRB(
-      trackRect.left,
-      trackRect.top,
-      clampedThumb,
-      trackRect.bottom,
-    );
-    final RRect activeRRect = RRect.fromRectAndRadius(activeRect, trackRadius);
-
-    final List<Color> gradientColors = gradient.colors;
-    final Color activeBaseColor = sliderTheme.activeTrackColor ??
-        sliderTheme.thumbColor ??
-        (gradientColors.isNotEmpty ? gradientColors.last : backgroundColor);
-    final Color lightColor =
-        Color.lerp(activeBaseColor, Colors.white, 0.45) ?? activeBaseColor;
-    final Color strongColor = gradientColors.isNotEmpty
-        ? gradientColors.last
-        : activeBaseColor;
-
-    final bool isRtl = textDirection == TextDirection.rtl;
-    final Paint activePaint = Paint()
-      ..shader = LinearGradient(
-        begin: isRtl ? Alignment.centerRight : Alignment.centerLeft,
-        end: isRtl ? Alignment.centerLeft : Alignment.centerRight,
-        colors: <Color>[lightColor, strongColor],
-      ).createShader(activeRect);
-
-    canvas.drawRRect(activeRRect, activePaint);
   }
 }
 
