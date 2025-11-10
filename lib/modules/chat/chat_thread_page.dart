@@ -405,7 +405,7 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
               ),
               PopupMenuItem(
                 value: 'opinion',
-                child: Text('نظرتك عن $displayName'),
+                child: Text('الآراء عن $displayName'),
               ),
               const PopupMenuItem(
                 value: 'mute',
