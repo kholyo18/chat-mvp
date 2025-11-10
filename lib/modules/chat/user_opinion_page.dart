@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
+import 'dart:ui';
 
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
-
+import 'package:intl/intl.dart' as intl;
 import 'models/user_opinion.dart';
 import 'services/user_opinion_service.dart';
 
