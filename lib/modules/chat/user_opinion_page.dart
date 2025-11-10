@@ -1,5 +1,6 @@
-import 'dart:ui' as ui;
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
@@ -51,6 +52,15 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   late final PageController _pageController;
 
   int _currentPage = 0;
+  int _previousAdmirationPercent = 0;
+
+  static const List<List<Color>> _backgroundGradients = <List<Color>>[
+    [Color(0xFFF1F0FF), Color(0xFFFDF4F6)],
+    [Color(0xFFF0F9FF), Color(0xFFF5ECFF)],
+    [Color(0xFFFFF7F0), Color(0xFFFDF0FF)],
+    [Color(0xFFEFF9F6), Color(0xFFFDF6F0)],
+    [Color(0xFFF6F0FF), Color(0xFFFFF1F5)],
+  ];
 
   static const Map<String, String> _relationshipLabels = <String, String>{
     'none': 'لا شيء',
@@ -133,6 +143,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     _likedThings = <String>{'none'};
     _personalityTraits = <String>{'none'};
     _admirationPercent = 0;
+    _previousAdmirationPercent = 0;
     _createdAt = null;
   }
 
@@ -208,6 +219,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       if (_personalityTraits.length > 1) {
         _personalityTraits.remove('none');
       }
+      _previousAdmirationPercent = opinion.admirationPercent;
       _admirationPercent = opinion.admirationPercent;
       _createdAt = opinion.createdAt;
       return;
@@ -224,6 +236,10 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       arabic: 'نظرتك عن ${widget.displayName}',
       english: 'Your view about ${widget.displayName}',
     );
+    final gradientIndex = (_tabController.index == 0)
+        ? _currentPage.clamp(0, _backgroundGradients.length - 1)
+        : 0;
+    final gradientColors = _backgroundGradients[gradientIndex];
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
@@ -231,15 +247,14 @@ class _UserOpinionPageState extends State<UserOpinionPage>
         backgroundColor: Colors.transparent,
         title: Text(title),
       ),
-      body: Container(
-        decoration: const BoxDecoration(
+      body: AnimatedContainer(
+        duration: const Duration(milliseconds: 480),
+        curve: Curves.easeInOut,
+        decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFF1F0FF),
-              Color(0xFFFDF4F6),
-            ],
+            colors: gradientColors,
           ),
         ),
         child: SafeArea(
@@ -429,7 +444,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
         ),
       );
     }
-    final questions = _buildQuestionCards(theme, isRtl);
+    final questions = _buildQuestionSteps(context, theme, isRtl);
     return Padding(
       padding: const EdgeInsets.only(bottom: 24),
       child: Column(
@@ -446,6 +461,9 @@ class _UserOpinionPageState extends State<UserOpinionPage>
               itemCount: questions.length,
               itemBuilder: (context, index) {
                 final isCurrent = index == _currentPage;
+                final mediaQuery = MediaQuery.of(context);
+                final bottomGuard =
+                    mediaQuery.viewPadding.bottom + mediaQuery.viewInsets.bottom + 120.0;
                 return AnimatedPadding(
                   duration: const Duration(milliseconds: 240),
                   padding: EdgeInsets.only(
@@ -461,7 +479,30 @@ class _UserOpinionPageState extends State<UserOpinionPage>
                     child: AnimatedOpacity(
                       duration: const Duration(milliseconds: 240),
                       opacity: isCurrent ? 1 : 0.65,
-                      child: questions[index],
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final minHeight = math.max(
+                            0.0,
+                            constraints.maxHeight - bottomGuard,
+                          );
+                          return SingleChildScrollView(
+                            physics: const BouncingScrollPhysics(),
+                            padding: EdgeInsetsDirectional.only(
+                              top: 12,
+                              bottom: bottomGuard,
+                              start: 4,
+                              end: 4,
+                            ),
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(minHeight: minHeight),
+                              child: Align(
+                                alignment: Alignment.center,
+                                child: questions[index](isCurrent),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
                 );
@@ -480,81 +521,89 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     );
   }
 
-  List<Widget> _buildQuestionCards(ThemeData theme, bool isRtl) {
+  List<Widget Function(bool isCurrent)> _buildQuestionSteps(
+    BuildContext context,
+    ThemeData theme,
+    bool isRtl,
+  ) {
     return [
-      _OpinionCard(
-        isRtl: isRtl,
-        title: _localizedText(
-          context,
-          arabic: 'ماذا يكون هذا الشخص بالنسبة لك؟',
-          english: 'What is this person to you?',
-        ),
-        child: _buildOptionsWrap(
-          theme: theme,
-          options: _relationshipLabels,
-          isSelected: (value) => _relationshipType == value,
-          onSelect: (value) => setState(() {
-            _relationshipType = value;
-          }),
-          multiSelect: false,
-        ),
-      ),
-      _OpinionCard(
-        isRtl: isRtl,
-        title: _localizedText(
-          context,
-          arabic: 'نظرتك لهذا الشخص:',
-          english: 'Your overall view of this person',
-        ),
-        child: _buildOptionsWrap(
-          theme: theme,
-          options: _perceptionLabels,
-          isSelected: (value) => _perception == value,
-          onSelect: (value) => setState(() {
-            _perception = value;
-          }),
-          multiSelect: false,
-        ),
-      ),
-      _OpinionCard(
-        isRtl: isRtl,
-        title: _localizedText(
-          context,
-          arabic: 'ما الذي يعجبك في هذا الشخص؟',
-          english: 'What do you like about this person?',
-        ),
-        child: _buildOptionsWrap(
-          theme: theme,
-          options: _likedThingsLabels,
-          isSelected: (value) => _likedThings.contains(value),
-          onSelect: (value) => _toggleLikedThing(value),
-          multiSelect: true,
-        ),
-      ),
-      _OpinionCard(
-        isRtl: isRtl,
-        title: _localizedText(
-          context,
-          arabic: 'صفات تحبها في هذا الشخص؟',
-          english: 'Traits you like in this person',
-        ),
-        child: _buildOptionsWrap(
-          theme: theme,
-          options: _personalityTraitsLabels,
-          isSelected: (value) => _personalityTraits.contains(value),
-          onSelect: (value) => _togglePersonalityTrait(value),
-          multiSelect: true,
-        ),
-      ),
-      _OpinionCard(
-        isRtl: isRtl,
-        title: _localizedText(
-          context,
-          arabic: 'كم تحب هذا الشخص؟',
-          english: 'How much do you like this person?',
-        ),
-        child: _buildAdmirationSlider(theme),
-      ),
+      (isCurrent) => _OpinionCard(
+            isRtl: isRtl,
+            title: _localizedText(
+              context,
+              arabic: 'ماذا يكون هذا الشخص بالنسبة لك؟',
+              english: 'What is this person to you?',
+            ),
+            child: _buildOptionsWrap(
+              theme: theme,
+              options: _relationshipLabels,
+              isSelected: (value) => _relationshipType == value,
+              onSelect: (value) => setState(() {
+                _relationshipType = value;
+              }),
+              multiSelect: false,
+            ),
+          ),
+      (isCurrent) => _OpinionCard(
+            isRtl: isRtl,
+            title: _localizedText(
+              context,
+              arabic: 'نظرتك لهذا الشخص:',
+              english: 'Your overall view of this person',
+            ),
+            child: _buildOptionsWrap(
+              theme: theme,
+              options: _perceptionLabels,
+              isSelected: (value) => _perception == value,
+              onSelect: (value) => setState(() {
+                _perception = value;
+              }),
+              multiSelect: false,
+            ),
+          ),
+      (isCurrent) => _OpinionCard(
+            isRtl: isRtl,
+            title: _localizedText(
+              context,
+              arabic: 'ما الذي يعجبك في هذا الشخص؟',
+              english: 'What do you like about this person?',
+            ),
+            child: _buildOptionsWrap(
+              theme: theme,
+              options: _likedThingsLabels,
+              isSelected: (value) => _likedThings.contains(value),
+              onSelect: (value) => _toggleLikedThing(value),
+              multiSelect: true,
+            ),
+          ),
+      (isCurrent) => _OpinionCard(
+            isRtl: isRtl,
+            title: _localizedText(
+              context,
+              arabic: 'صفات تحبها في هذا الشخص؟',
+              english: 'Traits you like in this person',
+            ),
+            child: _buildOptionsWrap(
+              theme: theme,
+              options: _personalityTraitsLabels,
+              isSelected: (value) => _personalityTraits.contains(value),
+              onSelect: (value) => _togglePersonalityTrait(value),
+              multiSelect: true,
+            ),
+          ),
+      (isCurrent) => _OpinionCard(
+            isRtl: isRtl,
+            title: _localizedText(
+              context,
+              arabic: 'كم تحب هذا الشخص؟',
+              english: 'How much do you like this person?',
+            ),
+            child: _buildAdmirationSlider(
+              context,
+              theme,
+              isActive: isCurrent,
+            ),
+          ),
     ];
   }
 
@@ -575,7 +624,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
         final value = entry.key;
         final label = entry.value;
         final selected = isSelected(value);
-        return _AnimatedOptionChip(
+        return _SelectableChip(
           label: label,
           selected: selected,
           onTap: () {
@@ -589,85 +638,121 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     );
   }
 
-  Widget _buildAdmirationSlider(ThemeData theme) {
-    final percentLabel = '${_admirationPercent.round()}%';
+  Widget _buildAdmirationSlider(
+    BuildContext context,
+    ThemeData theme, {
+    required bool isActive,
+  }) {
     final emoji = _emojiForPercent(_admirationPercent);
     final color = _colorForPercent(_admirationPercent);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final direction = Directionality.of(context);
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeInOutCubic,
+      opacity: isActive ? 1 : 0,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeInOutCubic,
+        offset: isActive ? Offset.zero : const Offset(0, 0.06),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              transitionBuilder: (child, animation) => FadeTransition(
-                opacity: animation,
-                child: SizeTransition(
-                  sizeFactor: animation,
-                  axis: Axis.horizontal,
-                  child: child,
-                ),
-              ),
-              child: Text(
-                percentLabel,
-                key: ValueKey<String>(percentLabel),
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: SizedBox(
-                height: 48,
-                child: Stack(
-                  children: [
-                    AnimatedAlign(
-                      alignment: Alignment((_admirationPercent / 100) * 2 - 1, 0),
-                      duration: const Duration(milliseconds: 260),
-                      curve: Curves.easeOutCubic,
-                      child: Text(
-                        emoji,
-                        style: const TextStyle(fontSize: 36),
-                      ),
+            Row(
+              textDirection: direction,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TweenAnimationBuilder<int>(
+                  tween: IntTween(
+                    begin: _previousAdmirationPercent,
+                    end: _admirationPercent,
+                  ),
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, value, child) => Text(
+                    '$value%',
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: SizedBox(
+                    height: 48,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        AnimatedAlign(
+                          alignment:
+                              Alignment((_admirationPercent / 100) * 2 - 1, 0),
+                          duration: const Duration(milliseconds: 260),
+                          curve: Curves.easeOutCubic,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 220),
+                            transitionBuilder: (child, animation) {
+                              final curved = CurvedAnimation(
+                                parent: animation,
+                                curve: Curves.easeOutBack,
+                              );
+                              return FadeTransition(
+                                opacity: animation,
+                                child: ScaleTransition(
+                                  scale: Tween<double>(
+                                    begin: 0.85,
+                                    end: 1,
+                                  ).animate(curved),
+                                  child: child,
+                                ),
+                              );
+                            },
+                            child: Text(
+                              emoji,
+                              key: ValueKey<String>(emoji),
+                              style: const TextStyle(fontSize: 36),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TweenAnimationBuilder<Color?>(
+              tween: ColorTween(end: color),
+              duration: const Duration(milliseconds: 260),
+              builder: (context, animatedColor, child) {
+                final trackColor = animatedColor ?? color;
+                return SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 6,
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 10),
+                    overlayShape:
+                        const RoundSliderOverlayShape(overlayRadius: 20),
+                    activeTrackColor: trackColor,
+                    inactiveTrackColor: trackColor.withOpacity(0.2),
+                    thumbColor: trackColor,
+                    overlayColor: trackColor.withOpacity(0.1),
+                  ),
+                  child: Slider(
+                    value: _admirationPercent.toDouble(),
+                    min: 0,
+                    max: 100,
+                    onChanged: (value) {
+                      setState(() {
+                        _previousAdmirationPercent = _admirationPercent;
+                        _admirationPercent = value.round();
+                      });
+                    },
+                  ),
+                );
+              },
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        TweenAnimationBuilder<Color?>(
-          tween: ColorTween(end: color),
-          duration: const Duration(milliseconds: 260),
-          builder: (context, animatedColor, child) {
-            final trackColor = animatedColor ?? color;
-            return SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 6,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-                activeTrackColor: trackColor,
-                inactiveTrackColor: trackColor.withOpacity(0.2),
-                thumbColor: trackColor,
-                overlayColor: trackColor.withOpacity(0.1),
-              ),
-              child: Slider(
-                value: _admirationPercent.toDouble(),
-                min: 0,
-                max: 100,
-                onChanged: (value) {
-                  setState(() {
-                    _admirationPercent = value.round();
-                  });
-                },
-              ),
-            );
-          },
-        ),
-      ],
+      ),
     );
   }
 
@@ -702,12 +787,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
         if (_currentPage > 0)
           Expanded(
             child: OutlinedButton(
-              onPressed: () {
-                _pageController.previousPage(
-                  duration: const Duration(milliseconds: 320),
-                  curve: Curves.easeOutCubic,
-                );
-              },
+              onPressed: () => _animateToPage(_currentPage - 1),
               child: Text(backLabel),
             ),
           ),
@@ -720,10 +800,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
                     if (isLastPage) {
                       _save(context);
                     } else {
-                      _pageController.nextPage(
-                        duration: const Duration(milliseconds: 320),
-                        curve: Curves.easeOutCubic,
-                      );
+                      _animateToPage(_currentPage + 1);
                     }
                   },
             child: AnimatedSwitcher(
@@ -751,6 +828,14 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     );
   }
 
+  void _animateToPage(int page) {
+    _pageController.animateToPage(
+      page,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
   Widget _buildPeerOpinionTab(ThemeData theme, bool isRtl) {
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 260),
@@ -773,14 +858,19 @@ class _UserOpinionPageState extends State<UserOpinionPage>
             english: 'This person hasn’t shared their view about you yet.',
           );
           return Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                empty,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+            child: AnimatedOpacity(
+              opacity: 1,
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeInOut,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  empty,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
               ),
             ),
           );
@@ -1048,6 +1138,28 @@ class _UserOpinionPageState extends State<UserOpinionPage>
       setState(() {
         _showSuccessNotice = true;
       });
+      final successMessage = _localizedText(
+        context,
+        arabic: 'تم حفظ نظرتك ❤️',
+        english: 'Your view has been saved ❤️',
+      );
+      final snackTheme = Theme.of(context);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            backgroundColor: snackTheme.colorScheme.surface.withOpacity(0.95),
+            duration: const Duration(seconds: 2),
+            content: Text(
+              successMessage,
+              style: snackTheme.textTheme.bodyMedium?.copyWith(
+                color: snackTheme.colorScheme.onSurface,
+              ),
+            ),
+          ),
+        );
       _successTimer?.cancel();
       _successTimer = Timer(const Duration(milliseconds: 1200), () {
         if (mounted) {
@@ -1213,8 +1325,10 @@ class _TabButton extends StatelessWidget {
           child: AnimatedDefaultTextStyle(
             duration: const Duration(milliseconds: 200),
             style: theme.textTheme.titleMedium!.copyWith(
-              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-              color: theme.colorScheme.onSurface,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+              color: isSelected
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurfaceVariant,
             ),
             child: Center(child: Text(label)),
           ),
@@ -1265,8 +1379,8 @@ class _OpinionCard extends StatelessWidget {
   }
 }
 
-class _AnimatedOptionChip extends StatelessWidget {
-  const _AnimatedOptionChip({
+class _SelectableChip extends StatelessWidget {
+  const _SelectableChip({
     required this.label,
     required this.selected,
     required this.onTap,
@@ -1279,46 +1393,53 @@ class _AnimatedOptionChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final background = selected
+        ? theme.colorScheme.primary.withOpacity(0.16)
+        : theme.colorScheme.surface;
+    final borderColor = selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.outlineVariant;
     return AnimatedScale(
-      scale: selected ? 1.03 : 1,
-      duration: const Duration(milliseconds: 200),
+      scale: selected ? 1.05 : 1,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(20),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOutCubic,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              color: selected
-                  ? theme.colorScheme.primary.withOpacity(0.12)
-                  : theme.colorScheme.surface,
-              border: Border.all(
-                color: selected
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.outlineVariant,
-              ),
+              borderRadius: BorderRadius.circular(20),
+              color: background,
+              border: Border.all(color: borderColor),
               boxShadow: selected
                   ? [
                       BoxShadow(
                         color: theme.colorScheme.primary.withOpacity(0.18),
-                        blurRadius: 18,
+                        blurRadius: 20,
                         offset: const Offset(0, 10),
                       ),
                     ]
-                  : null,
+                  : const [],
             ),
-            child: Text(
-              label,
-              style: theme.textTheme.titleMedium?.copyWith(
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 180),
+              style: theme.textTheme.titleMedium!.copyWith(
                 color: selected
                     ? theme.colorScheme.primary
                     : theme.colorScheme.onSurface,
-                fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
               ),
-              textAlign: TextAlign.center,
+              child: Center(
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                ),
+              ),
             ),
           ),
         ),
