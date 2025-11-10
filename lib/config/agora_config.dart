@@ -35,4 +35,7 @@ class AgoraConfig {
 
   /// 🔍 فحص سريع هل نستعمل token أو لا
   static bool get hasToken => false;
+
+  /// 🔑 Token ثابت (null في وضع App ID only)
+  static String? get token => null;
 }
