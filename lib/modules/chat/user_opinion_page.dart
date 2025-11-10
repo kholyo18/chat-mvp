@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'dart:async';
 
 import 'package:characters/characters.dart';
@@ -217,7 +218,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final isRtl = Directionality.of(context) == ui.TextDirection.rtl;
     final title = _localizedText(
       context,
       arabic: 'نظرتك عن ${widget.displayName}',
@@ -1183,7 +1184,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     required String english,
   }) {
     final locale = Localizations.maybeLocaleOf(context)?.languageCode;
-    final isArabic = locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
+    final isArabic = locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
     return isArabic ? arabic : english;
   }
 }
@@ -1445,7 +1446,6 @@ String _localizedStaticText(
   required String english,
 }) {
   final locale = Localizations.maybeLocaleOf(context)?.languageCode;
-  final isArabic = locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
+  final isArabic = locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
   return isArabic ? arabic : english;
 }
-

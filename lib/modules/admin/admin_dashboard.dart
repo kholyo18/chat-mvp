@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' show DateFormat;
@@ -358,7 +359,7 @@ class _RecentUserTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final TextDirection textDirection =
-        Directionality.of(context) ?? TextDirection.ltr;
+        Directionality.of(context) ?? ui.TextDirection.ltr;
     final DateFormat dateFormat = DateFormat.yMMMMd();
 
     final String subtitle = [
@@ -410,7 +411,7 @@ class _RecentUserTile extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 16),
-        if (textDirection == TextDirection.ltr)
+        if (textDirection == ui.TextDirection.ltr)
           Icon(Icons.chevron_right, color: theme.disabledColor)
         else
           Icon(Icons.chevron_left, color: theme.disabledColor),
