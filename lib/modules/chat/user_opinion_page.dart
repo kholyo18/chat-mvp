@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui';
-
+import 'dart:ui' show TextDirection;
 import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -321,7 +320,7 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isRtl = Directionality.of(context) == ui.TextDirection.rtl;
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
     final title = _localizedText(
       context,
       arabic: 'نظرتك عن ${widget.displayName}',
@@ -1495,8 +1494,8 @@ class _UserOpinionPageState extends State<UserOpinionPage>
   String _formatDate(DateTime date) {
     final localDate = date.toLocal();
     final locale = Localizations.maybeLocaleOf(context)?.toLanguageTag() ?? 'ar';
-    final dateFormatter = DateFormat.yMMMd(locale);
-    final timeFormatter = DateFormat.Hm(locale);
+    final dateFormatter = intl.DateFormat.yMMMd(locale);
+    final timeFormatter = intl.DateFormat.Hm(locale);
     return '${dateFormatter.format(localDate)}, ${timeFormatter.format(localDate)}';
   }
 
@@ -1506,7 +1505,8 @@ class _UserOpinionPageState extends State<UserOpinionPage>
     required String english,
   }) {
     final locale = Localizations.maybeLocaleOf(context)?.languageCode;
-    final isArabic = locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+    final isArabic =
+        locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
     return isArabic ? arabic : english;
   }
 }
@@ -2004,6 +2004,6 @@ String _localizedStaticText(
   required String english,
 }) {
   final locale = Localizations.maybeLocaleOf(context)?.languageCode;
-  final isArabic = locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+  final isArabic = locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
   return isArabic ? arabic : english;
 }
