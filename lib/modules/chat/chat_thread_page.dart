@@ -714,14 +714,97 @@ class _MessageEntry {
 
 enum _DeliveryState { none, sent, delivered, seen }
 
-class _MessageBubble extends StatelessWidget {
+class _MessageBubble extends StatefulWidget {
   const _MessageBubble({required this.message, required this.isMine});
 
   final ChatMessage message;
   final bool isMine;
 
   @override
+  State<_MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<_MessageBubble> {
+  static const double _replyTriggerDy = 96.0;
+  static const double _replyVisualLimit = 64.0;
+
+  double _dragVisualOffset = 0;
+  bool _willReply = false;
+  bool _hapticPlayed = false;
+
+  void _handleLongPressStart(LongPressStartDetails details) {
+    _dragVisualOffset = 0;
+    _willReply = false;
+    _hapticPlayed = false;
+  }
+
+  void _handleLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
+    final downward = math.max(details.offsetFromOrigin.dy, 0);
+    final shouldReply = downward > _replyTriggerDy;
+
+    if (shouldReply != _willReply) {
+      setState(() {
+        _willReply = shouldReply;
+      });
+      if (shouldReply && !_hapticPlayed) {
+        HapticFeedback.mediumImpact();
+        _hapticPlayed = true;
+      }
+      if (!shouldReply) {
+        _hapticPlayed = false;
+      }
+    }
+
+    final visualOffset = downward.clamp(0.0, _replyVisualLimit);
+    if (visualOffset != _dragVisualOffset) {
+      setState(() {
+        _dragVisualOffset = visualOffset;
+      });
+    }
+  }
+
+  void _handleLongPressEnd(LongPressEndDetails details) {
+    final shouldReply = _willReply;
+    if (!mounted) {
+      return;
+    }
+    _resetDragState();
+    if (!mounted) {
+      return;
+    }
+
+    if (shouldReply) {
+      final controller = context.read<ChatThreadController>();
+      unawaited(controller.setReplyTo(widget.message));
+    } else {
+      _showMessageActions(context, widget.message, widget.isMine);
+    }
+  }
+
+  void _handleLongPressCancel() {
+    _resetDragState();
+  }
+
+  void _resetDragState() {
+    if (!mounted) {
+      return;
+    }
+    if (_dragVisualOffset != 0 || _willReply) {
+      setState(() {
+        _dragVisualOffset = 0;
+        _willReply = false;
+      });
+    } else {
+      _dragVisualOffset = 0;
+      _willReply = false;
+    }
+    _hapticPlayed = false;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final message = widget.message;
+    final isMine = widget.isMine;
     final controller = context.read<ChatThreadController>();
     final theme = Theme.of(context);
     final bubbleColor = isMine
@@ -796,82 +879,89 @@ class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onLongPress: () => _showMessageActions(context, message, isMine),
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          constraints: BoxConstraints(
-              maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360)),
-          decoration: BoxDecoration(color: bubbleColor, borderRadius: borderRadius),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (forwarded)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text(
-                    'معاد توجيهها',
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.8),
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                ),
-              if (reply != null)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 6),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: bubbleColor.withOpacity(isMine ? 0.3 : 0.6),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    _replyPreview(reply),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: textColor.withOpacity(0.85), fontSize: 12),
-                  ),
-                ),
-              content,
-              if (translated != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    translated,
-                    style: TextStyle(
-                      color: textColor.withOpacity(0.85),
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 6),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    time,
-                    style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 11),
-                  ),
-                  if (isMine)
-                    Padding(
-                      padding: const EdgeInsetsDirectional.only(start: 4),
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child: Icon(
-                          statusIcon,
-                          key: ValueKey<_DeliveryState>(deliveryState),
-                          size: 16,
-                          color: statusColor,
-                        ),
+        onDoubleTap: () => _showMessageActions(context, message, isMine),
+        onLongPressStart: _handleLongPressStart,
+        onLongPressMoveUpdate: _handleLongPressMoveUpdate,
+        onLongPressEnd: _handleLongPressEnd,
+        onLongPressCancel: _handleLongPressCancel,
+        child: Transform.translate(
+          offset: Offset(0, _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            constraints: BoxConstraints(
+                maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360)),
+            decoration: BoxDecoration(color: bubbleColor, borderRadius: borderRadius),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (forwarded)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      'معاد توجيهها',
+                      style: TextStyle(
+                        color: textColor.withOpacity(0.8),
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
                       ),
                     ),
-                ],
-              ),
-            ],
+                  ),
+                if (reply != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: bubbleColor.withOpacity(isMine ? 0.3 : 0.6),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _replyPreview(reply),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: textColor.withOpacity(0.85), fontSize: 12),
+                    ),
+                  ),
+                content,
+                if (translated != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      translated,
+                      style: TextStyle(
+                        color: textColor.withOpacity(0.85),
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      time,
+                      style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 11),
+                    ),
+                    if (isMine)
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(start: 4),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          child: Icon(
+                            statusIcon,
+                            key: ValueKey<_DeliveryState>(deliveryState),
+                            size: 16,
+                            color: statusColor,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
