@@ -20,6 +20,7 @@ import '../../services/firestore_service.dart';
 import '../translator/translator_service.dart';
 import 'chat_message.dart';
 import 'chat_thread_controller.dart';
+import 'user_opinion_page.dart';
 
 class ChatThreadPage extends StatefulWidget {
   const ChatThreadPage({super.key, required this.threadId, this.otherUid});
@@ -393,12 +394,33 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
         ),
         PopupMenuButton<String>(
           onSelected: (value) => _handleMenuSelection(context, value),
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: 'profile', child: Text('عرض الملف الشخصي')),
-            PopupMenuItem(value: 'mute', child: Text('كتم الإشعارات')),
-            PopupMenuItem(value: 'clear', child: Text('مسح المحادثة')),
-            PopupMenuItem(value: 'report', child: Text('الإبلاغ')),
-          ],
+          itemBuilder: (context) {
+            final controller = context.read<ChatThreadController>();
+            final displayName =
+                controller.otherUserProfile?.displayName ?? 'المستخدم';
+            return [
+              const PopupMenuItem(
+                value: 'profile',
+                child: Text('عرض الملف الشخصي'),
+              ),
+              PopupMenuItem(
+                value: 'opinion',
+                child: Text('نظرتك عن $displayName'),
+              ),
+              const PopupMenuItem(
+                value: 'mute',
+                child: Text('كتم الإشعارات'),
+              ),
+              const PopupMenuItem(
+                value: 'clear',
+                child: Text('مسح المحادثة'),
+              ),
+              const PopupMenuItem(
+                value: 'report',
+                child: Text('الإبلاغ'),
+              ),
+            ];
+          },
         ),
       ],
     );
@@ -417,6 +439,26 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
         } else {
           messenger.showSnackBar(const SnackBar(content: Text('لا يمكن فتح الملف حالياً')));
         }
+        break;
+      case 'opinion':
+        final current = controller.currentUid;
+        final profile = controller.otherUserProfile;
+        final otherDisplayName = profile?.displayName ?? 'المستخدم';
+        if (current == null || other == null) {
+          messenger.showSnackBar(
+            const SnackBar(content: Text('لا يمكن فتح الصفحة حالياً')),
+          );
+          break;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => UserOpinionPage(
+              currentUid: current,
+              otherUid: other,
+              displayName: otherDisplayName,
+            ),
+          ),
+        );
         break;
       case 'mute':
       case 'clear':
