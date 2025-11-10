@@ -1773,20 +1773,20 @@ class _GradientSliderTrackShape extends SliderTrackShape {
   void paint(
     PaintingContext context,
     Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required TextDirection textDirection,
-    required Offset thumbCenter,
-    bool isDiscrete = false,
-    bool isEnabled = false,
+      required RenderBox parentBox,
+      required SliderThemeData sliderTheme,
+      required Animation<double> enableAnimation,
+      required TextDirection textDirection,
+      required Offset thumbCenter,
+      bool isDiscrete = false,
+      bool isEnabled = false,
   }) {
     assert(() {
       textDirection.toString();
       return true;
     }());
     final Canvas canvas = context.canvas;
-    final double trackHeight = sliderTheme.trackHeight ?? 4;
+    final double trackHeight = sliderTheme.trackHeight ?? 4.0;
     final double trackLeft = offset.dx;
     final double trackTop = thumbCenter.dy - trackHeight / 2;
     final Rect trackRect = Rect.fromLTWH(
@@ -1807,48 +1807,51 @@ class _GradientSliderTrackShape extends SliderTrackShape {
     final Paint inactivePaint = Paint()..color = resolvedInactive;
     canvas.drawRRect(trackRRect, inactivePaint);
 
-    final double activeWidth =
-        (thumbCenter.dx - trackRect.left).clamp(0.0, trackRect.width);
+    final bool isLtr = textDirection != TextDirection.rtl;
+    final double activeStart = isLtr ? trackRect.left : thumbCenter.dx;
+    final double activeEnd = isLtr ? thumbCenter.dx : trackRect.right;
+    final double activeWidth = (activeEnd - activeStart).abs();
     if (activeWidth <= 0) {
       return;
     }
 
-    final Rect activeRect = Rect.fromLTWH(
-      trackRect.left,
+    final double activeLeft = math.min(activeStart, activeEnd);
+    final double activeRight = math.max(activeStart, activeEnd);
+    final Rect activeRect = Rect.fromLTRB(
+      activeLeft,
       trackRect.top,
-      activeWidth,
-      trackRect.height,
+      activeRight,
+      trackRect.bottom,
     );
     final RRect activeRRect = RRect.fromRectAndRadius(activeRect, trackRadius);
 
     final List<Color> gradientColors = gradient.colors;
-    final double activation = enableAnimation.value;
-    final Color baseActiveColor = sliderTheme.activeTrackColor ??
+    final double activation = enableAnimation.value.clamp(0.0, 1.0);
+    final Color fallbackActiveColor = sliderTheme.activeTrackColor ??
         sliderTheme.thumbColor ??
         (gradientColors.isNotEmpty ? gradientColors.last : backgroundColor);
-    final Color startColor = Color.lerp(
-          gradientColors.isNotEmpty ? gradientColors.first : baseActiveColor,
-          Colors.white,
-          0.35,
-        ) ??
-        baseActiveColor;
-    final Color activeColor = Color.lerp(
-          baseActiveColor.withOpacity(baseActiveColor.opacity * 0.75),
-          baseActiveColor,
-          activation,
-        ) ??
-        baseActiveColor;
+    final Color gradientStart =
+        gradientColors.isNotEmpty ? gradientColors.first : fallbackActiveColor;
+    final Color gradientEnd =
+        gradientColors.isNotEmpty ? gradientColors.last : fallbackActiveColor;
+    final Color animatedEnd =
+        Color.lerp(gradientStart, gradientEnd, activation) ?? gradientEnd;
+    final Color startColor =
+        Color.lerp(gradientStart, Colors.white, 0.35) ?? gradientStart;
+    final Color endColor =
+        Color.lerp(animatedEnd, Colors.black.withOpacity(0.05), 0.1) ??
+            animatedEnd;
     final LinearGradient activeGradient = LinearGradient(
-      colors: [startColor, activeColor],
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
+      colors: isLtr ? [startColor, endColor] : [endColor, startColor],
+      begin: isLtr ? Alignment.centerLeft : Alignment.centerRight,
+      end: isLtr ? Alignment.centerRight : Alignment.centerLeft,
     );
     final Paint activePaint = Paint()
       ..shader = activeGradient.createShader(activeRect);
 
     canvas.save();
     canvas.clipRRect(activeRRect);
-    canvas.drawRRect(trackRRect, activePaint);
+    canvas.drawRect(activeRect, activePaint);
     canvas.restore();
   }
 }
