@@ -26,8 +26,12 @@ class UserOpinion {
       likedThings: _parseStringList(map['likedThings']),
       personalityTraits: _parseStringList(map['personalityTraits']),
       admirationPercent: (map['admirationPercent'] as num?)?.round() ?? 0,
-      createdAt: _parseDate(map['createdAt']) ?? DateTime.now().toUtc(),
-      updatedAt: _parseDate(map['updatedAt']) ?? DateTime.now().toUtc(),
+      createdAt:
+          _parseDate(map['createdAt']) ?? _parseDate(map['created_at']) ?? DateTime.now().toUtc(),
+      updatedAt: _parseDate(map['updatedAt']) ??
+          _parseDate(map['updated_at']) ??
+          _parseDate(map['lastUpdated']) ??
+          DateTime.now().toUtc(),
     );
   }
 
@@ -40,6 +44,7 @@ class UserOpinion {
       'admirationPercent': admirationPercent,
       'createdAt': Timestamp.fromDate(createdAt.toUtc()),
       'updatedAt': Timestamp.fromDate(updatedAt.toUtc()),
+      'lastUpdated': Timestamp.fromDate(updatedAt.toUtc()),
     };
   }
 

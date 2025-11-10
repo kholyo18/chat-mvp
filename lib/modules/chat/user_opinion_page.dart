@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import 'models/user_opinion.dart';
 import 'services/user_opinion_service.dart';
@@ -24,7 +25,9 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
 
   bool _isLoading = true;
   bool _isSaving = false;
-  String? _loadError;
+  String? _myOpinionError;
+  String? _peerOpinionError;
+  UserOpinion? _peerOpinion;
 
   late String _relationshipType;
   late String _perception;
@@ -73,7 +76,7 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
   void initState() {
     super.initState();
     _setDefaults();
-    _loadOpinion();
+    _loadOpinions();
   }
 
   void _setDefaults() {
@@ -85,60 +88,82 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
     _createdAt = null;
   }
 
-  Future<void> _loadOpinion() async {
+  Future<void> _loadOpinions() async {
     setState(() {
       _isLoading = true;
-      _loadError = null;
+      _myOpinionError = null;
+      _peerOpinionError = null;
+      _peerOpinion = null;
     });
-    try {
-      final opinion = await _service.getOpinion(
+
+    UserOpinion? myOpinion;
+    UserOpinion? peerOpinion;
+    String? myError;
+    String? peerError;
+
+    await Future.wait([
+      _service
+          .loadMyOpinion(
         currentUid: widget.currentUid,
-        otherUid: widget.otherUid,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        if (opinion != null) {
-          _relationshipType = opinion.relationshipType;
-          _perception = opinion.perception;
-          _likedThings = opinion.likedThings.isEmpty
-              ? <String>{'none'}
-              : opinion.likedThings
-                  .where((item) => item != 'none' || opinion.likedThings.length == 1)
-                  .toSet();
-          if (_likedThings.length > 1) {
-            _likedThings.remove('none');
-          }
-          _personalityTraits = opinion.personalityTraits.isEmpty
-              ? <String>{'none'}
-              : opinion.personalityTraits
-                  .where((item) => item != 'none' || opinion.personalityTraits.length == 1)
-                  .toSet();
-          if (_personalityTraits.length > 1) {
-            _personalityTraits.remove('none');
-          }
-          _admirationPercent = opinion.admirationPercent;
-          _createdAt = opinion.createdAt;
-        } else {
-          _setDefaults();
-        }
-      });
-    } on UserOpinionException {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loadError = 'حدث خطأ أثناء تحميل البيانات. حاول مرة أخرى.';
-        _setDefaults();
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+        peerUid: widget.otherUid,
+      )
+          .then((value) {
+        myOpinion = value;
+      }).catchError((error) {
+        myError = 'حدث خطأ أثناء تحميل بياناتك. حاول مرة أخرى.';
+        return null;
+      }),
+      _service
+          .loadPeerOpinion(
+        currentUid: widget.currentUid,
+        peerUid: widget.otherUid,
+      )
+          .then((value) {
+        peerOpinion = value;
+      }).catchError((error) {
+        peerError = 'حدث خطأ أثناء تحميل نظرتهم عنك. حاول مرة أخرى.';
+        return null;
+      }),
+    ]);
+
+    if (!mounted) {
+      return;
     }
+
+    setState(() {
+      _applyMyOpinion(myOpinion);
+      _peerOpinion = peerOpinion;
+      _myOpinionError = myError;
+      _peerOpinionError = peerError;
+      _isLoading = false;
+    });
+  }
+
+  void _applyMyOpinion(UserOpinion? opinion) {
+    if (opinion != null) {
+      _relationshipType = opinion.relationshipType;
+      _perception = opinion.perception;
+      _likedThings = opinion.likedThings.isEmpty
+          ? <String>{'none'}
+          : opinion.likedThings
+              .where((item) => item != 'none' || opinion.likedThings.length == 1)
+              .toSet();
+      if (_likedThings.length > 1) {
+        _likedThings.remove('none');
+      }
+      _personalityTraits = opinion.personalityTraits.isEmpty
+          ? <String>{'none'}
+          : opinion.personalityTraits
+              .where((item) => item != 'none' || opinion.personalityTraits.length == 1)
+              .toSet();
+      if (_personalityTraits.length > 1) {
+        _personalityTraits.remove('none');
+      }
+      _admirationPercent = opinion.admirationPercent;
+      _createdAt = opinion.createdAt;
+      return;
+    }
+    _setDefaults();
   }
 
   @override
@@ -147,7 +172,7 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
       textDirection: TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
-          title: Text('نظرتك عن ${widget.displayName}'),
+          title: Text('الآراء عن ${widget.displayName}'),
         ),
         body: SafeArea(
           child: Column(
@@ -172,7 +197,7 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_loadError != null)
+          if (_myOpinionError != null)
             Card(
               color: theme.colorScheme.errorContainer,
               child: Padding(
@@ -181,7 +206,7 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      _loadError!,
+                      _myOpinionError!,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onErrorContainer,
                       ),
@@ -189,14 +214,20 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
                     ),
                     const SizedBox(height: 12),
                     TextButton(
-                      onPressed: _loadOpinion,
+                      onPressed: _loadOpinions,
                       child: const Text('إعادة المحاولة'),
                     ),
                   ],
                 ),
               ),
             ),
-          if (_loadError != null) const SizedBox(height: 16),
+          if (_myOpinionError != null) const SizedBox(height: 16),
+          Text(
+            'وجهة نظرك عن ${widget.displayName}',
+            style: theme.textTheme.titleLarge,
+            textAlign: TextAlign.right,
+          ),
+          const SizedBox(height: 12),
           _buildRelationshipCard(theme),
           const SizedBox(height: 16),
           _buildPerceptionCard(theme),
@@ -206,6 +237,14 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
           _buildPersonalityCard(theme),
           const SizedBox(height: 16),
           _buildAdmirationCard(theme),
+          const SizedBox(height: 24),
+          Text(
+            'نظرة ${widget.displayName} عنك',
+            style: theme.textTheme.titleLarge,
+            textAlign: TextAlign.right,
+          ),
+          const SizedBox(height: 12),
+          _buildPeerOpinionCard(theme),
           const SizedBox(height: 24),
         ],
       ),
@@ -413,6 +452,177 @@ class _UserOpinionPageState extends State<UserOpinionPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildPeerOpinionCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: _peerOpinionError != null
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _peerOpinionError!,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onErrorContainer,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _loadOpinions,
+                    child: const Text('إعادة المحاولة'),
+                  ),
+                ],
+              )
+            : _peerOpinion != null
+                ? _buildPeerOpinionContent(theme, _peerOpinion!)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'لم يشارك ${widget.displayName} رأيه عنك بعد 🙂',
+                        style: theme.textTheme.bodyLarge,
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'عندما يكون جاهزاً سيظهر رأيه هنا.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.center,
+                        child: TextButton(
+                          onPressed: () {
+                            // TODO: إرسال رسالة تطلب منه مشاركة رأيه.
+                          },
+                          child: const Text('اطلب منه مشاركة رأيه بلطف'),
+                        ),
+                      ),
+                    ],
+                  ),
+      ),
+    );
+  }
+
+  Widget _buildPeerOpinionContent(ThemeData theme, UserOpinion opinion) {
+    final relationshipLabel =
+        _relationshipLabels[opinion.relationshipType] ?? _relationshipLabels['none']!;
+    final perceptionLabel =
+        _perceptionLabels[opinion.perception] ?? _perceptionLabels['none']!;
+    final likedLabels = _mapValuesToLabels(opinion.likedThings, _likedThingsLabels);
+    final traitsLabels =
+        _mapValuesToLabels(opinion.personalityTraits, _personalityTraitsLabels);
+    final emoji = _emojiForPercent(opinion.admirationPercent);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildPeerSectionHeader(theme, 'علاقتك من وجهة نظرهم:'),
+        Text(
+          relationshipLabel,
+          style: theme.textTheme.bodyLarge,
+          textAlign: TextAlign.right,
+        ),
+        const SizedBox(height: 16),
+        _buildPeerSectionHeader(theme, 'كيف يرونك:'),
+        Text(
+          perceptionLabel,
+          style: theme.textTheme.bodyLarge,
+          textAlign: TextAlign.right,
+        ),
+        const SizedBox(height: 16),
+        _buildPeerSectionHeader(theme, 'ما الذي يعجبهم فيك:'),
+        _buildReadOnlyChips(theme, likedLabels),
+        const SizedBox(height: 16),
+        _buildPeerSectionHeader(theme, 'الصفات التي يحبونها فيك:'),
+        _buildReadOnlyChips(theme, traitsLabels),
+        const SizedBox(height: 16),
+        _buildPeerSectionHeader(theme, 'نسبة إعجابهم بك:'),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              '${opinion.admirationPercent}%',
+              style: theme.textTheme.titleMedium,
+            ),
+            Text(
+              emoji,
+              style: theme.textTheme.headlineMedium,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'آخر تحديث: ${_formatDate(opinion.updatedAt)}',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.right,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPeerSectionHeader(ThemeData theme, String label) {
+    return Text(
+      label,
+      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+      textAlign: TextAlign.right,
+    );
+  }
+
+  Widget _buildReadOnlyChips(ThemeData theme, List<String> labels) {
+    if (labels.length == 1) {
+      return Text(
+        labels.first,
+        style: theme.textTheme.bodyLarge,
+        textAlign: TextAlign.right,
+      );
+    }
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: 8,
+      runSpacing: 8,
+      children: labels
+          .map(
+            (label) => Chip(
+              label: Text(label),
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  List<String> _mapValuesToLabels(
+    List<String> values,
+    Map<String, String> labels,
+  ) {
+    if (values.isEmpty) {
+      return <String>[labels['none'] ?? 'لا شيء'];
+    }
+    if (values.contains('none') && values.length == 1) {
+      return <String>[labels['none'] ?? 'لا شيء'];
+    }
+    final resolved = values
+        .where((value) => value != 'none')
+        .map((value) => labels[value] ?? value)
+        .toList();
+    if (resolved.isEmpty) {
+      return <String>[labels['none'] ?? 'لا شيء'];
+    }
+    return resolved;
+  }
+
+  String _formatDate(DateTime date) {
+    final localDate = date.toLocal();
+    final dateFormatter = DateFormat.yMMMd('ar');
+    final timeFormatter = DateFormat.Hm('ar');
+    return '${dateFormatter.format(localDate)}، ${timeFormatter.format(localDate)}';
   }
 
   Widget _buildActions(BuildContext context) {
