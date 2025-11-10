@@ -12,6 +12,7 @@ import '../../config/agora_config.dart';
 import '../../models/user_profile.dart';
 import '../../navigation/app_navigator.dart';
 import 'agora_call_client.dart';
+import 'call_notification_service.dart';
 import 'dm_call_models.dart';
 import 'dm_call_page.dart';
 
@@ -60,7 +61,10 @@ class DmCallService {
   String? _listeningUid;
   final Set<String> _handledIncomingCallIds = <String>{};
   final Set<String> _activeCallRouteIds = <String>{};
+  final Set<String> _activeNotificationCallIds = <String>{};
   final AgoraCallClient _agoraClient = AgoraCallClient.instance;
+  final CallNotificationService _notificationService =
+      CallNotificationService.instance;
   final ValueNotifier<DmCallStatus> callStatus =
       ValueNotifier<DmCallStatus>(DmCallStatus.idle);
   final ValueNotifier<String?> callStatusMessage =
@@ -152,6 +156,7 @@ class DmCallService {
 
   void _initializeActiveCallSession(DmCallSession session) {
     _stopIncomingRingtone();
+    _dismissIncomingCallNotification(session.callId);
     activeSession.value = session;
     _applyStatusFromSession(session);
     _activeCallSubscription?.cancel();
@@ -213,6 +218,10 @@ class DmCallService {
       _setCallStatus(DmCallStatus.ended);
     }
     _stopIncomingRingtone();
+    final session = activeSession.value;
+    if (session != null) {
+      _dismissIncomingCallNotification(session.callId);
+    }
     unawaited(_agoraClient.leaveChannel());
     _resetAfterCallEnd();
   }
@@ -231,14 +240,26 @@ class DmCallService {
   }
 
   void _startIncomingRingtone(String callId) {
-    if (_ringtoneCallId == callId && _ringtoneTimer != null) {
-      return;
-    }
     if (activeSession.value != null) {
       return;
     }
-    _stopIncomingRingtone();
+    if (_ringtoneCallId != callId && _ringtoneTimer != null) {
+      _ringtoneTimer?.cancel();
+      _ringtoneTimer = null;
+    }
     _ringtoneCallId = callId;
+    final AppLifecycleState? lifecycleState =
+        WidgetsBinding.instance.lifecycleState;
+    final bool shouldPlaySound = lifecycleState == null ||
+        lifecycleState == AppLifecycleState.resumed;
+    if (!shouldPlaySound) {
+      _ringtoneTimer?.cancel();
+      _ringtoneTimer = null;
+      return;
+    }
+    if (_ringtoneTimer != null) {
+      return;
+    }
     unawaited(SystemSound.play(SystemSoundType.alert));
     _ringtoneTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       unawaited(SystemSound.play(SystemSoundType.alert));
@@ -249,6 +270,50 @@ class DmCallService {
     _ringtoneTimer?.cancel();
     _ringtoneTimer = null;
     _ringtoneCallId = null;
+  }
+
+  void _dismissIncomingCallNotification(String callId) {
+    _activeNotificationCallIds.remove(callId);
+    unawaited(_notificationService.cancelIncomingCallNotification(callId));
+  }
+
+  void _showIncomingCallNotification(DmCallSession session) {
+    if (_activeNotificationCallIds.contains(session.callId)) {
+      return;
+    }
+    final AppLifecycleState? lifecycleState =
+        WidgetsBinding.instance.lifecycleState;
+    final bool shouldPlaySound = lifecycleState == null ||
+        lifecycleState != AppLifecycleState.resumed;
+    final String callerName = session.caller?.displayName ??
+        session.otherParticipant?.displayName ??
+        'Incoming call';
+    _activeNotificationCallIds.add(session.callId);
+    unawaited(
+      _notificationService.showIncomingCallNotification(
+        callId: session.callId,
+        callerName: callerName,
+        isVideo: session.type == DmCallType.video,
+        playSound: shouldPlaySound,
+      ),
+    );
+  }
+
+  /// Updates ringtone playback according to the surrounding app lifecycle.
+  void handleAppLifecycleChange(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final String? callId = _ringtoneCallId;
+      if (callId != null && _ringtoneTimer == null) {
+        _startIncomingRingtone(callId);
+      }
+      return;
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _ringtoneTimer?.cancel();
+      _ringtoneTimer = null;
+    }
   }
 
   void minimizeCallUI() {
@@ -671,8 +736,54 @@ class DmCallService {
     _incomingCallsSubscription = null;
     _handledIncomingCallIds.clear();
     _activeCallRouteIds.clear();
+    _activeNotificationCallIds.clear();
     _listeningUid = null;
     _stopIncomingRingtone();
+    unawaited(_notificationService.cancelAllCallNotifications());
+  }
+
+  /// Navigates to the relevant call UI when a system notification is tapped.
+  Future<void> handleCallNotificationTap(String callId) async {
+    _log('Handling call notification tap for $callId');
+    try {
+      final active = activeSession.value;
+      if (active != null && active.callId == callId) {
+        await reopenActiveCallUI();
+        return;
+      }
+      final snapshot = await _firestore.collection('calls').doc(callId).get();
+      final data = snapshot.data();
+      if (data == null) {
+        _dismissIncomingCallNotification(callId);
+        return;
+      }
+      final status = (data['status'] as String?) ?? 'ringing';
+      final endedAt = data['endedAt'];
+      if (endedAt != null || status == 'ended') {
+        _dismissIncomingCallNotification(callId);
+        return;
+      }
+      final session = _sessionFromData(callId, data);
+      if (session == null) {
+        _dismissIncomingCallNotification(callId);
+        return;
+      }
+      _handledIncomingCallIds.add(callId);
+      _dismissIncomingCallNotification(callId);
+      NavigatorState? navigator = _navigatorKey?.currentState;
+      if (navigator == null || !navigator.mounted) {
+        navigator = await waitForAuthenticatedNavigator();
+        if (!identical(_navigatorKey, authenticatedNavigatorKey)) {
+          _navigatorKey = authenticatedNavigatorKey;
+        }
+      }
+      await _pushCallPage(navigator, session);
+    } catch (error, stack) {
+      _log('Failed to handle call notification tap for $callId: $error');
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    }
   }
 
   void _handleIncomingSnapshot(
@@ -692,6 +803,7 @@ class DmCallService {
         _log('Call $callId removed from ringing snapshot');
         _handledIncomingCallIds.remove(callId);
         _activeCallRouteIds.remove(callId);
+        _dismissIncomingCallNotification(callId);
         if (_ringtoneCallId == callId) {
           _stopIncomingRingtone();
         }
@@ -707,6 +819,7 @@ class DmCallService {
       if (endedAt != null) {
         _log('Ignoring $callId because endedAt=$endedAt');
         _handledIncomingCallIds.remove(callId);
+        _dismissIncomingCallNotification(callId);
         if (_ringtoneCallId == callId) {
           _stopIncomingRingtone();
         }
@@ -715,6 +828,7 @@ class DmCallService {
       if (status != 'ringing') {
         _log('Ignoring $callId with status=$status');
         _handledIncomingCallIds.remove(callId);
+        _dismissIncomingCallNotification(callId);
         if (_ringtoneCallId == callId) {
           _stopIncomingRingtone();
         }
@@ -760,6 +874,7 @@ class DmCallService {
         continue;
       }
       _handledIncomingCallIds.add(callId);
+      _showIncomingCallNotification(session);
       _startIncomingRingtone(callId);
       _presentIncomingCall(session);
     }
@@ -838,6 +953,7 @@ class DmCallService {
     if (uid == null) {
       throw StateError('User must be signed in to answer calls');
     }
+    _dismissIncomingCallNotification(call.callId);
     final localAgoraUid = _agoraClient.agoraUidForUser(uid);
     if (call.channelId.isEmpty) {
       throw StateError('Call channelId is missing');
@@ -908,6 +1024,7 @@ class DmCallService {
       throw StateError('User must be signed in to decline calls');
     }
     _stopIncomingRingtone();
+    _dismissIncomingCallNotification(call.callId);
     final callRef = _firestore.collection('calls').doc(call.callId);
     await callRef.update(<String, dynamic>{
       'participants.$uid.state': 'ended',
@@ -932,6 +1049,7 @@ class DmCallService {
   }) async {
     final uid = _auth.currentUser?.uid;
     _stopIncomingRingtone();
+    _dismissIncomingCallNotification(session.callId);
     final updates = <String, dynamic>{
       'ringingTargets': <String>[],
     };
