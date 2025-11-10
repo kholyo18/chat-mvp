@@ -1776,10 +1776,11 @@ class _GradientSliderTrackShape extends SliderTrackShape {
     required RenderBox parentBox,
     required SliderThemeData sliderTheme,
     required Animation<double> enableAnimation,
-    required TextDirection textDirection,
     required Offset thumbCenter,
-    bool isDiscrete = false,
+    Offset? secondaryOffset,
     bool isEnabled = false,
+    bool isDiscrete = false,
+    required TextDirection textDirection,
   }) {
     final Rect trackRect = _baseTrackShape.getPreferredRect(
       parentBox: parentBox,
@@ -1789,8 +1790,8 @@ class _GradientSliderTrackShape extends SliderTrackShape {
       isDiscrete: isDiscrete,
     );
 
-    final double trackHeight = sliderTheme.trackHeight ?? 4.0;
-    final Radius trackRadius = Radius.circular(trackHeight / 2);
+    final double trackRadiusValue = trackRect.height / 2;
+    final Radius trackRadius = Radius.circular(trackRadiusValue);
     final RRect trackRRect = RRect.fromRectAndRadius(trackRect, trackRadius);
 
     final Canvas canvas = context.canvas;
@@ -1798,45 +1799,66 @@ class _GradientSliderTrackShape extends SliderTrackShape {
       ..color = sliderTheme.inactiveTrackColor ?? Colors.grey.shade300;
     canvas.drawRRect(trackRRect, inactivePaint);
 
-    final bool isLtr = textDirection == TextDirection.ltr;
     final double clampedThumb = thumbCenter.dx.clamp(
       trackRect.left,
       trackRect.right,
     );
-    final double activeLeft = isLtr ? trackRect.left : clampedThumb;
-    final double activeRight = isLtr ? clampedThumb : trackRect.right;
-
-    if (activeRight <= activeLeft) {
+    if (clampedThumb <= trackRect.left) {
       return;
     }
 
+    final double? rawSecondary = secondaryOffset?.dx;
+    if (rawSecondary != null) {
+      final double clampedSecondary = rawSecondary.clamp(
+        trackRect.left,
+        trackRect.right,
+      );
+      final double secondaryStart = math.min(clampedThumb, clampedSecondary);
+      final double secondaryEnd = math.max(clampedThumb, clampedSecondary);
+      if (secondaryEnd > secondaryStart) {
+        final Rect secondaryRect = Rect.fromLTRB(
+          secondaryStart,
+          trackRect.top,
+          secondaryEnd,
+          trackRect.bottom,
+        );
+        final Paint secondaryPaint = Paint()
+          ..color = (sliderTheme.activeTrackColor ??
+                  sliderTheme.thumbColor ??
+                  backgroundColor)
+              .withOpacity(0.25);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(secondaryRect, trackRadius),
+          secondaryPaint,
+        );
+      }
+    }
+
     final Rect activeRect = Rect.fromLTRB(
-      activeLeft,
+      trackRect.left,
       trackRect.top,
-      activeRight,
+      clampedThumb,
       trackRect.bottom,
     );
     final RRect activeRRect = RRect.fromRectAndRadius(activeRect, trackRadius);
 
     final List<Color> gradientColors = gradient.colors;
-    final Color fallbackColor = sliderTheme.activeTrackColor ??
+    final Color activeBaseColor = sliderTheme.activeTrackColor ??
         sliderTheme.thumbColor ??
-        backgroundColor;
-    final Color baseActiveColor =
-        gradientColors.isNotEmpty ? gradientColors.last : fallbackColor;
+        (gradientColors.isNotEmpty ? gradientColors.last : backgroundColor);
     final Color lightColor =
-        Color.lerp(baseActiveColor, Colors.white, 0.4) ?? baseActiveColor;
-    final Color strongColor =
-        Color.lerp(baseActiveColor, Colors.black, 0.1) ?? baseActiveColor;
+        Color.lerp(activeBaseColor, Colors.white, 0.45) ?? activeBaseColor;
+    final Color strongColor = gradientColors.isNotEmpty
+        ? gradientColors.last
+        : activeBaseColor;
 
-    final Gradient activeGradient = LinearGradient(
-      begin: isLtr ? Alignment.centerLeft : Alignment.centerRight,
-      end: isLtr ? Alignment.centerRight : Alignment.centerLeft,
-      colors: [lightColor, strongColor],
-    );
-
+    final bool isRtl = textDirection == TextDirection.rtl;
     final Paint activePaint = Paint()
-      ..shader = activeGradient.createShader(activeRect);
+      ..shader = LinearGradient(
+        begin: isRtl ? Alignment.centerRight : Alignment.centerLeft,
+        end: isRtl ? Alignment.centerLeft : Alignment.centerRight,
+        colors: <Color>[lightColor, strongColor],
+      ).createShader(activeRect);
 
     canvas.drawRRect(activeRRect, activePaint);
   }
