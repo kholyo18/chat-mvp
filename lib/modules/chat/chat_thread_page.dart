@@ -755,10 +755,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
       }
     }
 
-    final visualOffset = downward.clamp(0.0, _replyVisualLimit);
+    final double visualOffset = downward.clamp(0.0, _replyVisualLimit).toDouble();
     if (visualOffset != _dragVisualOffset) {
       setState(() {
-        _dragVisualOffset = visualOffset;
+        _dragVisualOffset = visualOffset.toDouble();
       });
     }
   }
@@ -1025,7 +1025,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
   }
 
   Color _statusColorForDeliveryState(ThemeData theme, _DeliveryState state) {
-    final onBubble = isMine
+    final onBubble = widget.isMine
         ? theme.colorScheme.onPrimary
         : theme.colorScheme.onSurfaceVariant;
     switch (state) {
