@@ -86,10 +86,18 @@ class UserOpinionService {
       final now = DateTime.now().toUtc();
       final toSave = opinion.copyWith(updatedAt: now);
       await _opinionsCollection(ownerUid).doc(targetUid).set(toSave.toMap());
+      await _maybeSendOpinionNotification(toSave);
     } catch (err, stack) {
       debugPrint('Failed to save user opinion: $err');
       FlutterError.reportError(FlutterErrorDetails(exception: err, stack: stack));
       throw UserOpinionException('failed-to-save');
     }
+  }
+
+  Future<void> _maybeSendOpinionNotification(UserOpinion opinion) async {
+    if (!opinion.notifyOtherUser) {
+      return;
+    }
+    // TODO: implement actual notification (push or in-app) using the existing notification system.
   }
 }
