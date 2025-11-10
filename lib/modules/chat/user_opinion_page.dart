@@ -1773,50 +1773,43 @@ class _GradientSliderTrackShape extends SliderTrackShape {
   void paint(
     PaintingContext context,
     Offset offset, {
-      required RenderBox parentBox,
-      required SliderThemeData sliderTheme,
-      required Animation<double> enableAnimation,
-      required TextDirection textDirection,
-      required Offset thumbCenter,
-      bool isDiscrete = false,
-      bool isEnabled = false,
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    bool isDiscrete = false,
+    bool isEnabled = false,
   }) {
-    assert(() {
-      textDirection.toString();
-      return true;
-    }());
-    final Canvas canvas = context.canvas;
-    final double trackHeight = sliderTheme.trackHeight ?? 4.0;
-    final double trackLeft = offset.dx;
-    final double trackTop = thumbCenter.dy - trackHeight / 2;
-    final Rect trackRect = Rect.fromLTWH(
-      trackLeft,
-      trackTop,
-      parentBox.size.width,
-      trackHeight,
+    final Rect trackRect = _baseTrackShape.getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
     );
 
+    final double trackHeight = sliderTheme.trackHeight ?? 4.0;
     final Radius trackRadius = Radius.circular(trackHeight / 2);
     final RRect trackRRect = RRect.fromRectAndRadius(trackRect, trackRadius);
 
-    final Color resolvedInactive =
-        (sliderTheme.inactiveTrackColor != null &&
-                sliderTheme.inactiveTrackColor!.alpha != 0)
-            ? sliderTheme.inactiveTrackColor!
-            : backgroundColor;
-    final Paint inactivePaint = Paint()..color = resolvedInactive;
+    final Canvas canvas = context.canvas;
+    final Paint inactivePaint = Paint()
+      ..color = sliderTheme.inactiveTrackColor ?? Colors.grey.shade300;
     canvas.drawRRect(trackRRect, inactivePaint);
 
-    final bool isLtr = textDirection != TextDirection.rtl;
-    final double activeStart = isLtr ? trackRect.left : thumbCenter.dx;
-    final double activeEnd = isLtr ? thumbCenter.dx : trackRect.right;
-    final double activeWidth = (activeEnd - activeStart).abs();
-    if (activeWidth <= 0) {
+    final bool isLtr = textDirection == TextDirection.ltr;
+    final double clampedThumb = thumbCenter.dx.clamp(
+      trackRect.left,
+      trackRect.right,
+    );
+    final double activeLeft = isLtr ? trackRect.left : clampedThumb;
+    final double activeRight = isLtr ? clampedThumb : trackRect.right;
+
+    if (activeRight <= activeLeft) {
       return;
     }
 
-    final double activeLeft = math.min(activeStart, activeEnd);
-    final double activeRight = math.max(activeStart, activeEnd);
     final Rect activeRect = Rect.fromLTRB(
       activeLeft,
       trackRect.top,
@@ -1826,33 +1819,26 @@ class _GradientSliderTrackShape extends SliderTrackShape {
     final RRect activeRRect = RRect.fromRectAndRadius(activeRect, trackRadius);
 
     final List<Color> gradientColors = gradient.colors;
-    final double activation = enableAnimation.value.clamp(0.0, 1.0);
-    final Color fallbackActiveColor = sliderTheme.activeTrackColor ??
+    final Color fallbackColor = sliderTheme.activeTrackColor ??
         sliderTheme.thumbColor ??
-        (gradientColors.isNotEmpty ? gradientColors.last : backgroundColor);
-    final Color gradientStart =
-        gradientColors.isNotEmpty ? gradientColors.first : fallbackActiveColor;
-    final Color gradientEnd =
-        gradientColors.isNotEmpty ? gradientColors.last : fallbackActiveColor;
-    final Color animatedEnd =
-        Color.lerp(gradientStart, gradientEnd, activation) ?? gradientEnd;
-    final Color startColor =
-        Color.lerp(gradientStart, Colors.white, 0.35) ?? gradientStart;
-    final Color endColor =
-        Color.lerp(animatedEnd, Colors.black.withOpacity(0.05), 0.1) ??
-            animatedEnd;
-    final LinearGradient activeGradient = LinearGradient(
-      colors: isLtr ? [startColor, endColor] : [endColor, startColor],
+        backgroundColor;
+    final Color baseActiveColor =
+        gradientColors.isNotEmpty ? gradientColors.last : fallbackColor;
+    final Color lightColor =
+        Color.lerp(baseActiveColor, Colors.white, 0.4) ?? baseActiveColor;
+    final Color strongColor =
+        Color.lerp(baseActiveColor, Colors.black, 0.1) ?? baseActiveColor;
+
+    final Gradient activeGradient = LinearGradient(
       begin: isLtr ? Alignment.centerLeft : Alignment.centerRight,
       end: isLtr ? Alignment.centerRight : Alignment.centerLeft,
+      colors: [lightColor, strongColor],
     );
+
     final Paint activePaint = Paint()
       ..shader = activeGradient.createShader(activeRect);
 
-    canvas.save();
-    canvas.clipRRect(activeRRect);
-    canvas.drawRect(activeRect, activePaint);
-    canvas.restore();
+    canvas.drawRRect(activeRRect, activePaint);
   }
 }
 
