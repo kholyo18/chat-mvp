@@ -400,7 +400,7 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                 controller.otherUserProfile?.displayName ?? 'المستخدم';
             final locale = Localizations.maybeLocaleOf(context)?.languageCode;
             final isArabic =
-                locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
+                locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
             final opinionLabel = isArabic
                 ? 'نظرتك عن $displayName'
                 : 'Your view about $displayName';
