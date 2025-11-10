@@ -1776,57 +1776,75 @@ class _GradientSliderTrackShape extends SliderTrackShape {
     required RenderBox parentBox,
     required SliderThemeData sliderTheme,
     required Animation<double> enableAnimation,
+    required TextDirection textDirection,
     required Offset thumbCenter,
     bool isDiscrete = false,
     bool isEnabled = false,
-    required TextDirection textDirection,
   }) {
-    final Rect trackRect = getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
+    assert(() {
+      textDirection.toString();
+      return true;
+    }());
     final Canvas canvas = context.canvas;
-    final double trackHeight = sliderTheme.trackHeight ?? 2;
+    final double trackHeight = sliderTheme.trackHeight ?? 4;
+    final double trackLeft = offset.dx;
+    final double trackTop = thumbCenter.dy - trackHeight / 2;
+    final Rect trackRect = Rect.fromLTWH(
+      trackLeft,
+      trackTop,
+      parentBox.size.width,
+      trackHeight,
+    );
+
     final Radius trackRadius = Radius.circular(trackHeight / 2);
     final RRect trackRRect = RRect.fromRectAndRadius(trackRect, trackRadius);
 
-    final Paint inactivePaint = Paint()..color = backgroundColor;
+    final Color resolvedInactive =
+        (sliderTheme.inactiveTrackColor != null &&
+                sliderTheme.inactiveTrackColor!.alpha != 0)
+            ? sliderTheme.inactiveTrackColor!
+            : backgroundColor;
+    final Paint inactivePaint = Paint()..color = resolvedInactive;
     canvas.drawRRect(trackRRect, inactivePaint);
 
-    double activeWidth;
-    if (textDirection == TextDirection.rtl) {
-      activeWidth = trackRect.right - thumbCenter.dx;
-    } else {
-      activeWidth = thumbCenter.dx - trackRect.left;
-    }
-    activeWidth = activeWidth.clamp(0.0, trackRect.width);
-
+    final double activeWidth =
+        (thumbCenter.dx - trackRect.left).clamp(0.0, trackRect.width);
     if (activeWidth <= 0) {
       return;
     }
 
-    Rect activeRect;
-    if (textDirection == TextDirection.rtl) {
-      activeRect = Rect.fromLTWH(
-        trackRect.right - activeWidth,
-        trackRect.top,
-        activeWidth,
-        trackRect.height,
-      );
-    } else {
-      activeRect = Rect.fromLTWH(
-        trackRect.left,
-        trackRect.top,
-        activeWidth,
-        trackRect.height,
-      );
-    }
+    final Rect activeRect = Rect.fromLTWH(
+      trackRect.left,
+      trackRect.top,
+      activeWidth,
+      trackRect.height,
+    );
     final RRect activeRRect = RRect.fromRectAndRadius(activeRect, trackRadius);
+
+    final List<Color> gradientColors = gradient.colors;
+    final double activation = enableAnimation.value;
+    final Color baseActiveColor = sliderTheme.activeTrackColor ??
+        sliderTheme.thumbColor ??
+        (gradientColors.isNotEmpty ? gradientColors.last : backgroundColor);
+    final Color startColor = Color.lerp(
+          gradientColors.isNotEmpty ? gradientColors.first : baseActiveColor,
+          Colors.white,
+          0.35,
+        ) ??
+        baseActiveColor;
+    final Color activeColor = Color.lerp(
+          baseActiveColor.withOpacity(baseActiveColor.opacity * 0.75),
+          baseActiveColor,
+          activation,
+        ) ??
+        baseActiveColor;
+    final LinearGradient activeGradient = LinearGradient(
+      colors: [startColor, activeColor],
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+    );
     final Paint activePaint = Paint()
-      ..shader = gradient.createShader(trackRect);
+      ..shader = activeGradient.createShader(activeRect);
 
     canvas.save();
     canvas.clipRRect(activeRRect);
