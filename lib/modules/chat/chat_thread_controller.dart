@@ -227,11 +227,15 @@ class ChatThreadController extends ChangeNotifier {
         .collection('dm_threads')
         .doc(threadId)
         .collection('messages')
-        .orderBy('createdAt')
+        .orderBy('createdAt', descending: true)
         .limit(500)
         .snapshots()
         .map((snapshot) {
-      final messages = snapshot.docs.map(ChatMessage.fromSnapshot).toList();
+      final messages = snapshot.docs.map(ChatMessage.fromSnapshot).toList()
+        ..sort(
+          (a, b) => (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)),
+        );
       _messageCache
         ..clear()
         ..addEntries(messages.map((m) => MapEntry(m.id, m)));
