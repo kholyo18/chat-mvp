@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:characters/characters.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ import '../translator/translator_service.dart';
 import 'chat_message.dart';
 import 'chat_thread_controller.dart';
 import 'user_opinion_page.dart';
+import 'models/typing_preview.dart';
 import 'services/typing_preview_service.dart';
 
 class ChatThreadPage extends StatefulWidget {
@@ -1196,13 +1198,79 @@ class _TypingBanner extends StatelessWidget {
         if (!controller.isOtherTyping) {
           return const SizedBox.shrink();
         }
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          color: Theme.of(context).colorScheme.surfaceVariant,
-          child: const Text('يكتب الآن…', style: TextStyle(fontSize: 12)),
+        final otherUid = controller.otherUid;
+        if (otherUid == null || otherUid.isEmpty) {
+          return _TypingBannerText(
+            text: _fallbackTypingLabel(context),
+          );
+        }
+        final previewService = context.read<TypingPreviewService>();
+        return StreamBuilder<TypingPreview?>(
+          key: ValueKey<String>('preview-${controller.threadId}-$otherUid'),
+          stream: previewService.watchTypingPreview(
+            conversationId: controller.threadId,
+            otherUserId: otherUid,
+          ),
+          builder: (context, snapshot) {
+            final preview = snapshot.data;
+            final previewText = preview?.text.trim();
+            final label = (previewText != null && previewText.isNotEmpty)
+                ? _formatPreviewLabel(context, previewText)
+                : _fallbackTypingLabel(context);
+            return _TypingBannerText(text: label);
+          },
         );
       },
+    );
+  }
+
+  static String _fallbackTypingLabel(BuildContext context) {
+    final locale = Localizations.maybeLocaleOf(context)?.languageCode;
+    final isArabic =
+        locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+    return isArabic ? 'يكتب الآن…' : 'Typing…';
+  }
+
+  static String _formatPreviewLabel(BuildContext context, String text) {
+    final cleaned = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final truncated = cleaned.characters.take(40).toString();
+    final locale = Localizations.maybeLocaleOf(context)?.languageCode;
+    final isArabic =
+        locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+    final prefix = isArabic ? 'يكتب الآن: ' : 'Typing: ';
+    return '$prefix$truncated';
+  }
+}
+
+class _TypingBannerText extends StatelessWidget {
+  const _TypingBannerText({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.onSurfaceVariant;
+    final style = theme.textTheme.bodySmall?.copyWith(color: color);
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: child,
+      ),
+      child: Container(
+        key: ValueKey<String>(text),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        color: theme.colorScheme.surfaceVariant,
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.start,
+          style: style,
+        ),
+      ),
     );
   }
 }
