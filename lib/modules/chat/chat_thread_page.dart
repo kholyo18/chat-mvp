@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
+import 'dart:ui' show TextDirection;
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -81,7 +81,7 @@ class _ChatThreadView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const ui.TextDirection threadDirection = ui.TextDirection.rtl;
+    const TextDirection threadDirection = TextDirection.rtl;
     return Directionality(
       textDirection: threadDirection,
       child: Scaffold(
@@ -399,7 +399,7 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
             final locale = Localizations.maybeLocaleOf(context)?.languageCode;
             final isArabic =
                 locale == 'ar' ||
-                Directionality.of(context) == ui.TextDirection.rtl;
+                Directionality.of(context) == TextDirection.rtl;
             final opinionLabel = isArabic
                 ? 'نظرتك عن $displayName'
                 : 'Your view about $displayName';
@@ -904,7 +904,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final reply = controller.messageById(message.replyToMessageId);
     final forwarded = message.forwardFromThreadId != null;
     final canSwipeDelete = _canAttemptSwipeDelete(message);
-    final dir = Directionality.of(context);
+    final textDirection = Directionality.of(context);
 
     final bubble = Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -1031,7 +1031,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
             visible: _swipeDragOffset != 0,
             isActive: _isInDeleteZone,
             borderRadius: borderRadius,
-            alignment: _swipeBackgroundAlignment(dir),
+            alignment: _swipeBackgroundAlignment(textDirection),
           ),
         animatedBubble,
       ],
@@ -1054,14 +1054,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
       child: bubbleStack,
     );
 
-    final dir = Directionality.of(context);
     final mainAxisAlignment = () {
       if (isMine) {
-        return dir == TextDirection.ltr
+        return textDirection == TextDirection.ltr
             ? MainAxisAlignment.end
             : MainAxisAlignment.start;
       }
-      return dir == TextDirection.ltr
+      return textDirection == TextDirection.ltr
           ? MainAxisAlignment.start
           : MainAxisAlignment.end;
     }();
@@ -1086,10 +1085,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
     return widget.isMine && !message.deletedForEveryone;
   }
 
-  AlignmentGeometry _swipeBackgroundAlignment(ui.TextDirection direction) {
+  AlignmentGeometry _swipeBackgroundAlignment(TextDirection direction) {
     // We currently require a swipe towards the center of the conversation,
     // which translates to a leftward drag for outgoing messages.
-    return direction == ui.TextDirection.rtl
+    return direction == TextDirection.rtl
         ? AlignmentDirectional.centerStart
         : AlignmentDirectional.centerEnd;
   }
@@ -1649,7 +1648,7 @@ class _TypingBanner extends StatelessWidget {
   static String _fallbackTypingLabel(BuildContext context) {
     final locale = Localizations.maybeLocaleOf(context)?.languageCode;
     final isArabic =
-        locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+        locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
     return isArabic ? 'يكتب الآن…' : 'Typing…';
   }
 
@@ -1658,7 +1657,7 @@ class _TypingBanner extends StatelessWidget {
     final truncated = cleaned.characters.take(40).toString();
     final locale = Localizations.maybeLocaleOf(context)?.languageCode;
     final isArabic =
-        locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+        locale == 'ar' || Directionality.of(context) == TextDirection.rtl;
     final prefix = isArabic ? 'يكتب الآن: ' : 'Typing: ';
     return '$prefix$truncated';
   }
