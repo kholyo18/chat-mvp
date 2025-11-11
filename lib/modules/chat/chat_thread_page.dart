@@ -913,16 +913,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final canSwipeDelete = _canAttemptSwipeDelete(message);
     final TextDirection textDirection = Directionality.of(context);
 
-    final bubbleMargin = isMine
+    final bubblePadding = isMine
         ? const EdgeInsets.only(left: 64, right: 8, top: 4, bottom: 4)
         : const EdgeInsets.only(left: 8, right: 64, top: 4, bottom: 4);
 
     final bubble = Container(
-      margin: bubbleMargin,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      constraints: BoxConstraints(
-        maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360),
-      ),
       decoration: BoxDecoration(
         color: bubbleColor,
         borderRadius: borderRadius,
@@ -1069,7 +1065,15 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     return Align(
       alignment: alignment,
-      child: bubbleGesture,
+      child: Padding(
+        padding: bubblePadding,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360),
+          ),
+          child: bubbleGesture,
+        ),
+      ),
     );
   }
 
