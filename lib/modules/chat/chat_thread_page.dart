@@ -736,8 +736,24 @@ class _MessageBubbleState extends State<_MessageBubble> {
   double _dragVisualOffset = 0;
   bool _willReply = false;
   bool _hapticPlayed = false;
+  double _swipeDragOffset = 0;
+  bool _isInDeleteZone = false;
+  bool _isHorizontalDragActive = false;
+  bool _pendingPermanentRemoval = false;
+
+  @override
+  void didUpdateWidget(covariant _MessageBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.id != widget.message.id) {
+      _swipeDragOffset = 0;
+      _isInDeleteZone = false;
+      _isHorizontalDragActive = false;
+      _pendingPermanentRemoval = false;
+    }
+  }
 
   void _handleLongPressStart(LongPressStartDetails details) {
+    _resetSwipeState();
     _dragVisualOffset = 0;
     _willReply = false;
     _hapticPlayed = false;
@@ -887,110 +903,319 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final reply = controller.messageById(message.replyToMessageId);
     final forwarded = message.forwardFromThreadId != null;
+    final canSwipeDelete = _canAttemptSwipeDelete(message);
+    final textDirection = Directionality.of(context);
+
+    final bubble = Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      constraints: BoxConstraints(
+        maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360),
+      ),
+      decoration: BoxDecoration(
+        color: bubbleColor,
+        borderRadius: borderRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (forwarded)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'معاد توجيهها',
+                style: TextStyle(
+                  color: textColor.withOpacity(0.8),
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          if (reply != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: bubbleColor.withOpacity(isMine ? 0.3 : 0.6),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _replyPreview(reply),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: textColor.withOpacity(0.85),
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          content,
+          if (translated != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                translated,
+                style: TextStyle(
+                  color: textColor.withOpacity(0.85),
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                time,
+                style: TextStyle(
+                  color: textColor.withOpacity(0.8),
+                  fontSize: 11,
+                ),
+              ),
+              if (isMine)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 4),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: Icon(
+                      statusIcon,
+                      key: ValueKey<_DeliveryState>(deliveryState),
+                      size: 16,
+                      color: statusColor,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final translatedBubble = Transform.translate(
+      offset: Offset(
+        canSwipeDelete ? _swipeDragOffset : 0,
+        _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0,
+      ),
+      child: bubble,
+    );
+
+    final animatedBubble = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      transitionBuilder: (child, animation) {
+        return SizeTransition(
+          sizeFactor: animation,
+          axisAlignment: 1.0,
+          child: FadeTransition(
+            opacity: animation,
+            child: child,
+          ),
+        );
+      },
+      child: _pendingPermanentRemoval
+          ? const SizedBox.shrink(key: ValueKey('removed-bubble'))
+          : KeyedSubtree(
+              key: ValueKey<String>('bubble-${message.id}'),
+              child: translatedBubble,
+            ),
+    );
+
+    final bubbleStack = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        if (canSwipeDelete)
+          _SwipeDeleteBackground(
+            visible: _swipeDragOffset != 0,
+            isActive: _isInDeleteZone,
+            borderRadius: borderRadius,
+            alignment: _swipeBackgroundAlignment(textDirection),
+          ),
+        animatedBubble,
+      ],
+    );
 
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
         onDoubleTap: () => _showMessageActions(context, message, isMine),
         onLongPressStart: _handleLongPressStart,
         onLongPressMoveUpdate: _handleLongPressMoveUpdate,
         onLongPressEnd: _handleLongPressEnd,
         onLongPressCancel: _handleLongPressCancel,
-        child: Transform.translate(
-          offset: Offset(
-            0,
-            _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0,
-          ),
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            constraints: BoxConstraints(
-              maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360),
-            ),
-            decoration: BoxDecoration(
-              color: bubbleColor,
-              borderRadius: borderRadius,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (forwarded)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      'معاد توجيهها',
-                      style: TextStyle(
-                        color: textColor.withOpacity(0.8),
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                if (reply != null)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: bubbleColor.withOpacity(isMine ? 0.3 : 0.6),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _replyPreview(reply),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: textColor.withOpacity(0.85),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                content,
-                if (translated != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      translated,
-                      style: TextStyle(
-                        color: textColor.withOpacity(0.85),
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      time,
-                      style: TextStyle(
-                        color: textColor.withOpacity(0.8),
-                        fontSize: 11,
-                      ),
-                    ),
-                    if (isMine)
-                      Padding(
-                        padding: const EdgeInsetsDirectional.only(start: 4),
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 180),
-                          child: Icon(
-                            statusIcon,
-                            key: ValueKey<_DeliveryState>(deliveryState),
-                            size: 16,
-                            color: statusColor,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
+        onHorizontalDragStart:
+            canSwipeDelete ? _handleHorizontalDragStart : null,
+        onHorizontalDragUpdate:
+            canSwipeDelete ? _handleHorizontalDragUpdate : null,
+        onHorizontalDragEnd: canSwipeDelete ? _handleHorizontalDragEnd : null,
+        onHorizontalDragCancel:
+            canSwipeDelete ? _handleHorizontalDragCancel : null,
+        child: bubbleStack,
       ),
     );
+  }
+
+  bool _canAttemptSwipeDelete(ChatMessage message) {
+    return widget.isMine && !message.deletedForEveryone;
+  }
+
+  Alignment _swipeBackgroundAlignment(TextDirection direction) {
+    // We currently require a swipe towards the center of the conversation,
+    // which translates to a leftward drag for outgoing messages.
+    return Alignment.centerRight;
+  }
+
+  void _handleHorizontalDragStart(DragStartDetails details) {
+    if (!_canAttemptSwipeDelete(widget.message)) {
+      return;
+    }
+    _resetSwipeState();
+    _isHorizontalDragActive = true;
+  }
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+    if (!_canAttemptSwipeDelete(widget.message)) {
+      return;
+    }
+    final delta = details.primaryDelta ?? 0;
+    if (delta == 0 && _isHorizontalDragActive) {
+      return;
+    }
+    _isHorizontalDragActive = true;
+    final nextOffset = (_swipeDragOffset + delta).clamp(-_maxSwipeExtent(), 0.0);
+    final effective = _effectiveSwipeExtent(nextOffset);
+    final threshold = _deleteThresholdPx();
+    final inDeleteZone = effective >= threshold;
+    if (_swipeDragOffset != nextOffset || _isInDeleteZone != inDeleteZone) {
+      setState(() {
+        _swipeDragOffset = nextOffset;
+        _isInDeleteZone = inDeleteZone;
+      });
+    }
+  }
+
+  Future<void> _handleHorizontalDragEnd(DragEndDetails details) async {
+    if (!_canAttemptSwipeDelete(widget.message)) {
+      return;
+    }
+    final meetsThreshold =
+        _isInDeleteZone && _effectiveSwipeExtent(_swipeDragOffset) >= _deleteThresholdPx();
+    if (meetsThreshold && !_canUseSwipeDelete()) {
+      _showPremiumOnlySnack();
+      _resetSwipeState();
+      return;
+    }
+    if (meetsThreshold) {
+      final confirmed = await _showPermanentDeleteConfirmation();
+      if (!mounted) {
+        return;
+      }
+      if (confirmed) {
+        setState(() {
+          _pendingPermanentRemoval = true;
+          _swipeDragOffset = 0;
+          _isInDeleteZone = false;
+          _isHorizontalDragActive = false;
+        });
+        await _performPermanentDelete();
+      } else {
+        _resetSwipeState();
+      }
+      return;
+    }
+    _resetSwipeState();
+  }
+
+  void _handleHorizontalDragCancel() {
+    if (!_canAttemptSwipeDelete(widget.message)) {
+      return;
+    }
+    _resetSwipeState();
+  }
+
+  void _resetSwipeState() {
+    if (!mounted) {
+      _swipeDragOffset = 0;
+      _isInDeleteZone = false;
+      _isHorizontalDragActive = false;
+      return;
+    }
+    if (_swipeDragOffset == 0 && !_isInDeleteZone && !_isHorizontalDragActive) {
+      return;
+    }
+    setState(() {
+      _swipeDragOffset = 0;
+      _isInDeleteZone = false;
+      _isHorizontalDragActive = false;
+    });
+  }
+
+  double _deleteThresholdPx() {
+    final availableWidth = math.min(MediaQuery.of(context).size.width * 0.8, 360.0);
+    return math.max(availableWidth * 0.28, 90);
+  }
+
+  double _maxSwipeExtent() {
+    return _deleteThresholdPx() + 72;
+  }
+
+  double _effectiveSwipeExtent(double offset) {
+    return offset < 0 ? -offset : offset;
+  }
+
+  bool _canUseSwipeDelete() {
+    final typingPreviewService = context.read<TypingPreviewService>();
+    return typingPreviewService.canUseSwipePermanentDelete;
+  }
+
+  void _showPremiumOnlySnack() {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      const SnackBar(
+        content: Text('ميزة الحذف النهائي متاحة للحسابات المميزة فقط 💎'),
+      ),
+    );
+  }
+
+  Future<bool> _showPermanentDeleteConfirmation() async {
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => const _PermanentDeleteConfirmationSheet(),
+    );
+    return result == true;
+  }
+
+  Future<void> _performPermanentDelete() async {
+    final controller = context.read<ChatThreadController>();
+    try {
+      await controller.deleteMessagePermanently(widget.message);
+    } catch (error, stack) {
+      if (kDebugMode) {
+        debugPrint('Failed to permanently delete message: $error');
+        debugPrintStack(stackTrace: stack);
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _pendingPermanentRemoval = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تعذر حذف الرسالة نهائيًا'),
+        ),
+      );
+    }
   }
 
   Duration? _readDuration(Map<String, dynamic>? metadata) {
@@ -1063,6 +1288,107 @@ class _MessageBubbleState extends State<_MessageBubble> {
       case _DeliveryState.none:
         return onBubble.withOpacity(0.6);
     }
+  }
+}
+
+class _SwipeDeleteBackground extends StatelessWidget {
+  const _SwipeDeleteBackground({
+    required this.visible,
+    required this.isActive,
+    required this.borderRadius,
+    required this.alignment,
+  });
+
+  final bool visible;
+  final bool isActive;
+  final BorderRadius borderRadius;
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.error;
+    final iconColor = theme.colorScheme.onError;
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: true,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          child: Align(
+            alignment: alignment,
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              decoration: BoxDecoration(
+                color: isActive ? color : color.withOpacity(0.85),
+                borderRadius: borderRadius,
+              ),
+              child: Icon(
+                Icons.delete_forever_rounded,
+                color: iconColor,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PermanentDeleteConfirmationSheet extends StatelessWidget {
+  const _PermanentDeleteConfirmationSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bodyColor = theme.colorScheme.onSurfaceVariant;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Delete this message permanently?',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'This action cannot be undone and will remove the message for everyone.',
+              style: theme.textTheme.bodyMedium?.copyWith(color: bodyColor),
+            ),
+            const SizedBox(height: 28),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: theme.colorScheme.error,
+                      foregroundColor: theme.colorScheme.onError,
+                    ),
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('Confirm'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
