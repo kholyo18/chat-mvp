@@ -15,6 +15,7 @@ import '../../models/user_profile.dart';
 import '../../services/translate_service.dart';
 import '../translator/translator_service.dart';
 import 'chat_message.dart';
+import 'services/chat_message_service.dart';
 
 class ChatPresenceState {
   const ChatPresenceState({
@@ -60,13 +61,15 @@ class ChatThreadController extends ChangeNotifier {
     ImagePicker? picker,
     AudioRecorder? recorder,
     TranslatorService? translatorService,
+    ChatMessageService? messageService,
   })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
         _storage = storage ?? FirebaseStorage.instance,
         _auth = auth ?? FirebaseAuth.instance,
         _realtimeDatabase = realtimeDatabase ?? rtdb.FirebaseDatabase.instance,
         _picker = picker ?? ImagePicker(),
         _recorder = recorder ?? AudioRecorder(),
-        _translatorService = translatorService ?? TranslatorService();
+        _translatorService = translatorService ?? TranslatorService(),
+        _chatMessageService = messageService ?? ChatMessageService();
 
   final String threadId;
   final cf.FirebaseFirestore _firestore;
@@ -76,6 +79,7 @@ class ChatThreadController extends ChangeNotifier {
   final ImagePicker _picker;
   final AudioRecorder _recorder;
   final TranslatorService _translatorService;
+  final ChatMessageService _chatMessageService;
   final TranslateService _manualTranslator = const TranslateService();
 
   final Map<String, String> _inlineTranslations = <String, String>{};
@@ -603,6 +607,36 @@ class ChatThreadController extends ChangeNotifier {
     await message.reference!.update(<String, Object?>{
       'deletedFor': cf.FieldValue.arrayUnion(<String>[me]),
     });
+  }
+
+  /// Permanently removes a message for all participants without leaving a
+  /// placeholder. This action is limited to the sender and premium users.
+  Future<void> deleteMessagePermanently(ChatMessage message) async {
+    final me = _currentUid;
+    if (me == null) {
+      return;
+    }
+    try {
+      await _chatMessageService.deleteMessagePermanently(
+        conversationId: threadId,
+        messageId: message.id,
+        currentUserId: me,
+      );
+      var shouldNotify = false;
+      if (_inlineTranslations.remove(message.id) != null) {
+        shouldNotify = true;
+      }
+      if (replyTo?.id == message.id) {
+        replyTo = null;
+        shouldNotify = true;
+      }
+      if (shouldNotify) {
+        notifyListeners();
+      }
+    } catch (error, stack) {
+      _reportError(error, stack);
+      rethrow;
+    }
   }
 
   Future<void> forwardMessage(ChatMessage message, String targetThreadId) async {

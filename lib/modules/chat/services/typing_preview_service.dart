@@ -31,12 +31,17 @@ class TypingPreviewService {
   String? _currentUid;
   bool _viewerHasPreviewAccess = false;
   bool _shareTypingPreview = false;
+  bool _canSwipeDelete = false;
 
   bool get _canSend => _shareTypingPreview;
   bool get _canView => _viewerHasPreviewAccess;
 
   bool get canSendPreview => _currentUid != null && _canSend;
   bool get canViewPreview => _canView;
+
+  /// Premium entitlements for features such as the swipe-to-delete action
+  /// reuse the same billing flags that gate typing previews.
+  bool get canUseSwipePermanentDelete => _canSwipeDelete;
 
   Future<void> initialize() async {
     await _handleAuth(_auth.currentUser);
@@ -77,6 +82,7 @@ class TypingPreviewService {
             final data = snapshot.data();
             if (data == null) {
               _updateViewerAccess(false);
+              _updateSwipeDeleteAccess(false);
               return;
             }
             // TODO(typing-preview): Replace VIP tier check with billing entitlements when available.
@@ -89,10 +95,14 @@ class TypingPreviewService {
             final isPremiumFlag = (data['isPremium'] as bool?) ?? false;
             final typingPreviewPremium =
                 (data['typingPreviewPremium'] as bool?) ?? false;
+            final ultraPass = (data['ultraPass'] as bool?) ?? false;
             final hasVipAccess = vipStatus.tier != 'none' && vipStatus.isActive;
             final hasPreviewAccess =
                 isPremiumFlag || typingPreviewPremium || hasVipAccess;
             _updateViewerAccess(hasPreviewAccess);
+            final canSwipeDelete =
+                isPremiumFlag || ultraPass || typingPreviewPremium || hasVipAccess;
+            _updateSwipeDeleteAccess(canSwipeDelete);
           },
           onError: (Object error, StackTrace stackTrace) {
             debugPrint('TypingPreviewService user listen error: $error');
@@ -150,6 +160,13 @@ class TypingPreviewService {
         unawaited(_clearRemotePreview(conversationId, uid));
       }
     }
+  }
+
+  void _updateSwipeDeleteAccess(bool value) {
+    if (_canSwipeDelete == value) {
+      return;
+    }
+    _canSwipeDelete = value;
   }
 
   Future<void> sendTypingPreview({
