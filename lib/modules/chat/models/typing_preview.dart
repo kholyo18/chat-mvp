@@ -8,7 +8,10 @@ DateTime? _parseTimestamp(dynamic raw) {
     return raw;
   }
   if (raw is num) {
-    return DateTime.fromMillisecondsSinceEpoch(raw.toInt(), isUtc: true).toLocal();
+    return DateTime.fromMillisecondsSinceEpoch(
+      raw.toInt(),
+      isUtc: true,
+    ).toLocal();
   }
   if (raw is String) {
     return DateTime.tryParse(raw)?.toLocal();
@@ -46,4 +49,27 @@ class TypingPreview {
       updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
+}
+
+/// UI-facing view state for banner rendering.
+class TypingPreviewState {
+  const TypingPreviewState({
+    required this.preview,
+    required this.rawPreview,
+    required this.canViewPreview,
+  });
+
+  /// Preview text that is safe to show to the viewer. This will be `null`
+  /// whenever the viewer is not entitled to see the preview contents.
+  final TypingPreview? preview;
+
+  /// Raw preview snapshot (if any) irrespective of the viewer entitlement.
+  final TypingPreview? rawPreview;
+
+  /// Whether the current viewer can see live previews.
+  final bool canViewPreview;
+
+  bool get hasViewablePreview => canViewPreview && (preview?.isEmpty == false);
+
+  String? get viewableText => canViewPreview ? preview?.text.trim() : null;
 }
