@@ -84,6 +84,7 @@ class ChatThreadController extends ChangeNotifier {
 
   final Map<String, String> _inlineTranslations = <String, String>{};
   final Map<String, ChatMessage> _messageCache = <String, ChatMessage>{};
+  List<String> _lastSnapshotDocIds = <String>[];
 
   Stream<List<ChatMessage>>? _messagesStream;
 
@@ -222,20 +223,19 @@ class ChatThreadController extends ChangeNotifier {
     );
   }
 
+  List<String> get lastSnapshotDocIds => List<String>.unmodifiable(_lastSnapshotDocIds);
+
   Stream<List<ChatMessage>> messagesStream() {
     return _messagesStream ??= _firestore
         .collection('dm_threads')
         .doc(threadId)
         .collection('messages')
-        .orderBy('createdAt', descending: true)
+        .orderBy('createdAt')
         .limit(500)
         .snapshots()
         .map((snapshot) {
-      final messages = snapshot.docs.map(ChatMessage.fromSnapshot).toList()
-        ..sort(
-          (a, b) => (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-              .compareTo(b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)),
-        );
+      _lastSnapshotDocIds = snapshot.docs.map((doc) => doc.id).toList(growable: false);
+      final messages = snapshot.docs.map(ChatMessage.fromSnapshot).toList();
       _messageCache
         ..clear()
         ..addEntries(messages.map((m) => MapEntry(m.id, m)));

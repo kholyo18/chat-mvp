@@ -606,6 +606,13 @@ class _MessagesListState extends State<_MessagesList> {
           _knownMessageIds = currentIds;
           _initialLoadDone = true;
         });
+        // Temporary diagnostics to verify message visibility. Remove after confirming fix.
+        // ignore: avoid_print
+        print('Loaded messages: ${messages.length}');
+        if (messages.isEmpty) {
+          // ignore: avoid_print
+          print('Snapshot doc IDs: ${controller.lastSnapshotDocIds}');
+        }
         final entries = _buildEntries(messages);
         return ListView.builder(
           controller: _scrollController,
