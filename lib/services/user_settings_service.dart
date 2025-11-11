@@ -8,6 +8,7 @@ class PrivacySettings {
     required this.readReceipts,
     required this.allowStoriesReplies,
     required this.highContrast,
+    required this.shareTypingPreview,
   });
 
   final String canMessage;
@@ -15,6 +16,7 @@ class PrivacySettings {
   final bool readReceipts;
   final String allowStoriesReplies;
   final bool highContrast;
+  final bool shareTypingPreview;
 
   static const PrivacySettings defaults = PrivacySettings(
     canMessage: 'everyone',
@@ -22,6 +24,7 @@ class PrivacySettings {
     readReceipts: true,
     allowStoriesReplies: 'everyone',
     highContrast: false,
+    shareTypingPreview: false,
   );
 
   PrivacySettings copyWith({
@@ -30,6 +33,7 @@ class PrivacySettings {
     bool? readReceipts,
     String? allowStoriesReplies,
     bool? highContrast,
+    bool? shareTypingPreview,
   }) {
     return PrivacySettings(
       canMessage: canMessage ?? this.canMessage,
@@ -37,6 +41,7 @@ class PrivacySettings {
       readReceipts: readReceipts ?? this.readReceipts,
       allowStoriesReplies: allowStoriesReplies ?? this.allowStoriesReplies,
       highContrast: highContrast ?? this.highContrast,
+      shareTypingPreview: shareTypingPreview ?? this.shareTypingPreview,
     );
   }
 
@@ -47,6 +52,7 @@ class PrivacySettings {
       'readReceipts': readReceipts,
       'allowStoriesReplies': allowStoriesReplies,
       'highContrast': highContrast,
+      'shareTypingPreview': shareTypingPreview,
     };
   }
 
@@ -61,6 +67,7 @@ class PrivacySettings {
       allowStoriesReplies:
           (data['allowStoriesReplies'] as String?)?.trim().toLowerCase() ?? defaults.allowStoriesReplies,
       highContrast: (data['highContrast'] as bool?) ?? defaults.highContrast,
+      shareTypingPreview: (data['shareTypingPreview'] as bool?) ?? defaults.shareTypingPreview,
     );
   }
 }

@@ -21,6 +21,7 @@ import '../translator/translator_service.dart';
 import 'chat_message.dart';
 import 'chat_thread_controller.dart';
 import 'user_opinion_page.dart';
+import 'services/typing_preview_service.dart';
 
 class ChatThreadPage extends StatefulWidget {
   const ChatThreadPage({super.key, required this.threadId, this.otherUid});
@@ -1291,6 +1292,11 @@ class _ComposerState extends State<_Composer> {
     _controller.dispose();
     _focusNode.dispose();
     final controller = context.read<ChatThreadController>();
+    final typingPreviewService = context.read<TypingPreviewService>();
+    unawaited(typingPreviewService.sendTypingPreview(
+      conversationId: controller.threadId,
+      text: '',
+    ));
     unawaited(controller.updateTyping(false));
     super.dispose();
   }
@@ -1301,6 +1307,11 @@ class _ComposerState extends State<_Composer> {
       setState(() => _showSend = hasText);
     }
     final controller = context.read<ChatThreadController>();
+    final typingPreviewService = context.read<TypingPreviewService>();
+    unawaited(typingPreviewService.sendTypingPreview(
+      conversationId: controller.threadId,
+      text: _controller.text,
+    ));
     unawaited(controller.updateTyping(hasText));
   }
 
