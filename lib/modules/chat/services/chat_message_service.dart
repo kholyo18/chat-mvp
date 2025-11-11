@@ -40,21 +40,6 @@ class ChatMessageService {
     final threadData = threadSnapshot.data();
 
     final storagePaths = _extractStoragePaths(data);
-    final subcollections = await messageRef.listCollections();
-
-    for (final collection in subcollections) {
-      final docs = await collection.get();
-      for (final doc in docs.docs) {
-        try {
-          await doc.reference.delete();
-        } catch (error) {
-          if (kDebugMode) {
-            debugPrint('Failed to delete sub-document ${doc.reference.path}: $error');
-          }
-        }
-      }
-    }
-
     try {
       await messageRef.delete();
     } on cf.FirebaseException catch (error) {

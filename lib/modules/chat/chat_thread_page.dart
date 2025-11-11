@@ -1061,7 +1061,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     return widget.isMine && !message.deletedForEveryone;
   }
 
-  Alignment _swipeBackgroundAlignment(TextDirection direction) {
+  Alignment _swipeBackgroundAlignment(ui.TextDirection direction) {
     // We currently require a swipe towards the center of the conversation,
     // which translates to a leftward drag for outgoing messages.
     return Alignment.centerRight;
