@@ -913,8 +913,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final canSwipeDelete = _canAttemptSwipeDelete(message);
     final TextDirection textDirection = Directionality.of(context);
 
+    final bubbleMargin = isMine
+        ? const EdgeInsets.only(left: 64, right: 8, top: 4, bottom: 4)
+        : const EdgeInsets.only(left: 8, right: 64, top: 4, bottom: 4);
+
     final bubble = Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
+      margin: bubbleMargin,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       constraints: BoxConstraints(
         maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360),
@@ -1061,30 +1065,11 @@ class _MessageBubbleState extends State<_MessageBubble> {
       child: bubbleStack,
     );
 
-    final mainAxisAlignment = () {
-      if (isMine) {
-        return textDirection == TextDirection.ltr
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start;
-      }
-      return textDirection == TextDirection.ltr
-          ? MainAxisAlignment.start
-          : MainAxisAlignment.end;
-    }();
+    final alignment = isMine ? Alignment.centerRight : Alignment.centerLeft;
 
-    return Row(
-      mainAxisAlignment: mainAxisAlignment,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Flexible(
-          child: Align(
-            alignment: isMine
-                ? AlignmentDirectional.centerStart
-                : AlignmentDirectional.centerEnd,
-            child: bubbleGesture,
-          ),
-        ),
-      ],
+    return Align(
+      alignment: alignment,
+      child: bubbleGesture,
     );
   }
 
