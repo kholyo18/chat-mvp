@@ -1024,6 +1024,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final bubbleStack = Stack(
       clipBehavior: Clip.none,
+      alignment: Alignment.center,
       children: [
         if (canSwipeDelete)
           _SwipeDeleteBackground(
@@ -1036,24 +1037,48 @@ class _MessageBubbleState extends State<_MessageBubble> {
       ],
     );
 
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onDoubleTap: () => _showMessageActions(context, message, isMine),
-        onLongPressStart: _handleLongPressStart,
-        onLongPressMoveUpdate: _handleLongPressMoveUpdate,
-        onLongPressEnd: _handleLongPressEnd,
-        onLongPressCancel: _handleLongPressCancel,
-        onHorizontalDragStart:
-            canSwipeDelete ? _handleHorizontalDragStart : null,
-        onHorizontalDragUpdate:
-            canSwipeDelete ? _handleHorizontalDragUpdate : null,
-        onHorizontalDragEnd: canSwipeDelete ? _handleHorizontalDragEnd : null,
-        onHorizontalDragCancel:
-            canSwipeDelete ? _handleHorizontalDragCancel : null,
-        child: bubbleStack,
-      ),
+    final bubbleGesture = GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onDoubleTap: () => _showMessageActions(context, message, isMine),
+      onLongPressStart: _handleLongPressStart,
+      onLongPressMoveUpdate: _handleLongPressMoveUpdate,
+      onLongPressEnd: _handleLongPressEnd,
+      onLongPressCancel: _handleLongPressCancel,
+      onHorizontalDragStart:
+          canSwipeDelete ? _handleHorizontalDragStart : null,
+      onHorizontalDragUpdate:
+          canSwipeDelete ? _handleHorizontalDragUpdate : null,
+      onHorizontalDragEnd: canSwipeDelete ? _handleHorizontalDragEnd : null,
+      onHorizontalDragCancel:
+          canSwipeDelete ? _handleHorizontalDragCancel : null,
+      child: bubbleStack,
+    );
+
+    final textDirection = Directionality.of(context);
+    final mainAxisAlignment = () {
+      if (isMine) {
+        return textDirection == TextDirection.ltr
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start;
+      }
+      return textDirection == TextDirection.ltr
+          ? MainAxisAlignment.start
+          : MainAxisAlignment.end;
+    }();
+
+    return Row(
+      mainAxisAlignment: mainAxisAlignment,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Flexible(
+          child: Align(
+            alignment: isMine
+                ? AlignmentDirectional.centerStart
+                : AlignmentDirectional.centerEnd,
+            child: bubbleGesture,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1061,10 +1086,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
     return widget.isMine && !message.deletedForEveryone;
   }
 
-  Alignment _swipeBackgroundAlignment(ui.TextDirection direction) {
+  AlignmentGeometry _swipeBackgroundAlignment(ui.TextDirection direction) {
     // We currently require a swipe towards the center of the conversation,
     // which translates to a leftward drag for outgoing messages.
-    return Alignment.centerRight;
+    return direction == ui.TextDirection.rtl
+        ? AlignmentDirectional.centerStart
+        : AlignmentDirectional.centerEnd;
   }
 
   void _handleHorizontalDragStart(DragStartDetails details) {
@@ -1302,20 +1329,23 @@ class _SwipeDeleteBackground extends StatelessWidget {
   final bool visible;
   final bool isActive;
   final BorderRadius borderRadius;
-  final Alignment alignment;
+  final AlignmentGeometry alignment;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color = theme.colorScheme.error;
     final iconColor = theme.colorScheme.onError;
-    return Positioned.fill(
-      child: IgnorePointer(
-        ignoring: true,
-        child: AnimatedOpacity(
-          opacity: visible ? 1 : 0,
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
+    return IgnorePointer(
+      ignoring: true,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: FractionallySizedBox(
+          widthFactor: 1,
+          heightFactor: 1,
+          alignment: alignment,
           child: Align(
             alignment: alignment,
             child: Container(
