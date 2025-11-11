@@ -63,7 +63,8 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final readReceipts =
-        context.watch<PrivacySettingsController>().settings?.readReceipts ?? true;
+        context.watch<PrivacySettingsController>().settings?.readReceipts ??
+        true;
     controller.setReadReceipts(readReceipts);
     return ChangeNotifierProvider<ChatThreadController>.value(
       value: controller,
@@ -148,7 +149,8 @@ class _MiniCallCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final callService = DmCallService.instance;
-    final remote = session.otherParticipant ??
+    final remote =
+        session.otherParticipant ??
         session.caller ??
         session.callee ??
         (session.participants.isNotEmpty ? session.participants.first : null);
@@ -164,11 +166,14 @@ class _MiniCallCard extends StatelessWidget {
             CircleAvatar(
               radius: 22,
               backgroundColor: theme.colorScheme.surfaceVariant,
-              backgroundImage:
-                  avatarUrl != null ? CachedNetworkImageProvider(avatarUrl) : null,
+              backgroundImage: avatarUrl != null
+                  ? CachedNetworkImageProvider(avatarUrl)
+                  : null,
               child: avatarUrl == null
-                  ? Icon(Icons.person,
-                      color: theme.colorScheme.onSurfaceVariant)
+                  ? Icon(
+                      Icons.person,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    )
                   : null,
             ),
             const SizedBox(width: 12),
@@ -197,8 +202,9 @@ class _MiniCallCard extends StatelessWidget {
                             status,
                             message: message,
                           );
-                          final label =
-                              status == DmCallStatus.error ? 'خطأ: $baseLabel' : baseLabel;
+                          final label = status == DmCallStatus.error
+                              ? 'خطأ: $baseLabel'
+                              : baseLabel;
                           return Text(
                             label,
                             style: theme.textTheme.bodySmall?.copyWith(
@@ -262,9 +268,7 @@ class _MiniNetworkIndicator extends StatelessWidget {
             const SizedBox(width: 4),
             Text(
               data.label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: data.color,
-              ),
+              style: theme.textTheme.bodySmall?.copyWith(color: data.color),
             ),
           ],
         );
@@ -289,23 +293,11 @@ class _MiniQualityData {
           Colors.green,
         );
       case CallNetworkQuality.good:
-        return _MiniQualityData(
-          'جيد',
-          Icons.network_wifi,
-          Colors.lightGreen,
-        );
+        return _MiniQualityData('جيد', Icons.network_wifi, Colors.lightGreen);
       case CallNetworkQuality.moderate:
-        return _MiniQualityData(
-          'متوسط',
-          Icons.network_cell,
-          Colors.orange,
-        );
+        return _MiniQualityData('متوسط', Icons.network_cell, Colors.orange);
       case CallNetworkQuality.poor:
-        return _MiniQualityData(
-          'ضعيف',
-          Icons.network_check,
-          Colors.deepOrange,
-        );
+        return _MiniQualityData('ضعيف', Icons.network_check, Colors.deepOrange);
       case CallNetworkQuality.bad:
         return _MiniQualityData(
           'سيئ',
@@ -351,8 +343,9 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
             children: [
               CircleAvatar(
                 backgroundColor: theme.colorScheme.surfaceVariant,
-                backgroundImage:
-                    avatarUrl != null ? CachedNetworkImageProvider(avatarUrl) : null,
+                backgroundImage: avatarUrl != null
+                    ? CachedNetworkImageProvider(avatarUrl)
+                    : null,
                 child: avatarUrl == null ? const Icon(Icons.person) : null,
               ),
               const SizedBox(width: 12),
@@ -361,13 +354,15 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w600,
-                        )),
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       presenceText,
@@ -403,7 +398,8 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                 controller.otherUserProfile?.displayName ?? 'المستخدم';
             final locale = Localizations.maybeLocaleOf(context)?.languageCode;
             final isArabic =
-                locale == 'ar' || Directionality.of(context) == ui.TextDirection.rtl;
+                locale == 'ar' ||
+                Directionality.of(context) == ui.TextDirection.rtl;
             final opinionLabel = isArabic
                 ? 'نظرتك عن $displayName'
                 : 'Your view about $displayName';
@@ -412,22 +408,10 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                 value: 'profile',
                 child: Text('عرض الملف الشخصي'),
               ),
-              PopupMenuItem(
-                value: 'opinion',
-                child: Text(opinionLabel),
-              ),
-              const PopupMenuItem(
-                value: 'mute',
-                child: Text('كتم الإشعارات'),
-              ),
-              const PopupMenuItem(
-                value: 'clear',
-                child: Text('مسح المحادثة'),
-              ),
-              const PopupMenuItem(
-                value: 'report',
-                child: Text('الإبلاغ'),
-              ),
+              PopupMenuItem(value: 'opinion', child: Text(opinionLabel)),
+              const PopupMenuItem(value: 'mute', child: Text('كتم الإشعارات')),
+              const PopupMenuItem(value: 'clear', child: Text('مسح المحادثة')),
+              const PopupMenuItem(value: 'report', child: Text('الإبلاغ')),
             ];
           },
         ),
@@ -446,7 +430,9 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
             SnackBar(content: Text('افتح الملف من صفحة المستخدم: $other')),
           );
         } else {
-          messenger.showSnackBar(const SnackBar(content: Text('لا يمكن فتح الملف حالياً')));
+          messenger.showSnackBar(
+            const SnackBar(content: Text('لا يمكن فتح الملف حالياً')),
+          );
         }
         break;
       case 'opinion':
@@ -478,6 +464,7 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
         break;
     }
   }
+
   static final DmCallService _callService = DmCallService.instance;
 
   Future<void> _startCall(BuildContext context, {required bool isVideo}) async {
@@ -491,15 +478,9 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
     }
     try {
       if (isVideo) {
-        await _callService.startVideoCall(
-          threadId,
-          otherUid,
-        );
+        await _callService.startVideoCall(threadId, otherUid);
       } else {
-        await _callService.startVoiceCall(
-          threadId,
-          otherUid,
-        );
+        await _callService.startVoiceCall(threadId, otherUid);
       }
     } on AgoraPermissionException catch (err, stack) {
       debugPrint(
@@ -580,18 +561,20 @@ class _MessagesListState extends State<_MessagesList> {
         );
         final currentIds = messages.map((m) => m.id).toList();
         final previousIds = _knownMessageIds.toSet();
-        final newMessages = messages.where((m) => !previousIds.contains(m.id)).toList();
+        final newMessages = messages
+            .where((m) => !previousIds.contains(m.id))
+            .toList();
         final undelivered = me == null
             ? const <ChatMessage>[]
             : messages
-                .where((m) => m.senderId != me && m.deliveredAt == null)
-                .toList();
+                  .where((m) => m.senderId != me && m.deliveredAt == null)
+                  .toList();
         final unseenIds = me == null
             ? <String>{}
             : messages
-                .where((m) => m.senderId != me && m.seenAt == null)
-                .map((m) => m.id)
-                .toSet();
+                  .where((m) => m.senderId != me && m.seenAt == null)
+                  .map((m) => m.id)
+                  .toSet();
         final wasInitialLoad = !_initialLoadDone;
         if (me != null && undelivered.isNotEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -599,7 +582,8 @@ class _MessagesListState extends State<_MessagesList> {
           });
         }
         if (me != null) {
-          if (unseenIds.isNotEmpty && !_setsAreEqual(unseenIds, _lastSeenRequestIds)) {
+          if (unseenIds.isNotEmpty &&
+              !_setsAreEqual(unseenIds, _lastSeenRequestIds)) {
             _lastSeenRequestIds = Set<String>.from(unseenIds);
             WidgetsBinding.instance.addPostFrameCallback((_) {
               unawaited(controller.markMessagesAsSeen(me));
@@ -609,7 +593,9 @@ class _MessagesListState extends State<_MessagesList> {
           }
         }
         if (!wasInitialLoad && me != null) {
-          final newIncoming = newMessages.where((m) => m.senderId != me).toList();
+          final newIncoming = newMessages
+              .where((m) => m.senderId != me)
+              .toList();
           if (newIncoming.isNotEmpty) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               unawaited(_playReceiveFeedback());
@@ -633,13 +619,19 @@ class _MessagesListState extends State<_MessagesList> {
               switchInCurve: Curves.easeOut,
               switchOutCurve: Curves.easeIn,
               transitionBuilder: (child, animation) {
-                final offsetAnimation = Tween<Offset>(
-                  begin: const Offset(0, 0.15),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut));
+                final offsetAnimation =
+                    Tween<Offset>(
+                      begin: const Offset(0, 0.15),
+                      end: Offset.zero,
+                    ).animate(
+                      CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                    );
                 return FadeTransition(
                   opacity: animation,
-                  child: SlideTransition(position: offsetAnimation, child: child),
+                  child: SlideTransition(
+                    position: offsetAnimation,
+                    child: child,
+                  ),
                 );
               },
               child: Column(
@@ -651,20 +643,30 @@ class _MessagesListState extends State<_MessagesList> {
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Center(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: Theme.of(context).colorScheme.surfaceVariant,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: Text(entry.dateLabel!,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
-                                  ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                          child: Text(
+                            entry.dateLabel!,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
                         ),
                       ),
                     ),
-                  _MessageBubble(message: entry.message, isMine: entry.message.senderId == me),
+                  _MessageBubble(
+                    message: entry.message,
+                    isMine: entry.message.senderId == me,
+                  ),
                 ],
               ),
             );
@@ -758,7 +760,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
       }
     }
 
-    final double visualOffset = downward.clamp(0.0, _replyVisualLimit).toDouble();
+    final double visualOffset = downward
+        .clamp(0.0, _replyVisualLimit)
+        .toDouble();
     if (visualOffset != _dragVisualOffset) {
       setState(() {
         _dragVisualOffset = visualOffset.toDouble();
@@ -813,7 +817,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final bubbleColor = isMine
         ? theme.colorScheme.primary
         : theme.colorScheme.surfaceVariant;
-    final textColor = isMine ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+    final textColor = isMine
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurface;
     final borderRadius = BorderRadius.only(
       topLeft: const Radius.circular(18),
       topRight: const Radius.circular(18),
@@ -831,7 +837,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
     if (message.deletedForEveryone) {
       content = Text(
         'تم حذف هذه الرسالة',
-        style: TextStyle(color: textColor.withOpacity(0.75), fontStyle: FontStyle.italic),
+        style: TextStyle(
+          color: textColor.withOpacity(0.75),
+          fontStyle: FontStyle.italic,
+        ),
       );
     } else {
       switch (message.type) {
@@ -888,13 +897,20 @@ class _MessageBubbleState extends State<_MessageBubble> {
         onLongPressEnd: _handleLongPressEnd,
         onLongPressCancel: _handleLongPressCancel,
         child: Transform.translate(
-          offset: Offset(0, _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0),
+          offset: Offset(
+            0,
+            _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0,
+          ),
           child: Container(
             margin: const EdgeInsets.symmetric(vertical: 4),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             constraints: BoxConstraints(
-                maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360)),
-            decoration: BoxDecoration(color: bubbleColor, borderRadius: borderRadius),
+              maxWidth: math.min(MediaQuery.of(context).size.width * 0.8, 360),
+            ),
+            decoration: BoxDecoration(
+              color: bubbleColor,
+              borderRadius: borderRadius,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -923,7 +939,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       _replyPreview(reply),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: textColor.withOpacity(0.85), fontSize: 12),
+                      style: TextStyle(
+                        color: textColor.withOpacity(0.85),
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                 content,
@@ -946,7 +965,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
                   children: [
                     Text(
                       time,
-                      style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 11),
+                      style: TextStyle(
+                        color: textColor.withOpacity(0.8),
+                        fontSize: 11,
+                      ),
                     ),
                     if (isMine)
                       Padding(
@@ -1044,17 +1066,34 @@ class _MessageBubbleState extends State<_MessageBubble> {
   }
 }
 
-void _showMessageActions(BuildContext context, ChatMessage message, bool isMine) async {
+void _showMessageActions(
+  BuildContext context,
+  ChatMessage message,
+  bool isMine,
+) async {
   final controller = context.read<ChatThreadController>();
   final List<_MessageActionItem> actions = <_MessageActionItem>[
     _MessageActionItem('reply', 'رد', Icons.reply_rounded),
-    _MessageActionItem('forward', 'إعادة توجيه', Icons.forward_to_inbox_rounded),
+    _MessageActionItem(
+      'forward',
+      'إعادة توجيه',
+      Icons.forward_to_inbox_rounded,
+    ),
     if (message.text != null && message.text!.isNotEmpty)
       _MessageActionItem('copy', 'نسخ', Icons.copy_rounded),
     if (message.text != null && message.text!.isNotEmpty)
       _MessageActionItem('translate', 'ترجمة', Icons.translate_rounded),
-    if (isMine) _MessageActionItem('delete-all', 'حذف للجميع', Icons.delete_forever_rounded),
-    _MessageActionItem('delete-me', 'حذف عندي فقط', Icons.delete_outline_rounded),
+    if (isMine)
+      _MessageActionItem(
+        'delete-all',
+        'حذف للجميع',
+        Icons.delete_forever_rounded,
+      ),
+    _MessageActionItem(
+      'delete-me',
+      'حذف عندي فقط',
+      Icons.delete_outline_rounded,
+    ),
   ];
 
   final selection = await showModalBottomSheet<String>(
@@ -1098,8 +1137,9 @@ void _showMessageActions(BuildContext context, ChatMessage message, bool isMine)
         break;
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.text ?? ''));
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('تم نسخ الرسالة')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('تم نسخ الرسالة')));
         break;
       case 'translate':
         await controller.translateMessage(message);
@@ -1112,9 +1152,9 @@ void _showMessageActions(BuildContext context, ChatMessage message, bool isMine)
         break;
     }
   } catch (err) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('تعذر تنفيذ العملية: $err')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('تعذر تنفيذ العملية: $err')));
   }
 }
 
@@ -1130,8 +1170,9 @@ Future<void> _showForwardPicker(
   final service = FirestoreService();
   final result = await service.fetchInboxThreads(currentUid: me, limit: 20);
   if (result is SafeFailure<InboxThreadsPage>) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(result.message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(result.message)));
     return;
   }
   if (result is! SafeSuccess<InboxThreadsPage>) {
@@ -1145,8 +1186,10 @@ Future<void> _showForwardPicker(
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 12),
-          Text('إرسال إلى محادثة أخرى',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'إرسال إلى محادثة أخرى',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 12),
           if (page.threads.isEmpty)
             const Padding(
@@ -1168,8 +1211,16 @@ Future<void> _showForwardPicker(
                   final subtitle = thread.lastMessage ?? '';
                   return ListTile(
                     leading: const CircleAvatar(child: Icon(Icons.person)),
-                    title: Text(other, maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    title: Text(
+                      other,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     onTap: () => Navigator.of(context).pop(thread.id),
                   );
                 },
@@ -1184,8 +1235,9 @@ Future<void> _showForwardPicker(
     return;
   }
   await controller.forwardMessage(message, threadId);
-  ScaffoldMessenger.of(context)
-      .showSnackBar(const SnackBar(content: Text('تمت إعادة التوجيه')));
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(const SnackBar(content: Text('تمت إعادة التوجيه')));
 }
 
 class _TypingBanner extends StatelessWidget {
@@ -1196,27 +1248,41 @@ class _TypingBanner extends StatelessWidget {
     return Consumer<ChatThreadController>(
       builder: (context, controller, _) {
         if (!controller.isOtherTyping) {
+          debugPrint(
+            'TypingBanner: hidden for thread ${controller.threadId} (no active typing)',
+          );
           return const SizedBox.shrink();
         }
         final otherUid = controller.otherUid;
         if (otherUid == null || otherUid.isEmpty) {
-          return _TypingBannerText(
-            text: _fallbackTypingLabel(context),
+          debugPrint(
+            'TypingBanner: falling back to classic indicator for thread ${controller.threadId} (missing otherUid)',
           );
+          return _TypingBannerText(text: _fallbackTypingLabel(context));
         }
         final previewService = context.read<TypingPreviewService>();
-        return StreamBuilder<TypingPreview?>(
+        return StreamBuilder<TypingPreviewState>(
           key: ValueKey<String>('preview-${controller.threadId}-$otherUid'),
           stream: previewService.watchTypingPreview(
             conversationId: controller.threadId,
             otherUserId: otherUid,
           ),
           builder: (context, snapshot) {
-            final preview = snapshot.data;
-            final previewText = preview?.text.trim();
-            final label = (previewText != null && previewText.isNotEmpty)
+            final state = snapshot.data;
+            final previewText = state?.viewableText;
+            final hasPreview = previewText != null && previewText.isNotEmpty;
+            final label = hasPreview
                 ? _formatPreviewLabel(context, previewText)
                 : _fallbackTypingLabel(context);
+            if (hasPreview) {
+              debugPrint(
+                'TypingBanner: showing preview for thread ${controller.threadId} (length: ${previewText!.length})',
+              );
+            } else {
+              debugPrint(
+                'TypingBanner: falling back to classic indicator for thread ${controller.threadId}',
+              );
+            }
             return _TypingBannerText(text: label);
           },
         );
@@ -1254,10 +1320,8 @@ class _TypingBannerText extends StatelessWidget {
     final style = theme.textTheme.bodySmall?.copyWith(color: color);
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 200),
-      transitionBuilder: (child, animation) => FadeTransition(
-        opacity: animation,
-        child: child,
-      ),
+      transitionBuilder: (child, animation) =>
+          FadeTransition(opacity: animation, child: child),
       child: Container(
         key: ValueKey<String>(text),
         width: double.infinity,
@@ -1290,7 +1354,9 @@ class _ReplyPreview extends StatelessWidget {
           width: double.infinity,
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surfaceVariant,
-            border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+            border: Border(
+              top: BorderSide(color: Theme.of(context).dividerColor),
+            ),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
@@ -1361,10 +1427,12 @@ class _ComposerState extends State<_Composer> {
     _focusNode.dispose();
     final controller = context.read<ChatThreadController>();
     final typingPreviewService = context.read<TypingPreviewService>();
-    unawaited(typingPreviewService.sendTypingPreview(
-      conversationId: controller.threadId,
-      text: '',
-    ));
+    unawaited(
+      typingPreviewService.sendTypingPreview(
+        conversationId: controller.threadId,
+        text: '',
+      ),
+    );
     unawaited(controller.updateTyping(false));
     super.dispose();
   }
@@ -1376,10 +1444,12 @@ class _ComposerState extends State<_Composer> {
     }
     final controller = context.read<ChatThreadController>();
     final typingPreviewService = context.read<TypingPreviewService>();
-    unawaited(typingPreviewService.sendTypingPreview(
-      conversationId: controller.threadId,
-      text: _controller.text,
-    ));
+    unawaited(
+      typingPreviewService.sendTypingPreview(
+        conversationId: controller.threadId,
+        text: _controller.text,
+      ),
+    );
     unawaited(controller.updateTyping(hasText));
   }
 
@@ -1390,8 +1460,7 @@ class _ComposerState extends State<_Composer> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (controller.isUploading)
-          const LinearProgressIndicator(minHeight: 2),
+        if (controller.isUploading) const LinearProgressIndicator(minHeight: 2),
         if (controller.isRecording)
           Container(
             width: double.infinity,
@@ -1451,8 +1520,9 @@ class _ComposerState extends State<_Composer> {
                     try {
                       await controller.sendTextMessage(text);
                     } catch (err) {
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(SnackBar(content: Text('تعذر إرسال الرسالة: $err')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('تعذر إرسال الرسالة: $err')),
+                      );
                     }
                   },
                   child: const Icon(Icons.send_rounded),
@@ -1472,11 +1542,13 @@ class _ComposerState extends State<_Composer> {
                     try {
                       await controller.stopRecordingAndSend();
                     } catch (err) {
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(SnackBar(content: Text('تعذر إرسال التسجيل: $err')));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('تعذر إرسال التسجيل: $err')),
+                      );
                     }
                   },
-                  onLongPressCancel: () => unawaited(controller.cancelRecording()),
+                  onLongPressCancel: () =>
+                      unawaited(controller.cancelRecording()),
                   child: CircleAvatar(
                     backgroundColor: theme.colorScheme.primary,
                     child: const Icon(Icons.mic, color: Colors.white),
@@ -1505,8 +1577,9 @@ class _ComposerState extends State<_Composer> {
                 try {
                   await controller.pickFromGallery();
                 } catch (err) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text('تعذر اختيار ملف: $err')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('تعذر اختيار ملف: $err')),
+                  );
                 }
               },
             ),
@@ -1518,8 +1591,9 @@ class _ComposerState extends State<_Composer> {
                 try {
                   await controller.captureFromCamera();
                 } catch (err) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text('تعذر فتح الكاميرا: $err')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('تعذر فتح الكاميرا: $err')),
+                  );
                 }
               },
             ),
@@ -1541,7 +1615,7 @@ class _ComposerState extends State<_Composer> {
             children: const [
               Icon(Icons.emoji_emotions_outlined, size: 48),
               SizedBox(height: 12),
-              Text('لوحة الإيموجي ستتوفر قريباً!')
+              Text('لوحة الإيموجي ستتوفر قريباً!'),
             ],
           ),
         ),
@@ -1574,12 +1648,16 @@ class _MediaPreview extends StatelessWidget {
     if (url == null || url!.isEmpty) {
       return Text(
         'لا يمكن عرض الملف',
-        style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6)),
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+        ),
       );
     }
     final heroTag = 'chat-media-$messageId';
     final border = BorderRadius.circular(18);
-    final previewUrl = (thumbnailUrl?.isNotEmpty ?? false) ? thumbnailUrl! : url!;
+    final previewUrl = (thumbnailUrl?.isNotEmpty ?? false)
+        ? thumbnailUrl!
+        : url!;
     final aspectRatio = isVideo ? 16 / 9 : 4 / 5;
     return GestureDetector(
       onTap: () => _openViewer(context, heroTag),
@@ -1595,12 +1673,17 @@ class _MediaPreview extends StatelessWidget {
                 child: CachedNetworkImage(
                   imageUrl: previewUrl,
                   fit: BoxFit.cover,
-                  placeholder: (context, _) =>
-                      Container(color: Theme.of(context).colorScheme.surfaceVariant),
+                  placeholder: (context, _) => Container(
+                    color: Theme.of(context).colorScheme.surfaceVariant,
+                  ),
                   errorWidget: (context, _, __) => Container(
                     color: Theme.of(context).colorScheme.surfaceVariant,
                     alignment: Alignment.center,
-                    child: const Icon(Icons.broken_image, color: Colors.white70, size: 36),
+                    child: const Icon(
+                      Icons.broken_image,
+                      color: Colors.white70,
+                      size: 36,
+                    ),
                   ),
                 ),
               ),
@@ -1625,7 +1708,11 @@ class _MediaPreview extends StatelessWidget {
                     shape: BoxShape.circle,
                   ),
                   padding: const EdgeInsets.all(8),
-                  child: const Icon(Icons.play_arrow_rounded, size: 36, color: Colors.white),
+                  child: const Icon(
+                    Icons.play_arrow_rounded,
+                    size: 36,
+                    color: Colors.white,
+                  ),
                 ),
             ],
           ),
@@ -1690,7 +1777,9 @@ class _MediaViewerPage extends StatelessWidget {
                         imageUrl: url,
                         fit: BoxFit.contain,
                         placeholder: (context, _) => const Center(
-                          child: CircularProgressIndicator(color: Colors.white70),
+                          child: CircularProgressIndicator(
+                            color: Colors.white70,
+                          ),
                         ),
                         errorWidget: (context, _, __) => const Icon(
                           Icons.broken_image_outlined,
@@ -1735,24 +1824,27 @@ class _VideoPlayerViewState extends State<_VideoPlayerView> {
   void initState() {
     super.initState();
     _controller = VideoPlayerController.network(widget.url);
-    _initialization = _controller.initialize().then((_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {});
-      _controller
-        ..setLooping(true)
-        ..play();
-    }).catchError((Object error, StackTrace stack) {
-      if (kDebugMode) {
-        debugPrint('Failed to initialize video: $error');
-      }
-      if (mounted) {
-        setState(() {
-          _error = error;
+    _initialization = _controller
+        .initialize()
+        .then((_) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {});
+          _controller
+            ..setLooping(true)
+            ..play();
+        })
+        .catchError((Object error, StackTrace stack) {
+          if (kDebugMode) {
+            debugPrint('Failed to initialize video: $error');
+          }
+          if (mounted) {
+            setState(() {
+              _error = error;
+            });
+          }
         });
-      }
-    });
   }
 
   @override
@@ -1868,13 +1960,19 @@ class _FileAttachment extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.insert_drive_file_rounded,
-            color: isMine ? Colors.white : Theme.of(context).colorScheme.primary),
+        Icon(
+          Icons.insert_drive_file_rounded,
+          color: isMine ? Colors.white : Theme.of(context).colorScheme.primary,
+        ),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
             '$name $sizeText',
-            style: TextStyle(color: isMine ? Colors.white : Theme.of(context).colorScheme.onSurface),
+            style: TextStyle(
+              color: isMine
+                  ? Colors.white
+                  : Theme.of(context).colorScheme.onSurface,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -1896,7 +1994,11 @@ class _FileAttachment extends StatelessWidget {
 }
 
 class _AudioMessageBubble extends StatefulWidget {
-  const _AudioMessageBubble({required this.url, required this.isMine, this.duration});
+  const _AudioMessageBubble({
+    required this.url,
+    required this.isMine,
+    this.duration,
+  });
 
   final String? url;
   final bool isMine;
@@ -1959,14 +2061,21 @@ class _AudioMessageBubbleState extends State<_AudioMessageBubble> {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              icon: Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
+              icon: Icon(
+                playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
+              ),
               color: Colors.white,
               onPressed: _toggle,
             ),
-            Text(_formatDuration(_position), style: const TextStyle(color: Colors.white)),
+            Text(
+              _formatDuration(_position),
+              style: const TextStyle(color: Colors.white),
+            ),
             const SizedBox(width: 8),
-            Text(_formatDuration(_duration),
-                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            Text(
+              _formatDuration(_duration),
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
           ],
         ),
         Slider(

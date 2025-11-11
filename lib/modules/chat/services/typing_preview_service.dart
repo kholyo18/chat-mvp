@@ -25,6 +25,8 @@ class TypingPreviewService {
 
   final Map<String, _PendingPreview> _pending = <String, _PendingPreview>{};
   final Set<String> _activeConversations = <String>{};
+  final StreamController<bool> _viewAccessController =
+      StreamController<bool>.broadcast();
 
   String? _currentUid;
   bool _viewerHasPreviewAccess = false;
@@ -32,6 +34,9 @@ class TypingPreviewService {
 
   bool get _canSend => _shareTypingPreview;
   bool get _canView => _viewerHasPreviewAccess;
+
+  bool get canSendPreview => _currentUid != null && _canSend;
+  bool get canViewPreview => _canView;
 
   Future<void> initialize() async {
     await _handleAuth(_auth.currentUser);
@@ -125,14 +130,8 @@ class TypingPreviewService {
       return;
     }
     _viewerHasPreviewAccess = value;
-    if (!value) {
-      _cancelPending();
-      final uid = _currentUid;
-      if (uid != null) {
-        for (final conversationId in List<String>.from(_activeConversations)) {
-          unawaited(_clearRemotePreview(conversationId, uid));
-        }
-      }
+    if (!_viewAccessController.isClosed) {
+      _viewAccessController.add(value);
     }
   }
 
@@ -178,54 +177,106 @@ class TypingPreviewService {
     _scheduleWrite(conversationId, sanitized);
   }
 
-  Stream<TypingPreview?> watchTypingPreview({
+  Stream<TypingPreviewState> watchTypingPreview({
     required String conversationId,
     required String otherUserId,
   }) {
-    if (!_canView) {
-      return Stream<TypingPreview?>.value(null);
-    }
-    // TODO(typing-preview): Connect this stream to the chat UI once preview bubbles are implemented.
     final doc = _firestore
         .collection('dm_threads')
         .doc(conversationId)
         .collection('typing_previews')
         .doc(otherUserId);
+    final controller = StreamController<TypingPreviewState>();
     String? lastLoggedText;
     bool loggedFallback = false;
-    return doc.snapshots().map((snapshot) {
-      final data = snapshot.data();
-      if (data == null) {
-        if (!loggedFallback) {
+    TypingPreview? latestPreview;
+
+    void emitState() {
+      if (controller.isClosed) {
+        return;
+      }
+      controller.add(
+        TypingPreviewState(
+          preview: _viewerHasPreviewAccess ? latestPreview : null,
+          rawPreview: latestPreview,
+          canViewPreview: _viewerHasPreviewAccess,
+        ),
+      );
+    }
+
+    StreamSubscription<cf.DocumentSnapshot<Map<String, dynamic>>>? docSub;
+    StreamSubscription<bool>? viewAccessSub;
+
+    controller.onListen = () {
+      viewAccessSub = _viewAccessController.stream.listen((_) {
+        if (!_viewerHasPreviewAccess && !loggedFallback) {
           debugPrint(
-            'TypingPreviewService: fallback typing indicator for $conversationId (other: $otherUserId) - no data',
+            'TypingPreviewService: view access revoked for $conversationId (other: $otherUserId) - falling back',
           );
           loggedFallback = true;
+          lastLoggedText = null;
         }
-        lastLoggedText = null;
-        return null;
-      }
-      final text = (data['text'] as String?) ?? '';
-      final trimmed = text.trim();
-      if (trimmed.isEmpty) {
-        if (!loggedFallback) {
-          debugPrint(
-            'TypingPreviewService: fallback typing indicator for $conversationId (other: $otherUserId) - empty text',
+        emitState();
+      });
+      docSub = doc.snapshots().listen(
+        (snapshot) {
+          final data = snapshot.data();
+          if (data == null) {
+            if (!loggedFallback) {
+              debugPrint(
+                'TypingPreviewService: fallback typing indicator for $conversationId (other: $otherUserId) - no data',
+              );
+              loggedFallback = true;
+            }
+            lastLoggedText = null;
+            latestPreview = null;
+            emitState();
+            return;
+          }
+          final text = (data['text'] as String?) ?? '';
+          final trimmed = text.trim();
+          if (trimmed.isEmpty) {
+            if (!loggedFallback) {
+              debugPrint(
+                'TypingPreviewService: fallback typing indicator for $conversationId (other: $otherUserId) - empty text',
+              );
+              loggedFallback = true;
+            }
+            lastLoggedText = null;
+            latestPreview = null;
+            emitState();
+            return;
+          }
+          if (lastLoggedText != trimmed) {
+            debugPrint(
+              'TypingPreviewService: received preview for $conversationId (other: $otherUserId, length: ${trimmed.length})',
+            );
+            lastLoggedText = trimmed;
+          }
+          loggedFallback = false;
+          latestPreview = TypingPreview.fromSnapshot(snapshot);
+          emitState();
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          controller.addError(error, stackTrace);
+          debugPrint('TypingPreviewService preview listen error: $error');
+          FlutterError.reportError(
+            FlutterErrorDetails(exception: error, stack: stackTrace),
           );
-          loggedFallback = true;
-        }
-        lastLoggedText = null;
-        return null;
+        },
+      );
+      emitState();
+    };
+
+    controller.onCancel = () async {
+      await docSub?.cancel();
+      await viewAccessSub?.cancel();
+      if (!controller.hasListener) {
+        await controller.close();
       }
-      if (lastLoggedText != trimmed) {
-        debugPrint(
-          'TypingPreviewService: received preview for $conversationId (other: $otherUserId, length: ${trimmed.length})',
-        );
-        lastLoggedText = trimmed;
-      }
-      loggedFallback = false;
-      return TypingPreview.fromSnapshot(snapshot);
-    });
+    };
+
+    return controller.stream;
   }
 
   Future<void> dispose() async {
@@ -233,6 +284,7 @@ class TypingPreviewService {
     await _userSub?.cancel();
     await _privacySub?.cancel();
     _cancelPending();
+    await _viewAccessController.close();
   }
 
   void _cancelPending() {
