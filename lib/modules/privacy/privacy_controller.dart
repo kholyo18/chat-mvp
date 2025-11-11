@@ -105,6 +105,13 @@ class PrivacySettingsController extends ChangeNotifier {
     );
   }
 
+  Future<void> updateShareTypingPreview(bool value) async {
+    await _commit(
+      patch: <String, dynamic>{'shareTypingPreview': value},
+      transform: (current) => current.copyWith(shareTypingPreview: value),
+    );
+  }
+
   Future<void> setHighContrast(bool value, {bool applyTheme = true}) async {
     if (applyTheme) {
       final getter = _highContrastGetter;

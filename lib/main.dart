@@ -41,6 +41,7 @@ import 'package:chat_mvp/admin/admin_portal_page.dart';
 import 'package:chat_mvp/admin/admin_room_panel_page.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_list_item.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_page.dart';
+import 'modules/chat/services/typing_preview_service.dart';
 
 import 'modules/calls/dm_call_service.dart';
 import 'modules/calls/call_notification_service.dart';
@@ -747,6 +748,10 @@ class _ChatUltraAppState extends State<ChatUltraApp> with WidgetsBindingObserver
         ChangeNotifierProvider(create: (_) => AppTheme()..load()),
         ChangeNotifierProvider(create: (_) => AppUser()..init()),
         ChangeNotifierProvider(create: (_) => TranslatorService()..load()),
+        Provider<TypingPreviewService>(
+          create: (_) => TypingPreviewService()..initialize(),
+          dispose: (_, service) => unawaited(service.dispose()),
+        ),
         // CODEX-BEGIN:PRIVACY_PROVIDER
         ChangeNotifierProxyProvider2<AppUser, AppTheme, PrivacySettingsController>(
           create: (_) => PrivacySettingsController(UserSettingsService()),
