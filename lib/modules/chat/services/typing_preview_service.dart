@@ -12,11 +12,9 @@ const _kMaxPreviewLength = 500;
 const _kPreviewThrottle = Duration(milliseconds: 275);
 
 class TypingPreviewService {
-  TypingPreviewService({
-    cf.FirebaseFirestore? firestore,
-    FirebaseAuth? auth,
-  })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+  TypingPreviewService({cf.FirebaseFirestore? firestore, FirebaseAuth? auth})
+    : _firestore = firestore ?? cf.FirebaseFirestore.instance,
+      _auth = auth ?? FirebaseAuth.instance;
 
   final cf.FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
@@ -29,10 +27,11 @@ class TypingPreviewService {
   final Set<String> _activeConversations = <String>{};
 
   String? _currentUid;
-  bool _isPremium = false;
+  bool _viewerHasPreviewAccess = false;
   bool _shareTypingPreview = false;
 
-  bool get _canSend => _isPremium && _shareTypingPreview;
+  bool get _canSend => _shareTypingPreview;
+  bool get _canView => _viewerHasPreviewAccess;
 
   Future<void> initialize() async {
     await _handleAuth(_auth.currentUser);
@@ -41,14 +40,16 @@ class TypingPreviewService {
       _handleAuth,
       onError: (Object error, StackTrace stackTrace) {
         debugPrint('TypingPreviewService auth listen error: $error');
-        FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stackTrace));
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stackTrace),
+        );
       },
     );
   }
 
   Future<void> _handleAuth(User? user) async {
     _currentUid = user?.uid;
-    _isPremium = false;
+    _viewerHasPreviewAccess = false;
     _shareTypingPreview = false;
     _activeConversations.clear();
     await _userSub?.cancel();
@@ -62,32 +63,48 @@ class TypingPreviewService {
 
   void _listenToUserDoc(String uid) {
     _userSub?.cancel();
-    _userSub = _firestore.collection('users').doc(uid).snapshots().listen(
-      (snapshot) {
-        final data = snapshot.data();
-        if (data == null) {
-          _updatePremium(false);
-          return;
-        }
-        // TODO(typing-preview): Replace VIP tier check with billing entitlements when available.
-        final vipStatus = VipStatus.fromRaw(
-          data['vip'],
-          fallbackTier: (data['vipTier'] as String?) ?? (data['vipLevel'] as String?),
-          fallbackExpiry: _parseTimestamp(data['vipExpiresAt']),
+    _userSub = _firestore
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            final data = snapshot.data();
+            if (data == null) {
+              _updateViewerAccess(false);
+              return;
+            }
+            // TODO(typing-preview): Replace VIP tier check with billing entitlements when available.
+            final vipStatus = VipStatus.fromRaw(
+              data['vip'],
+              fallbackTier:
+                  (data['vipTier'] as String?) ?? (data['vipLevel'] as String?),
+              fallbackExpiry: _parseTimestamp(data['vipExpiresAt']),
+            );
+            final isPremiumFlag = (data['isPremium'] as bool?) ?? false;
+            final typingPreviewPremium =
+                (data['typingPreviewPremium'] as bool?) ?? false;
+            final hasVipAccess = vipStatus.tier != 'none' && vipStatus.isActive;
+            final hasPreviewAccess =
+                isPremiumFlag || typingPreviewPremium || hasVipAccess;
+            _updateViewerAccess(hasPreviewAccess);
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            debugPrint('TypingPreviewService user listen error: $error');
+            FlutterError.reportError(
+              FlutterErrorDetails(exception: error, stack: stackTrace),
+            );
+          },
         );
-        final isPremium = vipStatus.tier != 'none' && vipStatus.isActive;
-        _updatePremium(isPremium);
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        debugPrint('TypingPreviewService user listen error: $error');
-        FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stackTrace));
-      },
-    );
   }
 
   void _listenToPrivacyDoc(String uid) {
     _privacySub?.cancel();
-    final doc = _firestore.collection('users').doc(uid).collection('settings').doc('privacy');
+    final doc = _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('settings')
+        .doc('privacy');
     _privacySub = doc.snapshots().listen(
       (snapshot) {
         final data = snapshot.data();
@@ -96,16 +113,18 @@ class TypingPreviewService {
       },
       onError: (Object error, StackTrace stackTrace) {
         debugPrint('TypingPreviewService privacy listen error: $error');
-        FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stackTrace));
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stackTrace),
+        );
       },
     );
   }
 
-  void _updatePremium(bool value) {
-    if (_isPremium == value) {
+  void _updateViewerAccess(bool value) {
+    if (_viewerHasPreviewAccess == value) {
       return;
     }
-    _isPremium = value;
+    _viewerHasPreviewAccess = value;
     if (!value) {
       _cancelPending();
       final uid = _currentUid;
@@ -142,10 +161,20 @@ class TypingPreviewService {
     if (uid == null) {
       return;
     }
+    final sanitized = _sanitize(text);
+    final length = sanitized.length;
     if (!_canSend) {
+      debugPrint(
+        'TypingPreviewService: skip send for $conversationId (uid: $uid, length: $length) - shareTypingPreview disabled',
+      );
       return;
     }
-    final sanitized = _sanitize(text);
+    final previous = _pending[conversationId]?.latestText;
+    if (previous != sanitized) {
+      debugPrint(
+        'TypingPreviewService: queue preview update for $conversationId (uid: $uid, length: $length)',
+      );
+    }
     _scheduleWrite(conversationId, sanitized);
   }
 
@@ -153,7 +182,7 @@ class TypingPreviewService {
     required String conversationId,
     required String otherUserId,
   }) {
-    if (!_isPremium) {
+    if (!_canView) {
       return Stream<TypingPreview?>.value(null);
     }
     // TODO(typing-preview): Connect this stream to the chat UI once preview bubbles are implemented.
@@ -162,15 +191,39 @@ class TypingPreviewService {
         .doc(conversationId)
         .collection('typing_previews')
         .doc(otherUserId);
+    String? lastLoggedText;
+    bool loggedFallback = false;
     return doc.snapshots().map((snapshot) {
       final data = snapshot.data();
       if (data == null) {
+        if (!loggedFallback) {
+          debugPrint(
+            'TypingPreviewService: fallback typing indicator for $conversationId (other: $otherUserId) - no data',
+          );
+          loggedFallback = true;
+        }
+        lastLoggedText = null;
         return null;
       }
       final text = (data['text'] as String?) ?? '';
-      if (text.trim().isEmpty) {
+      final trimmed = text.trim();
+      if (trimmed.isEmpty) {
+        if (!loggedFallback) {
+          debugPrint(
+            'TypingPreviewService: fallback typing indicator for $conversationId (other: $otherUserId) - empty text',
+          );
+          loggedFallback = true;
+        }
+        lastLoggedText = null;
         return null;
       }
+      if (lastLoggedText != trimmed) {
+        debugPrint(
+          'TypingPreviewService: received preview for $conversationId (other: $otherUserId, length: ${trimmed.length})',
+        );
+        lastLoggedText = trimmed;
+      }
+      loggedFallback = false;
       return TypingPreview.fromSnapshot(snapshot);
     });
   }
@@ -220,18 +273,17 @@ class TypingPreviewService {
           .doc(conversationId)
           .collection('typing_previews')
           .doc(uid);
-      await doc.set(
-        <String, dynamic>{
-          'userId': uid,
-          'text': text,
-          'updatedAt': cf.FieldValue.serverTimestamp(),
-        },
-        cf.SetOptions(merge: true),
-      );
+      await doc.set(<String, dynamic>{
+        'userId': uid,
+        'text': text,
+        'updatedAt': cf.FieldValue.serverTimestamp(),
+      }, cf.SetOptions(merge: true));
       _activeConversations.add(conversationId);
     } catch (error, stackTrace) {
       debugPrint('TypingPreviewService commit error: $error');
-      FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stackTrace));
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stackTrace),
+      );
     } finally {
       if (entry.timer == null && entry.latestText == text) {
         _pending.remove(conversationId);
@@ -252,7 +304,9 @@ class TypingPreviewService {
         return;
       }
       debugPrint('TypingPreviewService clear error: $error');
-      FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stackTrace));
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stackTrace),
+      );
     } finally {
       _activeConversations.remove(conversationId);
     }
@@ -277,7 +331,10 @@ DateTime? _parseTimestamp(dynamic raw) {
     return raw;
   }
   if (raw is num) {
-    return DateTime.fromMillisecondsSinceEpoch(raw.toInt(), isUtc: true).toLocal();
+    return DateTime.fromMillisecondsSinceEpoch(
+      raw.toInt(),
+      isUtc: true,
+    ).toLocal();
   }
   if (raw is String) {
     return DateTime.tryParse(raw)?.toLocal();
