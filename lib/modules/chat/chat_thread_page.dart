@@ -1342,28 +1342,29 @@ class _SwipeDeleteBackground extends StatelessWidget {
     final theme = Theme.of(context);
     final color = theme.colorScheme.error;
     final iconColor = theme.colorScheme.onError;
-    return IgnorePointer(
-      ignoring: true,
-      child: AnimatedOpacity(
-        opacity: visible ? 1 : 0,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-        child: FractionallySizedBox(
-          widthFactor: 1,
-          heightFactor: 1,
-          alignment: alignment,
-          child: Align(
-            alignment: alignment,
-            child: Container(
-              margin: const EdgeInsets.symmetric(vertical: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: true,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: DecoratedBox(
               decoration: BoxDecoration(
                 color: isActive ? color : color.withOpacity(0.85),
                 borderRadius: borderRadius,
               ),
-              child: Icon(
-                Icons.delete_forever_rounded,
-                color: iconColor,
+              child: Align(
+                alignment: alignment,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Icon(
+                    Icons.delete_forever_rounded,
+                    color: iconColor,
+                  ),
+                ),
               ),
             ),
           ),
