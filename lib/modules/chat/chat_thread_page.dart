@@ -904,7 +904,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final reply = controller.messageById(message.replyToMessageId);
     final forwarded = message.forwardFromThreadId != null;
     final canSwipeDelete = _canAttemptSwipeDelete(message);
-    final textDirection = Directionality.of(context);
+    final dir = Directionality.of(context);
 
     final bubble = Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -1031,7 +1031,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
             visible: _swipeDragOffset != 0,
             isActive: _isInDeleteZone,
             borderRadius: borderRadius,
-            alignment: _swipeBackgroundAlignment(textDirection),
+            alignment: _swipeBackgroundAlignment(dir),
           ),
         animatedBubble,
       ],
@@ -1054,14 +1054,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
       child: bubbleStack,
     );
 
-    final textDirection = Directionality.of(context);
+    final dir = Directionality.of(context);
     final mainAxisAlignment = () {
       if (isMine) {
-        return textDirection == TextDirection.ltr
+        return dir == TextDirection.ltr
             ? MainAxisAlignment.end
             : MainAxisAlignment.start;
       }
-      return textDirection == TextDirection.ltr
+      return dir == TextDirection.ltr
           ? MainAxisAlignment.start
           : MainAxisAlignment.end;
     }();
