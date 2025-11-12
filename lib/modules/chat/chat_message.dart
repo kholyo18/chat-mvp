@@ -85,7 +85,7 @@ class ChatMessage {
   }) {
     return ChatMessage(
       id: id,
-      senderId: (data['from'] ?? data['senderId'] ?? '') as String,
+      senderId: (data['senderId'] as String?) ?? (data['from'] as String?),
       type: ChatMessageTypeParser.fromValue(data['type'] as String?),
       text: (data['text'] as String?)?.trim(),
       mediaUrl: data['mediaUrl'] as String?,
@@ -115,6 +115,7 @@ class ChatMessage {
   Map<String, Object?> toFirestore() {
     return <String, Object?>{
       'from': senderId,
+      'senderId': senderId,
       'type': type.value,
       'text': text,
       'mediaUrl': mediaUrl,
@@ -133,7 +134,7 @@ class ChatMessage {
   }
 
   final String id;
-  final String senderId;
+  final String? senderId;
   final ChatMessageType type;
   final DateTime? createdAt;
   final DateTime? sentAt;
