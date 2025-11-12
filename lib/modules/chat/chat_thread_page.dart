@@ -554,11 +554,16 @@ class _MessagesListState extends State<_MessagesList> {
         }
         final messages = snapshot.data!
             .where((m) => me == null ? true : !m.isHiddenFor(me))
-            .toList();
-        messages.sort(
-          (a, b) => (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-              .compareTo(b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)),
-        );
+            .toList()
+          ..sort((a, b) {
+            final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final compare = ta.compareTo(tb);
+            if (compare != 0) {
+              return compare;
+            }
+            return a.id.compareTo(b.id);
+          });
         final currentIds = messages.map((m) => m.id).toList();
         final previousIds = _knownMessageIds.toSet();
         final newMessages = messages
@@ -602,9 +607,14 @@ class _MessagesListState extends State<_MessagesList> {
             });
           }
         }
+        final shouldScrollToBottom = wasInitialLoad ||
+            (me != null && newMessages.any((m) => m.senderId == me));
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _knownMessageIds = currentIds;
           _initialLoadDone = true;
+          if (shouldScrollToBottom && _scrollController.hasClients) {
+            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          }
         });
         // Temporary diagnostics to verify message visibility. Remove after confirming fix.
         // ignore: avoid_print
@@ -617,15 +627,14 @@ class _MessagesListState extends State<_MessagesList> {
         final currentUid = FirebaseAuth.instance.currentUser?.uid;
         return ListView.builder(
           controller: _scrollController,
-          reverse: true,
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+          reverse: false,
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
           itemCount: entries.length,
           itemBuilder: (context, index) {
-            final entry = entries[entries.length - 1 - index];
+            final entry = entries[index];
             final message = entry.message;
-            final String? senderId = message.senderId;
             final bool isMine =
-                currentUid != null && senderId != null && senderId == currentUid;
+                currentUid != null && message.senderId == currentUid;
             return AnimatedSwitcher(
               duration: const Duration(milliseconds: 220),
               switchInCurve: Curves.easeOut,
@@ -676,6 +685,7 @@ class _MessagesListState extends State<_MessagesList> {
                       ),
                     ),
                   Row(
+                    key: ValueKey<String>(message.id),
                     mainAxisAlignment:
                         isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -684,13 +694,9 @@ class _MessagesListState extends State<_MessagesList> {
                         constraints: BoxConstraints(
                           maxWidth: MediaQuery.of(context).size.width * 0.78,
                         ),
-                        child: Align(
-                          alignment:
-                              isMine ? Alignment.centerRight : Alignment.centerLeft,
-                          child: _MessageBubble(
-                            message: message,
-                            isMine: isMine,
-                          ),
+                        child: _MessageBubble(
+                          message: message,
+                          isMine: isMine,
                         ),
                       ),
                     ],
