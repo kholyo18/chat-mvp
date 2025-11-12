@@ -614,6 +614,7 @@ class _MessagesListState extends State<_MessagesList> {
           print('Snapshot doc IDs: ${controller.lastSnapshotDocIds}');
         }
         final entries = _buildEntries(messages);
+        final currentUid = FirebaseAuth.instance.currentUser?.uid;
         return ListView.builder(
           controller: _scrollController,
           reverse: true,
@@ -621,6 +622,10 @@ class _MessagesListState extends State<_MessagesList> {
           itemCount: entries.length,
           itemBuilder: (context, index) {
             final entry = entries[entries.length - 1 - index];
+            final message = entry.message;
+            final String? senderId = message.senderId;
+            final bool isMine =
+                currentUid != null && senderId != null && senderId == currentUid;
             return AnimatedSwitcher(
               duration: const Duration(milliseconds: 220),
               switchInCurve: Curves.easeOut,
@@ -642,7 +647,7 @@ class _MessagesListState extends State<_MessagesList> {
                 );
               },
               child: Column(
-                key: ValueKey<String>(entry.message.id),
+                key: ValueKey<String>(message.id),
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (entry.dateLabel != null)
@@ -670,9 +675,25 @@ class _MessagesListState extends State<_MessagesList> {
                         ),
                       ),
                     ),
-                  _MessageBubble(
-                    message: entry.message,
-                    isMine: entry.message.senderId == me,
+                  Row(
+                    mainAxisAlignment:
+                        isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.of(context).size.width * 0.78,
+                        ),
+                        child: Align(
+                          alignment:
+                              isMine ? Alignment.centerRight : Alignment.centerLeft,
+                          child: _MessageBubble(
+                            message: message,
+                            isMine: isMine,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
