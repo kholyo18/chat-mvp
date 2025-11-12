@@ -1068,12 +1068,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
             isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           Flexible(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth:
-                    math.min(MediaQuery.of(context).size.width * 0.8, 360),
+            child: Align(
+              alignment:
+                  isMine ? Alignment.centerRight : Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth:
+                      math.min(MediaQuery.of(context).size.width * 0.8, 360),
+                ),
+                child: bubbleGesture,
               ),
-              child: bubbleGesture,
             ),
           ),
         ],
