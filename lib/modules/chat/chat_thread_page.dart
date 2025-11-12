@@ -614,8 +614,17 @@ class _MessagesListState extends State<_MessagesList> {
           // ignore: avoid_print
           print('Snapshot doc IDs: ${controller.lastSnapshotDocIds}');
         }
-        final entries = _buildEntries(messages);
-        final currentUid = FirebaseAuth.instance.currentUser?.uid;
+        final sortedMessages = List<ChatMessage>.from(messages)
+          ..sort((a, b) {
+            final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final compare = ta.compareTo(tb);
+            if (compare != 0) {
+              return compare;
+            }
+            return a.id.compareTo(b.id);
+          });
+        final entries = _buildEntries(sortedMessages);
         return ListView.builder(
           controller: _scrollController,
           reverse: false,
@@ -624,8 +633,7 @@ class _MessagesListState extends State<_MessagesList> {
           itemBuilder: (context, index) {
             final entry = entries[index];
             final message = entry.message;
-            final bool isMine =
-                currentUid != null && message.senderId == currentUid;
+            final bool isMine = me != null && message.senderId == me;
             final created =
                 message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
             final id = message.id.isNotEmpty
