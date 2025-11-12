@@ -81,9 +81,9 @@ class _ChatThreadView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const TextDirection threadDirection = TextDirection.rtl;
+    final dir = Directionality.of(context);
     return Directionality(
-      textDirection: threadDirection,
+      textDirection: dir,
       child: Scaffold(
         appBar: _ChatAppBar(threadId: threadId),
         body: SafeArea(
@@ -554,16 +554,7 @@ class _MessagesListState extends State<_MessagesList> {
         }
         final messages = snapshot.data!
             .where((m) => me == null ? true : !m.isHiddenFor(me))
-            .toList()
-          ..sort((a, b) {
-            final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final compare = ta.compareTo(tb);
-            if (compare != 0) {
-              return compare;
-            }
-            return a.id.compareTo(b.id);
-          });
+            .toList();
         final currentIds = messages.map((m) => m.id).toList();
         final previousIds = _knownMessageIds.toSet();
         final newMessages = messages
@@ -635,6 +626,11 @@ class _MessagesListState extends State<_MessagesList> {
             final message = entry.message;
             final bool isMine =
                 currentUid != null && message.senderId == currentUid;
+            final created =
+                message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final id = message.id.isNotEmpty
+                ? message.id
+                : '${created.millisecondsSinceEpoch}-$index';
             return AnimatedSwitcher(
               duration: const Duration(milliseconds: 220),
               switchInCurve: Curves.easeOut,
@@ -656,7 +652,7 @@ class _MessagesListState extends State<_MessagesList> {
                 );
               },
               child: Column(
-                key: ValueKey<String>(message.id),
+                key: ValueKey<String>('entry-${message.id}'),
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (entry.dateLabel != null)
@@ -684,22 +680,36 @@ class _MessagesListState extends State<_MessagesList> {
                         ),
                       ),
                     ),
-                  Row(
-                    key: ValueKey<String>(message.id),
-                    mainAxisAlignment:
-                        isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.78,
+                  Dismissible(
+                    key: ValueKey<String>('msg_$id'),
+                    direction: DismissDirection.none,
+                    background: Align(
+                      alignment: isMine
+                          ? AlignmentDirectional.centerStart
+                          : AlignmentDirectional.centerEnd,
+                      child: const _TrashPill(),
+                    ),
+                    secondaryBackground: const SizedBox.shrink(),
+                    child: Row(
+                      mainAxisAlignment: isMine
+                          ? MainAxisAlignment.end
+                          : MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Flexible(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.sizeOf(context).width * 0.78,
+                            ),
+                            child: MessageBubble(
+                              message: message,
+                              isMine: isMine,
+                            ),
+                          ),
                         ),
-                        child: _MessageBubble(
-                          message: message,
-                          isMine: isMine,
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -714,7 +724,8 @@ class _MessagesListState extends State<_MessagesList> {
     final entries = <_MessageEntry>[];
     DateTime? lastDay;
     for (final message in messages) {
-      final created = message.createdAt ?? DateTime.now();
+      final created =
+          message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       final day = DateTime(created.year, created.month, created.day);
       String? label;
       if (lastDay == null || day.difference(lastDay!).inDays != 0) {
@@ -751,7 +762,40 @@ class _MessageEntry {
   final String? dateLabel;
 }
 
+class _TrashPill extends StatelessWidget {
+  const _TrashPill();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Icon(
+        Icons.delete_outline,
+        color: theme.colorScheme.onErrorContainer,
+        size: 20,
+      ),
+    );
+  }
+}
+
 enum _DeliveryState { none, sent, delivered, seen }
+
+class MessageBubble extends StatelessWidget {
+  const MessageBubble({super.key, required this.message, required this.isMine});
+
+  final ChatMessage message;
+  final bool isMine;
+
+  @override
+  Widget build(BuildContext context) {
+    return _MessageBubble(message: message, isMine: isMine);
+  }
+}
 
 class _MessageBubble extends StatefulWidget {
   const _MessageBubble({required this.message, required this.isMine});
@@ -876,7 +920,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
       bottomLeft: Radius.circular(isMine ? 18 : 6),
       bottomRight: Radius.circular(isMine ? 6 : 18),
     );
-    final timestamp = message.sentAt ?? message.createdAt ?? DateTime.now();
+    final timestamp = message.sentAt ??
+        message.createdAt ??
+        DateTime.fromMillisecondsSinceEpoch(0);
     final time = DateFormat('HH:mm').format(timestamp);
     final translated = controller.translatedTextFor(message.id);
     final deliveryState = _deliveryStateFor(message);
