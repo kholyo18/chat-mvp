@@ -690,25 +690,21 @@ class _MessagesListState extends State<_MessagesList> {
                       child: const _TrashPill(),
                     ),
                     secondaryBackground: const SizedBox.shrink(),
-                    child: Row(
-                      mainAxisAlignment: isMine
-                          ? MainAxisAlignment.end
-                          : MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Flexible(
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.sizeOf(context).width * 0.78,
-                            ),
-                            child: MessageBubble(
-                              message: message,
-                              isMine: isMine,
-                            ),
-                          ),
+                    child: Align(
+                      key: ValueKey<String>(message.id),
+                      alignment: isMine
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth:
+                              MediaQuery.of(context).size.width * 0.78,
                         ),
-                      ],
+                        child: _MessageBubble(
+                          message: message,
+                          isMine: isMine,
+                        ),
+                      ),
                     ),
                   ),
                 ],
