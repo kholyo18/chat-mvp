@@ -23,7 +23,11 @@ import 'chat_message.dart';
 import 'chat_thread_controller.dart';
 import 'user_opinion_page.dart';
 import 'models/typing_preview.dart';
+import 'models/ai_insight.dart';
 import 'services/typing_preview_service.dart';
+import 'services/ai_insight_service.dart';
+import 'services/feature_flags.dart';
+import 'widgets/ai_insight_sheet.dart';
 
 class ChatThreadPage extends StatefulWidget {
   const ChatThreadPage({super.key, required this.threadId, this.otherUid});
@@ -89,12 +93,12 @@ class _ChatThreadView extends StatelessWidget {
         body: SafeArea(
           child: Stack(
             children: [
-              const Column(
+              Column(
                 children: [
-                  Expanded(child: _MessagesList()),
-                  _TypingBanner(),
-                  _ReplyPreview(),
-                  _Composer(),
+                  Expanded(child: _MessagesList(threadId: threadId)),
+                  const _TypingBanner(),
+                  const _ReplyPreview(),
+                  const _Composer(),
                 ],
               ),
               _MiniCallOverlay(threadId: threadId),
@@ -499,7 +503,9 @@ class _ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
 }
 
 class _MessagesList extends StatefulWidget {
-  const _MessagesList();
+  const _MessagesList({required this.threadId});
+
+  final String threadId;
 
   @override
   State<_MessagesList> createState() => _MessagesListState();
@@ -711,6 +717,7 @@ class _MessagesListState extends State<_MessagesList> {
                         child: _MessageBubble(
                           message: message,
                           isMine: isMine,
+                          threadId: widget.threadId,
                         ),
                       ),
                     ),
@@ -790,22 +797,37 @@ class _TrashPill extends StatelessWidget {
 enum _DeliveryState { none, sent, delivered, seen }
 
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.message, required this.isMine});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    required this.isMine,
+    required this.threadId,
+  });
 
   final ChatMessage message;
   final bool isMine;
+  final String threadId;
 
   @override
   Widget build(BuildContext context) {
-    return _MessageBubble(message: message, isMine: isMine);
+    return _MessageBubble(
+      message: message,
+      isMine: isMine,
+      threadId: threadId,
+    );
   }
 }
 
 class _MessageBubble extends StatefulWidget {
-  const _MessageBubble({required this.message, required this.isMine});
+  const _MessageBubble({
+    required this.message,
+    required this.isMine,
+    required this.threadId,
+  });
 
   final ChatMessage message;
   final bool isMine;
+  final String threadId;
 
   @override
   State<_MessageBubble> createState() => _MessageBubbleState();
@@ -814,6 +836,8 @@ class _MessageBubble extends StatefulWidget {
 class _MessageBubbleState extends State<_MessageBubble> {
   static const double _replyTriggerDy = 96.0;
   static const double _replyVisualLimit = 64.0;
+  static const double _aiTriggerThreshold = 48.0;
+  static const double _aiSwipeVisualLimit = 120.0;
 
   double _dragVisualOffset = 0;
   bool _willReply = false;
@@ -822,6 +846,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
   bool _isInDeleteZone = false;
   bool _isHorizontalDragActive = false;
   bool _pendingPermanentRemoval = false;
+  double _aiSwipeExtent = 0;
+  bool _aiSwipeReady = false;
+  bool _aiSwipeActive = false;
+  bool _aiHapticPlayed = false;
 
   @override
   void didUpdateWidget(covariant _MessageBubble oldWidget) {
@@ -831,6 +859,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
       _isInDeleteZone = false;
       _isHorizontalDragActive = false;
       _pendingPermanentRemoval = false;
+      _aiSwipeExtent = 0;
+      _aiSwipeReady = false;
+      _aiSwipeActive = false;
+      _aiHapticPlayed = false;
     }
   }
 
@@ -904,6 +936,123 @@ class _MessageBubbleState extends State<_MessageBubble> {
       _willReply = false;
     }
     _hapticPlayed = false;
+  }
+
+  bool _canTriggerAiInsight() {
+    if (!FeatureFlags.enableAiSwipeInsight) {
+      return false;
+    }
+    final message = widget.message;
+    if (message.type != ChatMessageType.text) {
+      return false;
+    }
+    return (message.text?.trim().isNotEmpty ?? false);
+  }
+
+  void _handleHorizontalGestureStart(DragStartDetails details) {
+    if (_canTriggerAiInsight()) {
+      _aiSwipeActive = true;
+      _aiSwipeExtent = 0;
+      _aiSwipeReady = false;
+      _aiHapticPlayed = false;
+    }
+    if (_canAttemptSwipeDelete(widget.message)) {
+      _handleDeleteHorizontalDragStart(details);
+    }
+  }
+
+  void _handleHorizontalGestureUpdate(DragUpdateDetails details) {
+    final delta = details.primaryDelta ?? 0;
+    var handled = false;
+    if (_canTriggerAiInsight()) {
+      final isForward = _isStartToEndDelta(delta);
+      final shouldHandle = isForward || (!isForward && _aiSwipeExtent > 0);
+      if (shouldHandle) {
+        _updateAiSwipe(delta);
+        handled = true;
+      }
+    }
+    if (!handled && _canAttemptSwipeDelete(widget.message)) {
+      _handleDeleteHorizontalDragUpdate(details);
+    }
+  }
+
+  Future<void> _handleHorizontalGestureEnd(DragEndDetails details) async {
+    final shouldOpenInsight =
+        _canTriggerAiInsight() && _aiSwipeExtent >= _aiTriggerThreshold;
+    if (shouldOpenInsight) {
+      await _openInsightSheet();
+    }
+    _resetAiSwipe();
+    if (_canAttemptSwipeDelete(widget.message)) {
+      await _handleDeleteHorizontalDragEnd(details);
+    }
+  }
+
+  void _handleHorizontalGestureCancel() {
+    _resetAiSwipe();
+    if (_canAttemptSwipeDelete(widget.message)) {
+      _handleDeleteHorizontalDragCancel();
+    }
+  }
+
+  bool _isStartToEndDelta(double delta) {
+    final direction = Directionality.of(context);
+    if (direction == TextDirection.rtl) {
+      return delta < 0;
+    }
+    return delta > 0;
+  }
+
+  void _updateAiSwipe(double delta) {
+    if (!mounted) {
+      return;
+    }
+    final isForward = _isStartToEndDelta(delta);
+    final magnitude = delta.abs();
+    double nextExtent;
+    if (isForward) {
+      nextExtent = (_aiSwipeExtent + magnitude).clamp(0.0, _aiSwipeVisualLimit);
+    } else {
+      nextExtent = (_aiSwipeExtent - magnitude).clamp(0.0, _aiSwipeVisualLimit);
+    }
+    final ready = nextExtent >= _aiTriggerThreshold;
+    if (_aiSwipeExtent != nextExtent || _aiSwipeReady != ready) {
+      setState(() {
+        _aiSwipeExtent = nextExtent;
+        _aiSwipeReady = ready;
+      });
+    }
+    if (ready && !_aiHapticPlayed) {
+      HapticFeedback.selectionClick();
+      _aiHapticPlayed = true;
+    } else if (!ready) {
+      _aiHapticPlayed = false;
+    }
+  }
+
+  void _resetAiSwipe() {
+    if (!mounted) {
+      _aiSwipeExtent = 0;
+      _aiSwipeReady = false;
+      _aiSwipeActive = false;
+      _aiHapticPlayed = false;
+      return;
+    }
+    if (_aiSwipeExtent == 0 && !_aiSwipeReady && !_aiSwipeActive) {
+      return;
+    }
+    setState(() {
+      _aiSwipeExtent = 0;
+      _aiSwipeReady = false;
+      _aiSwipeActive = false;
+    });
+    _aiHapticPlayed = false;
+  }
+
+  double _signedAiOffset(TextDirection direction) {
+    final magnitude = _aiSwipeExtent.clamp(0.0, _aiSwipeVisualLimit);
+    return direction == TextDirection.rtl ? -magnitude : magnitude;
   }
 
   @override
@@ -988,6 +1137,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final reply = controller.messageById(message.replyToMessageId);
     final forwarded = message.forwardFromThreadId != null;
     final canSwipeDelete = _canAttemptSwipeDelete(message);
+    final enableInsightSwipe = _canTriggerAiInsight();
     final TextDirection textDirection = Directionality.of(context);
 
     final bubblePadding = isMine
@@ -1078,9 +1228,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
       ),
     );
 
+    final aiHorizontalOffset =
+        enableInsightSwipe ? _signedAiOffset(textDirection) : 0.0;
+
     final translatedBubble = Transform.translate(
       offset: Offset(
-        canSwipeDelete ? _swipeDragOffset : 0,
+        (canSwipeDelete ? _swipeDragOffset : 0) + aiHorizontalOffset,
         _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0,
       ),
       child: bubble,
@@ -1117,9 +1270,24 @@ class _MessageBubbleState extends State<_MessageBubble> {
             borderRadius: borderRadius,
             alignment: _swipeBackgroundAlignment(textDirection),
           ),
+        if (enableInsightSwipe && _aiSwipeExtent > 0)
+          PositionedDirectional(
+            start: textDirection == TextDirection.rtl
+                ? null
+                : -48 + (_aiSwipeExtent * 0.25),
+            end: textDirection == TextDirection.rtl
+                ? -48 + (_aiSwipeExtent * 0.25)
+                : null,
+            child: Opacity(
+              opacity: (_aiSwipeExtent / _aiTriggerThreshold).clamp(0.0, 1.0),
+              child: _AiSwipeHint(isReady: _aiSwipeReady),
+            ),
+          ),
         animatedBubble,
       ],
     );
+
+    final handleHorizontalGestures = canSwipeDelete || enableInsightSwipe;
 
     final bubbleGesture = GestureDetector(
       behavior: HitTestBehavior.translucent,
@@ -1129,12 +1297,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
       onLongPressEnd: _handleLongPressEnd,
       onLongPressCancel: _handleLongPressCancel,
       onHorizontalDragStart:
-          canSwipeDelete ? _handleHorizontalDragStart : null,
+          handleHorizontalGestures ? _handleHorizontalGestureStart : null,
       onHorizontalDragUpdate:
-          canSwipeDelete ? _handleHorizontalDragUpdate : null,
-      onHorizontalDragEnd: canSwipeDelete ? _handleHorizontalDragEnd : null,
+          handleHorizontalGestures ? _handleHorizontalGestureUpdate : null,
+      onHorizontalDragEnd:
+          handleHorizontalGestures ? _handleHorizontalGestureEnd : null,
       onHorizontalDragCancel:
-          canSwipeDelete ? _handleHorizontalDragCancel : null,
+          handleHorizontalGestures ? _handleHorizontalGestureCancel : null,
       child: bubbleStack,
     );
 
@@ -1174,7 +1343,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
         : AlignmentDirectional.centerEnd;
   }
 
-  void _handleHorizontalDragStart(DragStartDetails details) {
+  void _handleDeleteHorizontalDragStart(DragStartDetails details) {
     if (!_canAttemptSwipeDelete(widget.message)) {
       return;
     }
@@ -1182,7 +1351,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     _isHorizontalDragActive = true;
   }
 
-  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+  void _handleDeleteHorizontalDragUpdate(DragUpdateDetails details) {
     if (!_canAttemptSwipeDelete(widget.message)) {
       return;
     }
@@ -1203,7 +1372,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     }
   }
 
-  Future<void> _handleHorizontalDragEnd(DragEndDetails details) async {
+  Future<void> _handleDeleteHorizontalDragEnd(DragEndDetails details) async {
     if (!_canAttemptSwipeDelete(widget.message)) {
       return;
     }
@@ -1235,7 +1404,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     _resetSwipeState();
   }
 
-  void _handleHorizontalDragCancel() {
+  void _handleDeleteHorizontalDragCancel() {
     if (!_canAttemptSwipeDelete(widget.message)) {
       return;
     }
@@ -1396,6 +1565,92 @@ class _MessageBubbleState extends State<_MessageBubble> {
         return onBubble.withOpacity(0.6);
     }
   }
+
+  Future<void> _openInsightSheet() async {
+    if (!mounted) {
+      return;
+    }
+    final message = widget.message;
+    final text = message.text?.trim() ?? '';
+    if (text.isEmpty) {
+      _showNoFactsToast();
+      return;
+    }
+    final controller = context.read<ChatThreadController>();
+    final notifier = ValueNotifier<_AiSheetState>(
+      const _AiSheetState(isLoading: true),
+    );
+
+    Future<void> load() async {
+      notifier.value = notifier.value.copyWith(isLoading: true);
+      final locale = Localizations.maybeLocaleOf(context)?.languageCode ?? 'ar';
+      final insight = await AiInsightService.instance.getInsight(
+        threadId: widget.threadId,
+        messageId: message.id,
+        text: text,
+        locale: locale,
+      );
+      if (!mounted) {
+        return;
+      }
+      notifier.value = notifier.value.copyWith(
+        isLoading: false,
+        insight: insight,
+      );
+      if (insight == null) {
+        _showNoFactsToast();
+      }
+    }
+
+    unawaited(load());
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (sheetContext) {
+          return ValueListenableBuilder<_AiSheetState>(
+            valueListenable: notifier,
+            builder: (context, state, _) {
+              return AiInsightSheet(
+                insight: state.insight,
+                isLoading: state.isLoading,
+                onRetry: () {
+                  unawaited(load());
+                },
+                onTranslate: () async {
+                  await controller.translateMessage(message);
+                  Navigator.of(sheetContext).pop();
+                },
+                onExplain: _showComingSoonMessage,
+                onRelated: _showComingSoonMessage,
+                onAskAi: _showComingSoonMessage,
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      notifier.dispose();
+    }
+  }
+
+  void _showNoFactsToast() {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No quick facts found')),
+    );
+  }
+
+  void _showComingSoonMessage() {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('سيتم دعم هذا الإجراء قريباً')),
+    );
+  }
 }
 
 class _SwipeDeleteBackground extends StatelessWidget {
@@ -1444,6 +1699,59 @@ class _SwipeDeleteBackground extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _AiSwipeHint extends StatelessWidget {
+  const _AiSwipeHint({required this.isReady});
+
+  final bool isReady;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final backgroundColor = isReady
+        ? theme.colorScheme.primaryContainer
+        : theme.colorScheme.surfaceVariant.withOpacity(0.9);
+    final textColor = isReady
+        ? theme.colorScheme.onPrimaryContainer
+        : theme.colorScheme.onSurfaceVariant;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.auto_awesome, size: 16, color: textColor),
+          const SizedBox(width: 4),
+          Text(
+            'AI',
+            style: TextStyle(
+              color: textColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AiSheetState {
+  const _AiSheetState({required this.isLoading, this.insight});
+
+  final bool isLoading;
+  final AiInsight? insight;
+
+  _AiSheetState copyWith({bool? isLoading, AiInsight? insight}) {
+    return _AiSheetState(
+      isLoading: isLoading ?? this.isLoading,
+      insight: insight ?? this.insight,
     );
   }
 }
