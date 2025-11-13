@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/ai_insight.dart';
+import 'feature_flags.dart';
 
 class OpenAiDiagResult {
   final bool ok;
@@ -32,72 +34,89 @@ class OpenAiDiagResult {
       };
 }
 
-String get _openAiKey => (dotenv.env['OPENAI_API_KEY'] ?? '').trim();
-String get _openAiBaseUrl =>
-    (dotenv.env['OPENAI_BASE_URL'] ?? 'https://api.openai.com/v1').trim();
-String get _openAiModel =>
-    (dotenv.env['OPENAI_MODEL_TEXT'] ?? 'gpt-4o-mini').trim();
-Duration get _openAiTimeout => Duration(
-      milliseconds:
-          int.tryParse(dotenv.env['OPENAI_REQUEST_TIMEOUT_MS'] ?? '') ?? 15000,
-    );
+class OpenAiConfig {
+  final String apiKey;
+  final String baseUrl;
+  final String textModel;
+  final Duration timeout;
+
+  const OpenAiConfig({
+    required this.apiKey,
+    required this.baseUrl,
+    required this.textModel,
+    required this.timeout,
+  });
+}
+
+OpenAiConfig loadOpenAiConfig() {
+  final key = dotenv.env['OPENAI_API_KEY']?.trim() ?? '';
+  final baseEnv = dotenv.env['OPENAI_BASE_URL']?.trim() ?? '';
+  final base = baseEnv.isNotEmpty ? baseEnv : 'https://api.openai.com/v1';
+  final modelEnv = dotenv.env['OPENAI_MODEL_TEXT']?.trim() ?? '';
+  final model = modelEnv.isNotEmpty ? modelEnv : 'gpt-4o-mini';
+  return OpenAiConfig(
+    apiKey: key,
+    baseUrl: base,
+    textModel: model,
+    timeout: FeatureFlags.aiInsightTimeout,
+  );
+}
+
+class AiInsightException implements Exception {
+  const AiInsightException({
+    required this.code,
+    this.statusCode,
+    this.message,
+    this.isNetworkError = false,
+    this.isTimeout = false,
+  });
+
+  final String code;
+  final int? statusCode;
+  final String? message;
+  final bool isNetworkError;
+  final bool isTimeout;
+
+  @override
+  String toString() =>
+      'AiInsightException(code: $code, status: $statusCode, message: $message)';
+}
 
 class AiInsightService {
-  AiInsightService({
-    String? apiKey,
-    String? baseUrl,
-    String? model,
-    int? timeoutMs,
-    http.Client? httpClient,
-    Duration? timeout,
-  })  : _overrideApiKey = apiKey,
-        _overrideBaseUrl = baseUrl,
-        _overrideModel = model,
-        _overrideTimeout = timeout ??
-            (timeoutMs != null
-                ? Duration(milliseconds: timeoutMs)
-                : null),
+  AiInsightService({OpenAiConfig? config, http.Client? httpClient})
+      : _config = config ?? loadOpenAiConfig(),
         _client = httpClient ?? http.Client();
 
-  final String? _overrideApiKey;
-  final String? _overrideBaseUrl;
-  final String? _overrideModel;
-  final Duration? _overrideTimeout;
+  final OpenAiConfig _config;
   final http.Client _client;
 
-  String get _effectiveApiKey => (_overrideApiKey ?? _openAiKey).trim();
-  String get _effectiveBaseUrl => (_overrideBaseUrl ?? _openAiBaseUrl).trim();
-  String get _effectiveModel => (_overrideModel ?? _openAiModel).trim();
-  Duration get _effectiveTimeout => _overrideTimeout ?? _openAiTimeout;
+  static bool isConfigured() => (dotenv.env['OPENAI_API_KEY']?.trim() ?? '').isNotEmpty;
 
-  bool get isConfigured => _effectiveApiKey.isNotEmpty;
+  Uri _buildUri(String path) {
+    final normalizedBase = _config.baseUrl.endsWith('/')
+        ? _config.baseUrl.substring(0, _config.baseUrl.length - 1)
+        : _config.baseUrl;
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    return Uri.parse('$normalizedBase$normalizedPath');
+  }
+
+  Map<String, String> _headers() => <String, String>{
+        'Authorization': 'Bearer ${_config.apiKey}',
+        'Content-Type': 'application/json',
+      };
 
   Future<OpenAiDiagResult> ping() async {
-    final apiKey = _effectiveApiKey;
+    final apiKey = _config.apiKey;
     if (apiKey.isEmpty) {
       return OpenAiDiagResult.missingKey();
     }
 
-    final rawBase = _effectiveBaseUrl.isEmpty
-        ? 'https://api.openai.com/v1'
-        : _effectiveBaseUrl;
-    var base = rawBase.trim();
-    if (base.endsWith('/')) {
-      base = base.substring(0, base.length - 1);
-    }
-    final uriBase = base.endsWith('/v1') ? base : '$base/v1';
-    final uri = Uri.parse('$uriBase/models');
+    final uri = _buildUri('/models');
 
     try {
       final response = await _client
-          .get(
-            uri,
-            headers: {
-              'Authorization': 'Bearer $apiKey',
-              'Content-Type': 'application/json',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
+          .get(uri, headers: _headers())
+          .timeout(_config.timeout);
 
       final status = response.statusCode;
       if (status >= 200 && status < 300) {
@@ -129,13 +148,12 @@ class AiInsightService {
     String? imageUrl,
     String? followupInstruction,
   }) async {
-    final apiKey = _effectiveApiKey;
+    final apiKey = _config.apiKey;
     if (apiKey.isEmpty) {
       throw StateError('OPENAI_API_KEY_MISSING');
     }
 
-    final baseUrl = _effectiveBaseUrl;
-    final uri = Uri.parse('$baseUrl/chat/completions');
+    final uri = _buildUri('/chat/completions');
     final sys =
         'You are an assistant embedded in a chat app. '
         'Given a single message (text and/or image), return a compact JSON object with: '
@@ -165,7 +183,7 @@ class AiInsightService {
     }
 
     final body = {
-      'model': _effectiveModel,
+      'model': _config.textModel,
       'temperature': 0.3,
       'response_format': {'type': 'json_object'},
       'messages': [
@@ -178,26 +196,71 @@ class AiInsightService {
       final response = await _client
           .post(
             uri,
-            headers: {
-              'Authorization': 'Bearer $apiKey',
-              'Content-Type': 'application/json',
-            },
+            headers: _headers(),
             body: jsonEncode(body),
           )
-          .timeout(_effectiveTimeout);
+          .timeout(_config.timeout);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        final Map<String, dynamic> decoded = json.decode(response.body) as Map<String, dynamic>;
-        final txt = decoded['choices']?[0]?['message']?['content'] as String? ?? '{}';
-        return AiInsight.fromJson(json.decode(txt) as Map<String, dynamic>);
+        try {
+          final Map<String, dynamic> decoded =
+              json.decode(response.body) as Map<String, dynamic>;
+          final txt = decoded['choices']?[0]?['message']?['content'] as String? ?? '{}';
+          return AiInsight.fromJson(json.decode(txt) as Map<String, dynamic>);
+        } catch (err) {
+          throw AiInsightException(code: 'invalid_response', message: '$err');
+        }
       }
-    } catch (_) {
-      // Swallow exceptions and fall back below.
+      throw _httpError(response);
+    } on TimeoutException {
+      throw const AiInsightException(
+        code: 'timeout',
+        isTimeout: true,
+        message: 'Request timeout',
+      );
+    } on SocketException catch (err) {
+      throw AiInsightException(
+        code: 'network_error',
+        isNetworkError: true,
+        message: err.message,
+      );
+    } on http.ClientException catch (err) {
+      throw AiInsightException(
+        code: 'network_error',
+        isNetworkError: true,
+        message: err.message,
+      );
+    } on AiInsightException {
+      rethrow;
+    } catch (err) {
+      throw AiInsightException(
+        code: 'unknown',
+        message: err.toString(),
+      );
     }
+  }
 
-    return const AiInsight(
-      title: 'خدمة الذكاء غير متاحة',
-      bullets: ['تعذر الحصول على الملخص حاليًا، حاول لاحقًا.'],
+  AiInsightException _httpError(http.Response response) {
+    final status = response.statusCode;
+    final body = response.body.trim();
+    if (status == 401 || status == 403) {
+      return AiInsightException(
+        code: 'unauthorized',
+        statusCode: status,
+        message: body,
+      );
+    }
+    if (status == 429) {
+      return AiInsightException(
+        code: 'rate_limited',
+        statusCode: status,
+        message: body,
+      );
+    }
+    return AiInsightException(
+      code: 'http_error',
+      statusCode: status,
+      message: body,
     );
   }
 }

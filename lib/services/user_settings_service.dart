@@ -73,9 +73,13 @@ class PrivacySettings {
 }
 
 class UserSettingsService {
-  UserSettingsService({cf.FirebaseFirestore? firestore}) : _firestore = firestore ?? cf.FirebaseFirestore.instance;
+  UserSettingsService({cf.FirebaseFirestore? firestore})
+      : _firestore = firestore ?? cf.FirebaseFirestore.instance;
 
   final cf.FirebaseFirestore _firestore;
+  Map<String, dynamic>? _cachedUser;
+
+  bool get isPremiumCached => (_cachedUser?['isPremium'] == true);
 
   cf.DocumentReference<Map<String, dynamic>> _privacyDoc(String uid) {
     return _firestore.collection('users').doc(uid).collection('settings').doc('privacy');
@@ -105,6 +109,14 @@ class UserSettingsService {
   Future<void> updatePrivacy(String uid, Map<String, dynamic> patch) async {
     final docRef = _privacyDoc(uid);
     await docRef.set(patch, cf.SetOptions(merge: true));
+  }
+
+  Stream<bool> watchIsPremium(String uid) {
+    return _firestore.collection('users').doc(uid).snapshots().map((snapshot) {
+      final data = snapshot.data();
+      _cachedUser = data;
+      return (data?['isPremium'] == true);
+    });
   }
 }
 // CODEX-END:USER_SETTINGS_SERVICE
