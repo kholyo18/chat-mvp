@@ -1,9 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/ai_insight.dart';
+
+String get _openAiKey => (dotenv.env['OPENAI_API_KEY'] ?? '').trim();
+String get _openAiBaseUrl =>
+    (dotenv.env['OPENAI_BASE_URL'] ?? 'https://api.openai.com/v1').trim();
+String get _openAiModel =>
+    (dotenv.env['OPENAI_MODEL_TEXT'] ?? 'gpt-4o-mini').trim();
+Duration get _openAiTimeout => Duration(
+      milliseconds:
+          int.tryParse(dotenv.env['OPENAI_REQUEST_TIMEOUT_MS'] ?? '') ?? 15000,
+    );
 
 class AiInsightService {
   AiInsightService({
@@ -12,28 +23,28 @@ class AiInsightService {
     String? model,
     int? timeoutMs,
     http.Client? httpClient,
-  })  : apiKey = apiKey ??
-            const String.fromEnvironment('OPENAI_API_KEY', defaultValue: ''),
-        baseUrl = baseUrl ??
-            const String.fromEnvironment(
-              'OPENAI_BASE_URL',
-              defaultValue: 'https://api.openai.com/v1',
-            ),
-        model = model ??
-            const String.fromEnvironment(
-              'OPENAI_MODEL_TEXT',
-              defaultValue: 'gpt-4o-mini',
-            ),
-        timeoutMs = timeoutMs ?? _readTimeoutFromEnv(),
+    Duration? timeout,
+  })  : _overrideApiKey = apiKey,
+        _overrideBaseUrl = baseUrl,
+        _overrideModel = model,
+        _overrideTimeout = timeout ??
+            (timeoutMs != null
+                ? Duration(milliseconds: timeoutMs)
+                : null),
         _client = httpClient ?? http.Client();
 
-  final String apiKey;
-  final String baseUrl;
-  final String model;
-  final int timeoutMs;
+  final String? _overrideApiKey;
+  final String? _overrideBaseUrl;
+  final String? _overrideModel;
+  final Duration? _overrideTimeout;
   final http.Client _client;
 
-  bool get isConfigured => apiKey.isNotEmpty;
+  String get _effectiveApiKey => (_overrideApiKey ?? _openAiKey).trim();
+  String get _effectiveBaseUrl => (_overrideBaseUrl ?? _openAiBaseUrl).trim();
+  String get _effectiveModel => (_overrideModel ?? _openAiModel).trim();
+  Duration get _effectiveTimeout => _overrideTimeout ?? _openAiTimeout;
+
+  bool get isConfigured => _effectiveApiKey.isNotEmpty;
 
   Future<AiInsight> analyze({
     required String userLocale,
@@ -41,13 +52,12 @@ class AiInsightService {
     String? imageUrl,
     String? followupInstruction,
   }) async {
-    if (!isConfigured) {
-      return const AiInsight(
-        title: 'الميزة غير مفعّلة',
-        bullets: ['مطلوب مفتاح OpenAI لتفعيل الملخص الذكي.'],
-      );
+    final apiKey = _effectiveApiKey;
+    if (apiKey.isEmpty) {
+      throw StateError('OPENAI_API_KEY_MISSING');
     }
 
+    final baseUrl = _effectiveBaseUrl;
     final uri = Uri.parse('$baseUrl/chat/completions');
     final sys =
         'You are an assistant embedded in a chat app. '
@@ -78,7 +88,7 @@ class AiInsightService {
     }
 
     final body = {
-      'model': model,
+      'model': _effectiveModel,
       'temperature': 0.3,
       'response_format': {'type': 'json_object'},
       'messages': [
@@ -97,7 +107,7 @@ class AiInsightService {
             },
             body: jsonEncode(body),
           )
-          .timeout(Duration(milliseconds: timeoutMs));
+          .timeout(_effectiveTimeout);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final Map<String, dynamic> decoded = json.decode(response.body) as Map<String, dynamic>;
@@ -112,10 +122,5 @@ class AiInsightService {
       title: 'خدمة الذكاء غير متاحة',
       bullets: ['تعذر الحصول على الملخص حاليًا، حاول لاحقًا.'],
     );
-  }
-
-  static int _readTimeoutFromEnv() {
-    const raw = String.fromEnvironment('OPENAI_REQUEST_TIMEOUT_MS', defaultValue: '15000');
-    return int.tryParse(raw) ?? 15000;
   }
 }

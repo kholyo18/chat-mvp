@@ -13,6 +13,7 @@ import 'dart:ui' as ui show TextDirection;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // CODEX-BEGIN:BOOT_AUTH_PING
 import 'package:firebase_core/firebase_core.dart';
@@ -521,8 +522,9 @@ class _LocaleDataCache {
 
 // ---------- Entry ----------
 // CODEX-BEGIN:BOOT_GUARD_INIT
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
 
   try {
     // Never hang here; continue after 10s max.

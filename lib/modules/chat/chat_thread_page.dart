@@ -1011,9 +1011,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final canSwipeDelete = _canAttemptSwipeDelete(message);
     final TextDirection textDirection = Directionality.of(context);
     _currentTextDirection = textDirection;
-    const featureFlags = FeatureFlags();
     final bool canUseAiInsight =
-        featureFlags.enableAiSwipeInsight && controller.canUseSwipeAiInsight;
+        FeatureFlags.canUseSwipeAiInsight && controller.canUseSwipeAiInsight;
 
     final bubblePadding = isMine
         ? const EdgeInsets.only(left: 64, right: 8, top: 4, bottom: 4)
@@ -1380,20 +1379,32 @@ class _MessageBubbleState extends State<_MessageBubble> {
     }
     final controller = context.read<ChatThreadController>();
     final message = widget.message;
-    final bool aiEnabled =
-        const FeatureFlags().enableAiSwipeInsight && controller.canUseSwipeAiInsight;
     final bool hasContent = _hasInsightContent(message);
-    final shouldTrigger =
-        _insightGestureActive &&
+    final bool gestureReachedTrigger = _insightGestureActive &&
         !deleteActionTriggered &&
         _insightDragExtent >= _insightTriggerDx &&
-        aiEnabled &&
         hasContent;
+    final bool featureEnabled = FeatureFlags.canUseSwipeAiInsight;
+    if (gestureReachedTrigger && !featureEnabled) {
+      _resetInsightGesture();
+      _showAiInsightDisabledToast();
+      return;
+    }
+    final bool aiEnabled = featureEnabled && controller.canUseSwipeAiInsight;
+    final bool shouldTrigger = gestureReachedTrigger && aiEnabled;
     _resetInsightGesture();
     if (!shouldTrigger) {
       return;
     }
     unawaited(_showAiInsightForMessage(controller, message));
+  }
+
+  void _showAiInsightDisabledToast() {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('الميزة غير مفعّلة')),
+    );
   }
 
   void _trackInsightSheet(Future<dynamic> sheetFuture) {
@@ -1438,14 +1449,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final text = message.text;
     final imageUrl = _messageImageUrl(message);
 
-    if (!aiService.isConfigured) {
-      final sheet = showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        builder: (_) => const AiInsightSheet(insight: _missingKeyInsight),
-      );
-      _trackInsightSheet(sheet);
+    if (!FeatureFlags.canUseSwipeAiInsight || !aiService.isConfigured) {
+      _showAiInsightDisabledToast();
       return;
     }
 
@@ -1473,6 +1478,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
     AiInsight insight;
     try {
       insight = await analysisFuture;
+    } on StateError catch (error) {
+      if (error.message == 'OPENAI_API_KEY_MISSING') {
+        insight = _missingKeyInsight;
+      } else {
+        insight = _errorInsight;
+      }
     } catch (_) {
       insight = _errorInsight;
     }
