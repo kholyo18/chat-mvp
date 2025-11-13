@@ -32,6 +32,7 @@ class TypingPreviewService {
   bool _viewerHasPreviewAccess = false;
   bool _shareTypingPreview = false;
   bool _canSwipeDelete = false;
+  bool _canSwipeAiInsight = false;
 
   bool get _canSend => _shareTypingPreview;
   bool get _canView => _viewerHasPreviewAccess;
@@ -42,6 +43,7 @@ class TypingPreviewService {
   /// Premium entitlements for features such as the swipe-to-delete action
   /// reuse the same billing flags that gate typing previews.
   bool get canUseSwipePermanentDelete => _canSwipeDelete;
+  bool get canUseSwipeAiInsight => _canSwipeAiInsight;
 
   Future<void> initialize() async {
     await _handleAuth(_auth.currentUser);
@@ -102,7 +104,10 @@ class TypingPreviewService {
             _updateViewerAccess(hasPreviewAccess);
             final canSwipeDelete =
                 isPremiumFlag || ultraPass || typingPreviewPremium || hasVipAccess;
+            final canUseAiInsight =
+                isPremiumFlag || ultraPass || typingPreviewPremium || hasVipAccess;
             _updateSwipeDeleteAccess(canSwipeDelete);
+            _updateSwipeAiInsightAccess(canUseAiInsight);
           },
           onError: (Object error, StackTrace stackTrace) {
             debugPrint('TypingPreviewService user listen error: $error');
@@ -167,6 +172,13 @@ class TypingPreviewService {
       return;
     }
     _canSwipeDelete = value;
+  }
+
+  void _updateSwipeAiInsightAccess(bool value) {
+    if (_canSwipeAiInsight == value) {
+      return;
+    }
+    _canSwipeAiInsight = value;
   }
 
   Future<void> sendTypingPreview({

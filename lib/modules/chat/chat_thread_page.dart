@@ -43,9 +43,11 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
     super.didChangeDependencies();
     if (_controller == null) {
       final translator = context.read<TranslatorService>();
+      final entitlements = context.read<TypingPreviewService>();
       _controller = ChatThreadController(
         threadId: widget.threadId,
         translatorService: translator,
+        entitlements: entitlements,
       )..load();
     }
   }
@@ -814,6 +816,8 @@ class _MessageBubble extends StatefulWidget {
 class _MessageBubbleState extends State<_MessageBubble> {
   static const double _replyTriggerDy = 96.0;
   static const double _replyVisualLimit = 64.0;
+  static const double _insightTriggerDx = 48.0;
+  static const double _insightVisualLimit = 60.0;
 
   double _dragVisualOffset = 0;
   bool _willReply = false;
@@ -822,6 +826,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
   bool _isInDeleteZone = false;
   bool _isHorizontalDragActive = false;
   bool _pendingPermanentRemoval = false;
+  double _insightDragExtent = 0;
+  bool _insightGestureActive = false;
+  TextDirection? _currentTextDirection;
 
   @override
   void didUpdateWidget(covariant _MessageBubble oldWidget) {
@@ -831,6 +838,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
       _isInDeleteZone = false;
       _isHorizontalDragActive = false;
       _pendingPermanentRemoval = false;
+      _insightDragExtent = 0;
+      _insightGestureActive = false;
     }
   }
 
@@ -989,6 +998,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final forwarded = message.forwardFromThreadId != null;
     final canSwipeDelete = _canAttemptSwipeDelete(message);
     final TextDirection textDirection = Directionality.of(context);
+    _currentTextDirection = textDirection;
+    final bool canUseAiInsight = controller.canUseSwipeAiInsight;
 
     final bubblePadding = isMine
         ? const EdgeInsets.only(left: 64, right: 8, top: 4, bottom: 4)
@@ -1080,7 +1091,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final translatedBubble = Transform.translate(
       offset: Offset(
-        canSwipeDelete ? _swipeDragOffset : 0,
+        (canSwipeDelete ? _swipeDragOffset : 0) + _insightVisualShift(),
         _dragVisualOffset > 0 ? _dragVisualOffset * 0.25 : 0,
       ),
       child: bubble,
@@ -1117,6 +1128,27 @@ class _MessageBubbleState extends State<_MessageBubble> {
             borderRadius: borderRadius,
             alignment: _swipeBackgroundAlignment(textDirection),
           ),
+        if (!canUseAiInsight)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _insightDragExtent > 8 ? 1 : 0,
+                duration: const Duration(milliseconds: 120),
+                child: Align(
+                  alignment: _insightHintAlignment(textDirection),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'ميزة الذكاء الاصطناعي متاحة للحسابات المميزة',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant.withOpacity(0.8),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         animatedBubble,
       ],
     );
@@ -1128,13 +1160,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
       onLongPressMoveUpdate: _handleLongPressMoveUpdate,
       onLongPressEnd: _handleLongPressEnd,
       onLongPressCancel: _handleLongPressCancel,
-      onHorizontalDragStart:
-          canSwipeDelete ? _handleHorizontalDragStart : null,
-      onHorizontalDragUpdate:
-          canSwipeDelete ? _handleHorizontalDragUpdate : null,
-      onHorizontalDragEnd: canSwipeDelete ? _handleHorizontalDragEnd : null,
-      onHorizontalDragCancel:
-          canSwipeDelete ? _handleHorizontalDragCancel : null,
+      onHorizontalDragStart: _handleHorizontalDragStart,
+      onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+      onHorizontalDragEnd: _handleHorizontalDragEnd,
+      onHorizontalDragCancel: _handleHorizontalDragCancel,
       child: bubbleStack,
     );
 
@@ -1166,6 +1195,21 @@ class _MessageBubbleState extends State<_MessageBubble> {
     return widget.isMine && !message.deletedForEveryone;
   }
 
+  double _insightVisualShift() {
+    if (_insightDragExtent == 0) {
+      return 0;
+    }
+    final direction = _currentTextDirection ?? TextDirection.ltr;
+    final clamped = math.min(_insightDragExtent, _insightVisualLimit);
+    return direction == TextDirection.rtl ? -clamped : clamped;
+  }
+
+  AlignmentGeometry _insightHintAlignment(TextDirection direction) {
+    return direction == TextDirection.rtl
+        ? AlignmentDirectional.centerEnd
+        : AlignmentDirectional.centerStart;
+  }
+
   AlignmentGeometry _swipeBackgroundAlignment(TextDirection direction) {
     // We currently require a swipe towards the center of the conversation,
     // which translates to a leftward drag for outgoing messages.
@@ -1175,7 +1219,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
   }
 
   void _handleHorizontalDragStart(DragStartDetails details) {
+    _insightGestureActive = true;
+    _insightDragExtent = 0;
     if (!_canAttemptSwipeDelete(widget.message)) {
+      _isHorizontalDragActive = false;
       return;
     }
     _resetSwipeState();
@@ -1183,11 +1230,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
   }
 
   void _handleHorizontalDragUpdate(DragUpdateDetails details) {
-    if (!_canAttemptSwipeDelete(widget.message)) {
-      return;
-    }
     final delta = details.primaryDelta ?? 0;
     if (delta == 0 && _isHorizontalDragActive) {
+      return;
+    }
+    if (delta != 0) {
+      _updateInsightGesture(delta);
+    }
+    if (!_canAttemptSwipeDelete(widget.message)) {
       return;
     }
     _isHorizontalDragActive = true;
@@ -1204,42 +1254,44 @@ class _MessageBubbleState extends State<_MessageBubble> {
   }
 
   Future<void> _handleHorizontalDragEnd(DragEndDetails details) async {
-    if (!_canAttemptSwipeDelete(widget.message)) {
-      return;
-    }
-    final meetsThreshold =
-        _isInDeleteZone && _effectiveSwipeExtent(_swipeDragOffset) >= _deleteThresholdPx();
-    if (meetsThreshold && !_canUseSwipeDelete()) {
-      _showPremiumOnlySnack();
-      _resetSwipeState();
-      return;
-    }
-    if (meetsThreshold) {
-      final confirmed = await _showPermanentDeleteConfirmation();
-      if (!mounted) {
-        return;
-      }
-      if (confirmed) {
-        setState(() {
-          _pendingPermanentRemoval = true;
-          _swipeDragOffset = 0;
-          _isInDeleteZone = false;
-          _isHorizontalDragActive = false;
-        });
-        await _performPermanentDelete();
+    final canDelete = _canAttemptSwipeDelete(widget.message);
+    var deleteGestureConsumed = false;
+    if (canDelete) {
+      final meetsThreshold =
+          _isInDeleteZone && _effectiveSwipeExtent(_swipeDragOffset) >= _deleteThresholdPx();
+      if (meetsThreshold && !_canUseSwipeDelete()) {
+        _showPremiumOnlySnack();
+        _resetSwipeState();
+        deleteGestureConsumed = true;
+      } else if (meetsThreshold) {
+        final confirmed = await _showPermanentDeleteConfirmation();
+        if (!mounted) {
+          return;
+        }
+        deleteGestureConsumed = true;
+        if (confirmed) {
+          setState(() {
+            _pendingPermanentRemoval = true;
+            _swipeDragOffset = 0;
+            _isInDeleteZone = false;
+            _isHorizontalDragActive = false;
+          });
+          await _performPermanentDelete();
+        } else {
+          _resetSwipeState();
+        }
       } else {
         _resetSwipeState();
       }
-      return;
     }
-    _resetSwipeState();
+    await _maybeTriggerInsight(deleteActionTriggered: deleteGestureConsumed);
   }
 
   void _handleHorizontalDragCancel() {
-    if (!_canAttemptSwipeDelete(widget.message)) {
-      return;
+    if (_canAttemptSwipeDelete(widget.message)) {
+      _resetSwipeState();
     }
-    _resetSwipeState();
+    _resetInsightGesture();
   }
 
   void _resetSwipeState() {
@@ -1270,6 +1322,62 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
   double _effectiveSwipeExtent(double offset) {
     return offset < 0 ? -offset : offset;
+  }
+
+  void _updateInsightGesture(double delta) {
+    if (!_insightGestureActive || delta == 0) {
+      return;
+    }
+    final direction = _currentTextDirection ?? TextDirection.ltr;
+    final adjusted = direction == TextDirection.rtl ? -delta : delta;
+    final nextExtent = (_insightDragExtent + adjusted).clamp(0.0, _insightVisualLimit * 2);
+    if (nextExtent == _insightDragExtent) {
+      return;
+    }
+    if (!mounted) {
+      _insightDragExtent = nextExtent;
+      return;
+    }
+    setState(() {
+      _insightDragExtent = nextExtent;
+    });
+  }
+
+  void _resetInsightGesture() {
+    if (_insightDragExtent == 0 && !_insightGestureActive) {
+      _insightGestureActive = false;
+      return;
+    }
+    if (!mounted) {
+      _insightDragExtent = 0;
+      _insightGestureActive = false;
+      return;
+    }
+    setState(() {
+      _insightDragExtent = 0;
+      _insightGestureActive = false;
+    });
+  }
+
+  Future<void> _maybeTriggerInsight({required bool deleteActionTriggered}) async {
+    if (!mounted) {
+      _insightGestureActive = false;
+      return;
+    }
+    final controller = context.read<ChatThreadController>();
+    final messageText = widget.message.text ?? '';
+    final trimmed = messageText.trim();
+    final shouldTrigger =
+        _insightGestureActive &&
+        !deleteActionTriggered &&
+        _insightDragExtent >= _insightTriggerDx &&
+        controller.canUseSwipeAiInsight &&
+        trimmed.isNotEmpty;
+    _resetInsightGesture();
+    if (!shouldTrigger) {
+      return;
+    }
+    unawaited(controller.onSwipeInsight(trimmed, context));
   }
 
   bool _canUseSwipeDelete() {
