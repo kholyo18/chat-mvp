@@ -43,6 +43,7 @@ import 'package:chat_mvp/admin/admin_room_panel_page.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_list_item.dart';
 import 'package:chat_mvp/modules/chat/chat_thread_page.dart';
 import 'modules/chat/services/typing_preview_service.dart';
+import 'modules/settings/openai_diagnostics_page.dart';
 
 import 'modules/calls/dm_call_service.dart';
 import 'modules/calls/call_notification_service.dart';
@@ -525,6 +526,13 @@ class _LocaleDataCache {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
+  if (kDebugMode) {
+    final k = dotenv.env['OPENAI_API_KEY'];
+    if (k != null && k.isNotEmpty) {
+      final prefix = k.length <= 8 ? k : k.substring(0, 8);
+      debugPrint('🔑 OPENAI_API_KEY loaded: $prefix…');
+    }
+  }
 
   try {
     // Never hang here; continue after 10s max.
@@ -2312,6 +2320,24 @@ class _SettingsHubPageState extends State<SettingsHubPage> {
               leading: const Icon(Icons.info_outline_rounded),
               title: const Text('نصيحة'),
               subtitle: const Text('يمكنك العودة إلى هذه الصفحة لتغيير وضع المساعد أو التحقق من الحد اليومي في أي وقت.'),
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text('التشخيص', style: theme.textTheme.titleLarge),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.science_outlined),
+              title: const Text('اختبار اتصال OpenAI'),
+              subtitle: const Text('تحقق من صلاحية المفتاح والاتصال'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const OpenAiDiagnosticsPage(),
+                  ),
+                );
+              },
             ),
           ),
         ],

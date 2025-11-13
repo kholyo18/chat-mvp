@@ -6,6 +6,32 @@ import 'package:http/http.dart' as http;
 
 import '../models/ai_insight.dart';
 
+class OpenAiDiagResult {
+  final bool ok;
+  final int? modelsCount;
+  final int? status;
+  final String? message;
+
+  const OpenAiDiagResult.ok({this.modelsCount})
+      : ok = true,
+        status = null,
+        message = null;
+
+  const OpenAiDiagResult.err({this.status, this.message})
+      : ok = false,
+        modelsCount = null;
+
+  static OpenAiDiagResult missingKey() =>
+      const OpenAiDiagResult.err(status: 0, message: 'Missing API key');
+
+  Map<String, dynamic> toJson() => {
+        'ok': ok,
+        if (modelsCount != null) 'models': modelsCount,
+        if (status != null) 'status': status,
+        if (message != null) 'message': message,
+      };
+}
+
 String get _openAiKey => (dotenv.env['OPENAI_API_KEY'] ?? '').trim();
 String get _openAiBaseUrl =>
     (dotenv.env['OPENAI_BASE_URL'] ?? 'https://api.openai.com/v1').trim();
@@ -45,6 +71,57 @@ class AiInsightService {
   Duration get _effectiveTimeout => _overrideTimeout ?? _openAiTimeout;
 
   bool get isConfigured => _effectiveApiKey.isNotEmpty;
+
+  Future<OpenAiDiagResult> ping() async {
+    final apiKey = _effectiveApiKey;
+    if (apiKey.isEmpty) {
+      return OpenAiDiagResult.missingKey();
+    }
+
+    final rawBase = _effectiveBaseUrl.isEmpty
+        ? 'https://api.openai.com/v1'
+        : _effectiveBaseUrl;
+    var base = rawBase.trim();
+    if (base.endsWith('/')) {
+      base = base.substring(0, base.length - 1);
+    }
+    final uriBase = base.endsWith('/v1') ? base : '$base/v1';
+    final uri = Uri.parse('$uriBase/models');
+
+    try {
+      final response = await _client
+          .get(
+            uri,
+            headers: {
+              'Authorization': 'Bearer $apiKey',
+              'Content-Type': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final status = response.statusCode;
+      if (status >= 200 && status < 300) {
+        try {
+          final decoded = json.decode(response.body) as Map<String, dynamic>;
+          final List<dynamic>? models = decoded['data'] as List<dynamic>?;
+          return OpenAiDiagResult.ok(modelsCount: models?.length ?? 0);
+        } catch (_) {
+          return const OpenAiDiagResult.err(
+            status: 200,
+            message: 'Unexpected JSON structure',
+          );
+        }
+      }
+      return OpenAiDiagResult.err(status: status, message: response.body.trim());
+    } on TimeoutException {
+      return const OpenAiDiagResult.err(
+        status: null,
+        message: 'Network timeout',
+      );
+    } on Object catch (err) {
+      return OpenAiDiagResult.err(status: null, message: err.toString());
+    }
+  }
 
   Future<AiInsight> analyze({
     required String userLocale,
