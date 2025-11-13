@@ -8,6 +8,10 @@ import 'package:http/http.dart' as http;
 import '../models/ai_insight.dart';
 import 'feature_flags.dart';
 
+/// Temporary dev-only flag to bypass AI Insight quota enforcement while keeping
+/// Firestore usage tracking enabled. Set to `false` for production builds.
+const bool kDevIgnoreAiInsightQuota = true;
+
 // Exception used by AI Insight flow.
 class AIInsightException implements Exception {
   final String message;

@@ -140,10 +140,10 @@ class ChatThreadController extends ChangeNotifier {
     if (!AiInsightService.isConfigured()) {
       return false;
     }
-    if (!entitlements.canUseSwipeAiInsight) {
+    if (!entitlements.canUseSwipeAiInsight && !kDevIgnoreAiInsightQuota) {
       return false;
     }
-    if (!FeatureFlags.aiInsightRequirePremium) {
+    if (!FeatureFlags.aiInsightRequirePremium || kDevIgnoreAiInsightQuota) {
       return true;
     }
     return _userSettings.isPremiumCached;

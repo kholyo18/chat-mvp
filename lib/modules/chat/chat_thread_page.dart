@@ -1653,7 +1653,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
       return _invalidKeyInsight;
     }
     if (status == 429) {
-      return _rateLimitInsight;
+      return kDevIgnoreAiInsightQuota ? _errorInsight : _rateLimitInsight;
     }
     if (error.isNetworkError || error.isTimeout) {
       return _networkInsight;
