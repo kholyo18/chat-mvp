@@ -1486,15 +1486,15 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final translateCallback =
         (translationMode || locale == 'en' || !hasText)
             ? null
-            : (AiInsightSheetAction)(
+            : AiInsightSheetAction(
                 (sheetCtx) =>
                     _handleAiTranslate(sheetCtx, controller, message),
               );
-    final explainCallback = (AiInsightSheetAction)(
+    final explainCallback = AiInsightSheetAction(
       (sheetCtx) =>
           _handleAiExplainMore(sheetCtx, controller, message, locale),
     );
-    final retryCallback = (AiInsightSheetAction)(
+    final retryCallback = AiInsightSheetAction(
       (sheetCtx) => _handleAiRetry(
         sheetCtx,
         controller,
@@ -1505,7 +1505,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
       ),
     );
     final copyCallback = hasCopyableContent
-        ? (AiInsightSheetAction)(
+        ? AiInsightSheetAction(
             (sheetCtx) => _handleAiCopy(sheetCtx, insight),
           )
         : null;
