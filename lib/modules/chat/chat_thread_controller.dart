@@ -19,7 +19,6 @@ import 'chat_message.dart';
 import 'services/ai_insight_service.dart';
 import 'services/chat_message_service.dart';
 import 'services/typing_preview_service.dart';
-import 'widgets/ai_insight_sheet.dart';
 
 class ChatPresenceState {
   const ChatPresenceState({
@@ -126,6 +125,7 @@ class ChatThreadController extends ChangeNotifier {
 
   String? get currentUid => _currentUid;
   bool get canUseSwipeAiInsight => entitlements.canUseSwipeAiInsight;
+  AiInsightService get aiInsightService => _aiInsightService;
 
   Future<void> load() async {
     _currentUid = _auth.currentUser?.uid;
@@ -806,41 +806,6 @@ class ChatThreadController extends ChangeNotifier {
       return '.jpg';
     }
     return '';
-  }
-
-  Future<void> onSwipeInsight(String messageText, BuildContext context) async {
-    if (!canUseSwipeAiInsight) {
-      return;
-    }
-    final trimmed = messageText.trim();
-    if (trimmed.isEmpty) {
-      return;
-    }
-    try {
-      final insight = await _aiInsightService.getInsightFor(trimmed);
-      if (!context.mounted) {
-        return;
-      }
-      await showModalBottomSheet<void>(
-        context: context,
-        useSafeArea: true,
-        showDragHandle: true,
-        builder: (_) => AiInsightSheet(insight: insight),
-      );
-    } catch (error) {
-      if (!context.mounted) {
-        return;
-      }
-      await showModalBottomSheet<void>(
-        context: context,
-        useSafeArea: true,
-        showDragHandle: true,
-        builder: (_) => const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text("Couldn't load AI insight. Please try again."),
-        ),
-      );
-    }
   }
 
   Future<void> disposeAsync() async {
