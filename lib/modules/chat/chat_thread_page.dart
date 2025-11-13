@@ -1483,31 +1483,25 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final hasCopyableContent = _hasCopyableInsight(insight);
     final hasText = (message.text?.trim().isNotEmpty ?? false);
-    final translateCallback =
+    final AiInsightSheetAction? translateCallback =
         (translationMode || locale == 'en' || !hasText)
             ? null
-            : AiInsightSheetAction(
-                (sheetCtx) =>
-                    _handleAiTranslate(sheetCtx, controller, message),
-              );
-    final explainCallback = AiInsightSheetAction(
-      (sheetCtx) =>
-          _handleAiExplainMore(sheetCtx, controller, message, locale),
-    );
-    final retryCallback = AiInsightSheetAction(
-      (sheetCtx) => _handleAiRetry(
-        sheetCtx,
-        controller,
-        message,
-        locale,
-        explainMore: explainMore,
-        translationMode: translationMode,
-      ),
-    );
-    final copyCallback = hasCopyableContent
-        ? AiInsightSheetAction(
-            (sheetCtx) => _handleAiCopy(sheetCtx, insight),
-          )
+            : (BuildContext sheetCtx) =>
+                _handleAiTranslate(sheetCtx, controller, message);
+    final AiInsightSheetAction explainCallback =
+        (BuildContext sheetCtx) =>
+            _handleAiExplainMore(sheetCtx, controller, message, locale);
+    final AiInsightSheetAction retryCallback = (BuildContext sheetCtx) =>
+        _handleAiRetry(
+          sheetCtx,
+          controller,
+          message,
+          locale,
+          explainMore: explainMore,
+          translationMode: translationMode,
+        );
+    final AiInsightSheetAction? copyCallback = hasCopyableContent
+        ? (BuildContext sheetCtx) => _handleAiCopy(sheetCtx, insight)
         : null;
 
     final replacement = AiInsightSheet.replaceWith(
