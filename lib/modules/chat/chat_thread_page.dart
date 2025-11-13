@@ -24,6 +24,7 @@ import 'chat_thread_controller.dart';
 import 'user_opinion_page.dart';
 import 'models/ai_insight.dart';
 import 'models/typing_preview.dart';
+import 'services/ai_insight_service.dart';
 import 'services/typing_preview_service.dart';
 import 'widgets/ai_insight_sheet.dart';
 
@@ -1487,7 +1488,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     AiInsight insight;
     try {
       insight = await analysisFuture;
-    } on AiInsightException catch (error) {
+    } on AIInsightException catch (error) {
       insight = _insightForError(error);
     } on StateError catch (error) {
       if (error.message == 'OPENAI_API_KEY_MISSING') {
@@ -1646,8 +1647,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     );
   }
 
-  AiInsight _insightForError(AiInsightException error) {
-    final status = error.statusCode;
+  AiInsight _insightForError(AIInsightException error) {
+    final status = error.code;
     if (status == 401 || status == 403) {
       return _invalidKeyInsight;
     }

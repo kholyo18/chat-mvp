@@ -8,6 +8,26 @@ import 'package:http/http.dart' as http;
 import '../models/ai_insight.dart';
 import 'feature_flags.dart';
 
+// Exception used by AI Insight flow.
+class AIInsightException implements Exception {
+  final String message;
+  final int? code; // optional HTTP/status or app-specific code
+  final Object? details;
+  final bool isNetworkError;
+  final bool isTimeout;
+
+  const AIInsightException(
+    this.message, {
+    this.code,
+    this.details,
+    this.isNetworkError = false,
+    this.isTimeout = false,
+  });
+
+  @override
+  String toString() => 'AIInsightException(code: $code, message: $message)';
+}
+
 class OpenAiDiagResult {
   final bool ok;
   final int? modelsCount;
@@ -60,26 +80,6 @@ OpenAiConfig loadOpenAiConfig() {
     textModel: model,
     timeout: FeatureFlags.aiInsightTimeout,
   );
-}
-
-class AiInsightException implements Exception {
-  const AiInsightException({
-    required this.code,
-    this.statusCode,
-    this.message,
-    this.isNetworkError = false,
-    this.isTimeout = false,
-  });
-
-  final String code;
-  final int? statusCode;
-  final String? message;
-  final bool isNetworkError;
-  final bool isTimeout;
-
-  @override
-  String toString() =>
-      'AiInsightException(code: $code, status: $statusCode, message: $message)';
 }
 
 class AiInsightService {
@@ -208,59 +208,61 @@ class AiInsightService {
           final txt = decoded['choices']?[0]?['message']?['content'] as String? ?? '{}';
           return AiInsight.fromJson(json.decode(txt) as Map<String, dynamic>);
         } catch (err) {
-          throw AiInsightException(code: 'invalid_response', message: '$err');
+          throw AIInsightException(
+            'Invalid AI response format',
+            details: err.toString(),
+          );
         }
       }
       throw _httpError(response);
     } on TimeoutException {
-      throw const AiInsightException(
-        code: 'timeout',
+      throw const AIInsightException(
+        'Request timeout',
         isTimeout: true,
-        message: 'Request timeout',
       );
     } on SocketException catch (err) {
-      throw AiInsightException(
-        code: 'network_error',
+      throw AIInsightException(
+        err.message,
         isNetworkError: true,
-        message: err.message,
+        details: err,
       );
     } on http.ClientException catch (err) {
-      throw AiInsightException(
-        code: 'network_error',
+      throw AIInsightException(
+        err.message,
         isNetworkError: true,
-        message: err.message,
+        details: err,
       );
-    } on AiInsightException {
+    } on AIInsightException {
       rethrow;
     } catch (err) {
-      throw AiInsightException(
-        code: 'unknown',
-        message: err.toString(),
+      throw AIInsightException(
+        'Unexpected AI insight error',
+        details: err,
       );
     }
   }
 
-  AiInsightException _httpError(http.Response response) {
+  AIInsightException _httpError(http.Response response) {
     final status = response.statusCode;
     final body = response.body.trim();
     if (status == 401 || status == 403) {
-      return AiInsightException(
-        code: 'unauthorized',
-        statusCode: status,
-        message: body,
+      return AIInsightException(
+        'Unauthorized OpenAI request',
+        code: status,
+        details: body,
       );
     }
     if (status == 429) {
-      return AiInsightException(
-        code: 'rate_limited',
-        statusCode: status,
-        message: body,
+      return AIInsightException(
+        'Rate limited by OpenAI',
+        code: status,
+        details: body,
       );
     }
-    return AiInsightException(
-      code: 'http_error',
-      statusCode: status,
-      message: body,
+    return AIInsightException(
+      'OpenAI request failed',
+      code: status,
+      details: body,
     );
   }
 }
