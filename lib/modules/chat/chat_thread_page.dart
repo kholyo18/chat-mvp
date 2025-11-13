@@ -22,8 +22,11 @@ import '../translator/translator_service.dart';
 import 'chat_message.dart';
 import 'chat_thread_controller.dart';
 import 'user_opinion_page.dart';
+import 'models/ai_insight.dart';
 import 'models/typing_preview.dart';
+import 'services/feature_flags.dart';
 import 'services/typing_preview_service.dart';
+import 'widgets/ai_insight_sheet.dart';
 
 class ChatThreadPage extends StatefulWidget {
   const ChatThreadPage({super.key, required this.threadId, this.otherUid});
@@ -818,6 +821,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
   static const double _replyVisualLimit = 64.0;
   static const double _insightTriggerDx = 48.0;
   static const double _insightVisualLimit = 60.0;
+  static const AiInsight _missingKeyInsight = AiInsight(
+    title: 'الميزة غير مفعّلة',
+    bullets: ['مطلوب مفتاح OpenAI لتفعيل هذه الميزة.'],
+  );
+  static const AiInsight _errorInsight = AiInsight(
+    title: 'خدمة الذكاء غير متاحة',
+    bullets: ['تعذر الحصول على الملخص حاليًا، حاول لاحقًا.'],
+  );
 
   double _dragVisualOffset = 0;
   bool _willReply = false;
@@ -828,6 +839,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
   bool _pendingPermanentRemoval = false;
   double _insightDragExtent = 0;
   bool _insightGestureActive = false;
+  bool _insightSheetActive = false;
   TextDirection? _currentTextDirection;
 
   @override
@@ -999,7 +1011,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final canSwipeDelete = _canAttemptSwipeDelete(message);
     final TextDirection textDirection = Directionality.of(context);
     _currentTextDirection = textDirection;
-    final bool canUseAiInsight = controller.canUseSwipeAiInsight;
+    const featureFlags = FeatureFlags();
+    final bool canUseAiInsight =
+        featureFlags.enableAiSwipeInsight && controller.canUseSwipeAiInsight;
 
     final bubblePadding = isMine
         ? const EdgeInsets.only(left: 64, right: 8, top: 4, bottom: 4)
@@ -1365,19 +1379,255 @@ class _MessageBubbleState extends State<_MessageBubble> {
       return;
     }
     final controller = context.read<ChatThreadController>();
-    final messageText = widget.message.text ?? '';
-    final trimmed = messageText.trim();
+    final message = widget.message;
+    final bool aiEnabled =
+        const FeatureFlags().enableAiSwipeInsight && controller.canUseSwipeAiInsight;
+    final bool hasContent = _hasInsightContent(message);
     final shouldTrigger =
         _insightGestureActive &&
         !deleteActionTriggered &&
         _insightDragExtent >= _insightTriggerDx &&
-        controller.canUseSwipeAiInsight &&
-        trimmed.isNotEmpty;
+        aiEnabled &&
+        hasContent;
     _resetInsightGesture();
     if (!shouldTrigger) {
       return;
     }
-    unawaited(controller.onSwipeInsight(trimmed, context));
+    unawaited(_showAiInsightForMessage(controller, message));
+  }
+
+  void _trackInsightSheet(Future<dynamic> sheetFuture) {
+    _insightSheetActive = true;
+    sheetFuture.whenComplete(() {
+      _insightSheetActive = false;
+    });
+  }
+
+  bool _hasInsightContent(ChatMessage message) {
+    final text = message.text?.trim() ?? '';
+    if (text.isNotEmpty) {
+      return true;
+    }
+    return _messageImageUrl(message) != null;
+  }
+
+  String? _messageImageUrl(ChatMessage message) {
+    if (message.type == ChatMessageType.image) {
+      final url = message.mediaUrl;
+      if (url != null && url.isNotEmpty) {
+        return url;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _showAiInsightForMessage(
+    ChatThreadController controller,
+    ChatMessage message, {
+    String? localeOverride,
+    bool explainMore = false,
+    bool translationMode = false,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+    final aiService = controller.aiInsightService;
+    final locale = translationMode
+        ? 'en'
+        : (localeOverride ?? Localizations.localeOf(context).languageCode);
+    final text = message.text;
+    final imageUrl = _messageImageUrl(message);
+
+    if (!aiService.isConfigured) {
+      final sheet = showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (_) => const AiInsightSheet(insight: _missingKeyInsight),
+      );
+      _trackInsightSheet(sheet);
+      return;
+    }
+
+    final followupInstruction = _buildFollowupInstruction(
+      explainMore: explainMore,
+      translationMode: translationMode,
+      locale: locale,
+    );
+
+    final analysisFuture = aiService.analyze(
+      userLocale: locale,
+      text: text,
+      imageUrl: imageUrl,
+      followupInstruction: followupInstruction,
+    );
+
+    final loadingSheet = showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const AiInsightSheet.loading(),
+    );
+    _trackInsightSheet(loadingSheet);
+
+    AiInsight insight;
+    try {
+      insight = await analysisFuture;
+    } catch (_) {
+      insight = _errorInsight;
+    }
+
+    if (!mounted || !_insightSheetActive) {
+      return;
+    }
+
+    final hasCopyableContent = _hasCopyableInsight(insight);
+    final hasText = (message.text?.trim().isNotEmpty ?? false);
+    final translateCallback =
+        (translationMode || locale == 'en' || !hasText)
+            ? null
+            : (AiInsightSheetAction)(
+                (sheetCtx) =>
+                    _handleAiTranslate(sheetCtx, controller, message),
+              );
+    final explainCallback = (AiInsightSheetAction)(
+      (sheetCtx) =>
+          _handleAiExplainMore(sheetCtx, controller, message, locale),
+    );
+    final retryCallback = (AiInsightSheetAction)(
+      (sheetCtx) => _handleAiRetry(
+        sheetCtx,
+        controller,
+        message,
+        locale,
+        explainMore: explainMore,
+        translationMode: translationMode,
+      ),
+    );
+    final copyCallback = hasCopyableContent
+        ? (AiInsightSheetAction)(
+            (sheetCtx) => _handleAiCopy(sheetCtx, insight),
+          )
+        : null;
+
+    final replacement = AiInsightSheet.replaceWith(
+      context,
+      insight,
+      onTranslate: translateCallback,
+      onExplainMore: explainCallback,
+      onCopy: copyCallback,
+      onRetry: retryCallback,
+    );
+    _trackInsightSheet(replacement);
+    unawaited(replacement);
+  }
+
+  String? _buildFollowupInstruction({
+    required bool explainMore,
+    required bool translationMode,
+    required String locale,
+  }) {
+    if (translationMode) {
+      return 'Translate the message to $locale and fill the translation field with a natural answer.';
+    }
+    if (explainMore) {
+      return 'Explain the message in greater detail and highlight extra helpful context.';
+    }
+    return null;
+  }
+
+  bool _hasCopyableInsight(AiInsight insight) {
+    return insight.bullets.isNotEmpty ||
+        (insight.answer?.trim().isNotEmpty ?? false) ||
+        (insight.translation?.trim().isNotEmpty ?? false) ||
+        (insight.imageCaption?.trim().isNotEmpty ?? false) ||
+        insight.facts.isNotEmpty;
+  }
+
+  void _handleAiTranslate(
+    BuildContext sheetContext,
+    ChatThreadController controller,
+    ChatMessage message,
+  ) {
+    Navigator.of(sheetContext).maybePop();
+    unawaited(
+      _showAiInsightForMessage(
+        controller,
+        message,
+        localeOverride: 'en',
+        translationMode: true,
+      ),
+    );
+  }
+
+  void _handleAiExplainMore(
+    BuildContext sheetContext,
+    ChatThreadController controller,
+    ChatMessage message,
+    String locale,
+  ) {
+    Navigator.of(sheetContext).maybePop();
+    unawaited(
+      _showAiInsightForMessage(
+        controller,
+        message,
+        localeOverride: locale,
+        explainMore: true,
+      ),
+    );
+  }
+
+  void _handleAiRetry(
+    BuildContext sheetContext,
+    ChatThreadController controller,
+    ChatMessage message,
+    String locale, {
+    bool explainMore = false,
+    bool translationMode = false,
+  }) {
+    Navigator.of(sheetContext).maybePop();
+    unawaited(
+      _showAiInsightForMessage(
+        controller,
+        message,
+        localeOverride: locale,
+        explainMore: explainMore,
+        translationMode: translationMode,
+      ),
+    );
+  }
+
+  Future<void> _handleAiCopy(
+    BuildContext sheetContext,
+    AiInsight insight,
+  ) async {
+    final buffer = StringBuffer()
+      ..writeln(insight.title);
+    if (insight.answer != null && insight.answer!.trim().isNotEmpty) {
+      buffer.writeln(insight.answer!.trim());
+    }
+    for (final bullet in insight.bullets) {
+      buffer.writeln('• $bullet');
+    }
+    if (insight.translation != null && insight.translation!.trim().isNotEmpty) {
+      buffer.writeln(insight.translation!.trim());
+    }
+    if (insight.imageCaption != null && insight.imageCaption!.trim().isNotEmpty) {
+      buffer.writeln(insight.imageCaption!.trim());
+    }
+    for (final fact in insight.facts) {
+      buffer.writeln(fact);
+    }
+    final text = buffer.toString().trim();
+    if (text.isEmpty) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    final messenger = ScaffoldMessenger.maybeOf(sheetContext);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('تم النسخ إلى الحافظة')), 
+    );
   }
 
   bool _canUseSwipeDelete() {
