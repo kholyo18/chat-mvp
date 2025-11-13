@@ -44,6 +44,8 @@ dependencies:
   qr_flutter: ^4.1.0
   agora_rtc_engine: ^6.2.0
   permission_handler: ^11.0.1
+  flutter_dotenv: ^5.1.0
+
 
   # --- ML Kit (اختياري) ---
   google_mlkit_translation: ^0.13.0
