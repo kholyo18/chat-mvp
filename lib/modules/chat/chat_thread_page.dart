@@ -24,7 +24,6 @@ import 'chat_thread_controller.dart';
 import 'user_opinion_page.dart';
 import 'models/ai_insight.dart';
 import 'models/typing_preview.dart';
-import 'services/feature_flags.dart';
 import 'services/typing_preview_service.dart';
 import 'widgets/ai_insight_sheet.dart';
 
@@ -829,6 +828,18 @@ class _MessageBubbleState extends State<_MessageBubble> {
     title: 'خدمة الذكاء غير متاحة',
     bullets: ['تعذر الحصول على الملخص حاليًا، حاول لاحقًا.'],
   );
+  static const AiInsight _invalidKeyInsight = AiInsight(
+    title: 'المفتاح غير صالح أو منتهي',
+    bullets: ['تحقق من صلاحية مفتاح OpenAI في .env ثم أعد التشغيل.'],
+  );
+  static const AiInsight _rateLimitInsight = AiInsight(
+    title: 'الحدّ اليومي/الدقيقة مستهلك، جرّب لاحقًا',
+    bullets: ['انتظر قليلاً قبل إعادة المحاولة.'],
+  );
+  static const AiInsight _networkInsight = AiInsight(
+    title: 'تعذر الاتصال بالخادم، تحقق من الشبكة',
+    bullets: ['تحقق من اتصال الإنترنت أو جرّب VPN ثم أعد المحاولة.'],
+  );
 
   double _dragVisualOffset = 0;
   bool _willReply = false;
@@ -1011,8 +1022,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final canSwipeDelete = _canAttemptSwipeDelete(message);
     final TextDirection textDirection = Directionality.of(context);
     _currentTextDirection = textDirection;
-    final bool canUseAiInsight =
-        FeatureFlags.canUseSwipeAiInsight && controller.canUseSwipeAiInsight;
+    final bool canUseAiInsight = controller.canUseSwipeAiInsight();
 
     final bubblePadding = isMine
         ? const EdgeInsets.only(left: 64, right: 8, top: 4, bottom: 4)
@@ -1384,14 +1394,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
         !deleteActionTriggered &&
         _insightDragExtent >= _insightTriggerDx &&
         hasContent;
-    final bool featureEnabled = FeatureFlags.canUseSwipeAiInsight;
+    final bool featureEnabled = controller.canUseSwipeAiInsight();
     if (gestureReachedTrigger && !featureEnabled) {
       _resetInsightGesture();
       _showAiInsightDisabledToast();
       return;
     }
-    final bool aiEnabled = featureEnabled && controller.canUseSwipeAiInsight;
-    final bool shouldTrigger = gestureReachedTrigger && aiEnabled;
+    final bool shouldTrigger = gestureReachedTrigger && featureEnabled;
     _resetInsightGesture();
     if (!shouldTrigger) {
       return;
@@ -1449,7 +1458,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final text = message.text;
     final imageUrl = _messageImageUrl(message);
 
-    if (!FeatureFlags.canUseSwipeAiInsight || !aiService.isConfigured) {
+    if (!controller.canUseSwipeAiInsight()) {
       _showAiInsightDisabledToast();
       return;
     }
@@ -1478,6 +1487,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     AiInsight insight;
     try {
       insight = await analysisFuture;
+    } on AiInsightException catch (error) {
+      insight = _insightForError(error);
     } on StateError catch (error) {
       if (error.message == 'OPENAI_API_KEY_MISSING') {
         insight = _missingKeyInsight;
@@ -1631,8 +1642,22 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final messenger = ScaffoldMessenger.maybeOf(sheetContext);
     messenger?.hideCurrentSnackBar();
     messenger?.showSnackBar(
-      const SnackBar(content: Text('تم النسخ إلى الحافظة')), 
+      const SnackBar(content: Text('تم النسخ إلى الحافظة')),
     );
+  }
+
+  AiInsight _insightForError(AiInsightException error) {
+    final status = error.statusCode;
+    if (status == 401 || status == 403) {
+      return _invalidKeyInsight;
+    }
+    if (status == 429) {
+      return _rateLimitInsight;
+    }
+    if (error.isNetworkError || error.isTimeout) {
+      return _networkInsight;
+    }
+    return _errorInsight;
   }
 
   bool _canUseSwipeDelete() {

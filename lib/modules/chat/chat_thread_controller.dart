@@ -14,10 +14,12 @@ import 'package:record/record.dart';
 
 import '../../models/user_profile.dart';
 import '../../services/translate_service.dart';
+import '../../services/user_settings_service.dart';
 import '../translator/translator_service.dart';
 import 'chat_message.dart';
 import 'services/ai_insight_service.dart';
 import 'services/chat_message_service.dart';
+import 'services/feature_flags.dart';
 import 'services/typing_preview_service.dart';
 
 class ChatPresenceState {
@@ -67,6 +69,7 @@ class ChatThreadController extends ChangeNotifier {
     TranslatorService? translatorService,
     ChatMessageService? messageService,
     AiInsightService? aiInsightService,
+    UserSettingsService? userSettingsService,
   })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
         _storage = storage ?? FirebaseStorage.instance,
         _auth = auth ?? FirebaseAuth.instance,
@@ -75,7 +78,8 @@ class ChatThreadController extends ChangeNotifier {
         _recorder = recorder ?? AudioRecorder(),
         _translatorService = translatorService ?? TranslatorService(),
         _chatMessageService = messageService ?? ChatMessageService(),
-        _aiInsightService = aiInsightService ?? AiInsightService();
+        _aiInsightService = aiInsightService ?? AiInsightService(),
+        _userSettings = userSettingsService ?? UserSettingsService();
 
   final String threadId;
   final TypingPreviewService entitlements;
@@ -88,11 +92,14 @@ class ChatThreadController extends ChangeNotifier {
   final TranslatorService _translatorService;
   final ChatMessageService _chatMessageService;
   final AiInsightService _aiInsightService;
+  final UserSettingsService _userSettings;
   final TranslateService _manualTranslator = const TranslateService();
 
   final Map<String, String> _inlineTranslations = <String, String>{};
   final Map<String, ChatMessage> _messageCache = <String, ChatMessage>{};
   List<String> _lastSnapshotDocIds = <String>[];
+  StreamSubscription<bool>? _premiumSub;
+  bool? _lastPremiumValue;
 
   Stream<List<ChatMessage>>? _messagesStream;
 
@@ -124,11 +131,27 @@ class ChatThreadController extends ChangeNotifier {
   List<String> _members = <String>[];
 
   String? get currentUid => _currentUid;
-  bool get canUseSwipeAiInsight => entitlements.canUseSwipeAiInsight;
   AiInsightService get aiInsightService => _aiInsightService;
+
+  bool canUseSwipeAiInsight() {
+    if (!FeatureFlags.aiInsightEnabled) {
+      return false;
+    }
+    if (!AiInsightService.isConfigured()) {
+      return false;
+    }
+    if (!entitlements.canUseSwipeAiInsight) {
+      return false;
+    }
+    if (!FeatureFlags.aiInsightRequirePremium) {
+      return true;
+    }
+    return _userSettings.isPremiumCached;
+  }
 
   Future<void> load() async {
     _currentUid = _auth.currentUser?.uid;
+    _listenToPremium(_currentUid);
     _threadSub = _firestore.collection('dm_threads').doc(threadId).snapshots().listen(
       (snapshot) {
         final data = snapshot.data();
@@ -814,6 +837,7 @@ class ChatThreadController extends ChangeNotifier {
       Future.sync(() => _otherUserSub?.cancel()),
       Future.sync(() => _presenceSub?.cancel()),
       Future.sync(() => _typingSub?.cancel()),
+      Future.sync(() => _premiumSub?.cancel()),
     ]);
   }
 
@@ -827,6 +851,7 @@ class ChatThreadController extends ChangeNotifier {
     _otherUserSub?.cancel();
     _presenceSub?.cancel();
     _typingSub?.cancel();
+    _premiumSub?.cancel();
     super.dispose();
   }
 
@@ -856,5 +881,25 @@ class ChatThreadController extends ChangeNotifier {
       return DateTime.tryParse(raw);
     }
     return null;
+  }
+
+  void _listenToPremium(String? uid) {
+    _premiumSub?.cancel();
+    if (uid == null) {
+      _lastPremiumValue = null;
+      return;
+    }
+    _premiumSub = _userSettings.watchIsPremium(uid).listen(
+      (bool isPremium) {
+        if (_lastPremiumValue == isPremium) {
+          return;
+        }
+        _lastPremiumValue = isPremium;
+        if (!_disposed) {
+          notifyListeners();
+        }
+      },
+      onError: _reportError,
+    );
   }
 }
