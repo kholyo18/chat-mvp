@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -15,7 +16,10 @@ import '../../models/user_profile.dart';
 import '../../services/translate_service.dart';
 import '../translator/translator_service.dart';
 import 'chat_message.dart';
+import 'services/ai_insight_service.dart';
 import 'services/chat_message_service.dart';
+import 'services/typing_preview_service.dart';
+import 'widgets/ai_insight_sheet.dart';
 
 class ChatPresenceState {
   const ChatPresenceState({
@@ -54,6 +58,7 @@ class ChatPresenceState {
 class ChatThreadController extends ChangeNotifier {
   ChatThreadController({
     required this.threadId,
+    required this.entitlements,
     cf.FirebaseFirestore? firestore,
     FirebaseStorage? storage,
     FirebaseAuth? auth,
@@ -62,6 +67,7 @@ class ChatThreadController extends ChangeNotifier {
     AudioRecorder? recorder,
     TranslatorService? translatorService,
     ChatMessageService? messageService,
+    AiInsightService? aiInsightService,
   })  : _firestore = firestore ?? cf.FirebaseFirestore.instance,
         _storage = storage ?? FirebaseStorage.instance,
         _auth = auth ?? FirebaseAuth.instance,
@@ -69,9 +75,11 @@ class ChatThreadController extends ChangeNotifier {
         _picker = picker ?? ImagePicker(),
         _recorder = recorder ?? AudioRecorder(),
         _translatorService = translatorService ?? TranslatorService(),
-        _chatMessageService = messageService ?? ChatMessageService();
+        _chatMessageService = messageService ?? ChatMessageService(),
+        _aiInsightService = aiInsightService ?? AiInsightService();
 
   final String threadId;
+  final TypingPreviewService entitlements;
   final cf.FirebaseFirestore _firestore;
   final FirebaseStorage _storage;
   final FirebaseAuth _auth;
@@ -80,6 +88,7 @@ class ChatThreadController extends ChangeNotifier {
   final AudioRecorder _recorder;
   final TranslatorService _translatorService;
   final ChatMessageService _chatMessageService;
+  final AiInsightService _aiInsightService;
   final TranslateService _manualTranslator = const TranslateService();
 
   final Map<String, String> _inlineTranslations = <String, String>{};
@@ -116,6 +125,7 @@ class ChatThreadController extends ChangeNotifier {
   List<String> _members = <String>[];
 
   String? get currentUid => _currentUid;
+  bool get canUseSwipeAiInsight => entitlements.canUseSwipeAiInsight;
 
   Future<void> load() async {
     _currentUid = _auth.currentUser?.uid;
@@ -796,6 +806,41 @@ class ChatThreadController extends ChangeNotifier {
       return '.jpg';
     }
     return '';
+  }
+
+  Future<void> onSwipeInsight(String messageText, BuildContext context) async {
+    if (!canUseSwipeAiInsight) {
+      return;
+    }
+    final trimmed = messageText.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    try {
+      final insight = await _aiInsightService.getInsightFor(trimmed);
+      if (!context.mounted) {
+        return;
+      }
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        showDragHandle: true,
+        builder: (_) => AiInsightSheet(insight: insight),
+      );
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        showDragHandle: true,
+        builder: (_) => const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text("Couldn't load AI insight. Please try again."),
+        ),
+      );
+    }
   }
 
   Future<void> disposeAsync() async {
