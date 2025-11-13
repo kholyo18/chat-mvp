@@ -10,6 +10,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Firestore collection for storing AI assistant conversations.
 const String kAiChatsCollection = 'ai_chats';
 
+/// Temporary dev-only flag to bypass the daily quota enforcement while keeping
+/// tracking active. Set back to `false` for production builds.
+const bool kDevIgnoreAiAssistantQuota = true; // TODO: set to false for prod
+
 /// Shared preferences key for persisting the preferred bot mode.
 const String kAiAssistantBotModeKey = 'aiAssistant.botType';
 
@@ -312,7 +316,7 @@ class AiAssistantController extends ChangeNotifier {
           }
         }
       }
-      if (used >= limit) {
+      if (!kDevIgnoreAiAssistantQuota && used >= limit) {
         throw _DailyLimitReached(limit);
       }
       tx.set(
