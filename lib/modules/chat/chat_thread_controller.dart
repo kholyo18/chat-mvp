@@ -134,16 +134,19 @@ class ChatThreadController extends ChangeNotifier {
   AiInsightService get aiInsightService => _aiInsightService;
 
   bool canUseSwipeAiInsight() {
+    if (kDevIgnoreAiInsightQuota) {
+      return true;
+    }
     if (!FeatureFlags.aiInsightEnabled) {
       return false;
     }
     if (!AiInsightService.isConfigured()) {
       return false;
     }
-    if (!entitlements.canUseSwipeAiInsight && !kDevIgnoreAiInsightQuota) {
+    if (!entitlements.canUseSwipeAiInsight) {
       return false;
     }
-    if (!FeatureFlags.aiInsightRequirePremium || kDevIgnoreAiInsightQuota) {
+    if (!FeatureFlags.aiInsightRequirePremium) {
       return true;
     }
     return _userSettings.isPremiumCached;
